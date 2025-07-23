@@ -1,0 +1,8 @@
+{
+  "scripts": {
+    "build": "esbuild src/main.js --bundle --outfile=dist/myscript.user.js --format=iife --banner:js='$(cat BlueMarble.meta.js)'"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}
