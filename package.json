@@ -1,6 +1,9 @@
 {
+  "name": "wplace-bluemarble",
+  "version": "0.0.6",
+  "type": "module",
   "scripts": {
-    "build": "esbuild src/main.js --bundle --outfile=dist/myscript.user.js --format=iife --banner:js='$(cat BlueMarble.meta.js)'"
+    "build": "node build.js"
   },
   "devDependencies": {
     "esbuild": "^0.25.0"

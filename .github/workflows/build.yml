@@ -24,6 +24,11 @@ jobs:
       - name: Build userscript
         run: npm run build
 
+      - name: Update userscript version
+        run: |
+          npm version minor --no-git-tag-version
+          node update-version.js
+
       - name: Commit and push built script
         run: |
           git config user.name "github-actions[bot]"
