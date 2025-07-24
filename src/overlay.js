@@ -64,20 +64,48 @@ export class Overlay {
     const containerAutomation = document.createElement('div'); // Automated stuff container
     containerAutomation.id = 'bm-contain-automation';
 
-    const labelStealthMode = document.createElement('label'); // Stealth Mode checkbox (container) label
-    labelStealthMode.textContent = 'Stealth Mode';
-
-    const inputStealthMode = document.createElement('input'); // Stealth Mode checkbox
-    inputStealthMode.type = 'checkbox';
-    inputStealthMode.id = 'bm-input-stealth';
-    inputStealthMode.checked = true; // Checkbox checked by default
-    labelStealthMode.prepend(inputStealthMode); // Adds the input to the label
-    containerAutomation.appendChild(labelStealthMode); // Adds the label & checkbox to the automation container
+    // Stealth Mode checkbox
+    containerAutomation.appendChild(this.createLineCheckbox(
+      'Stealth Mode',
+      'bm-input-stealth',
+      true
+    ));
     
     // Adds the help icon for stealth mode
     containerAutomation.appendChild(this.createQuestionBox(
       'bm-help-stealth',
       'Help: Waits for the website to make requests, instead of sending requests.',
+      outputStatusId
+    ));
+
+    containerAutomation.appendChild(document.createElement('br')); // Line break
+
+    // Possessed Mode
+    containerAutomation.appendChild(this.createLineCheckbox(
+      'Possessed Mode',
+      'bm-input-possessed',
+      true
+    ));
+
+    // Adds the help icon for possessed mode
+    containerAutomation.appendChild(this.createQuestionBox(
+      'bm-help-possessed',
+      'Help: Controls the website as if it were possessed.',
+      outputStatusId
+    ));
+
+    containerAutomation.appendChild(document.createElement('br')); // Line break
+
+    // Panic option
+    containerAutomation.appendChild(this.createLineCheckbox(
+      'Panic',
+      'bm-input-panic'
+    ));
+
+    // Adds the help icon for panic
+    containerAutomation.appendChild(this.createQuestionBox(
+      'bm-help-panic',
+      'Help: Stops placing for a while if it detects a user nearby.',
       outputStatusId
     ));
 
@@ -145,6 +173,24 @@ export class Overlay {
       this.updateInnerHTML(outputId, tooltip); // Update output element text with tooltip on click
     }
     return questionBox;
+  }
+
+  /** Creates the checkbox line/label
+   * @param {string} labelText - The text for the label
+   * @param {string} checkboxId - The ID for the checkbox input
+   * @param {boolean} [checkboxDefault] - (Optional) The default status of the checkbox (true = checked). False by default.
+   * @returns {HTMLLabelElement} HTML Label Element with Input child
+   * @since 0.27.1
+   */
+  createLineCheckbox(labelText, checkboxId, checkboxDefault=false) {
+    const label = document.createElement('label');
+    label.textContent = labelText;
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.id = checkboxId;
+    input.checked = checkboxDefault;
+    label.prepend(input); // Adds the input as the first child of the label (before the text)
+    return label;
   }
 
   /** Handles dragging of the overlay.

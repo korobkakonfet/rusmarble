@@ -56,6 +56,10 @@ div#bm-overlay {
   margin-top: 0.5em;
 }
 
+#bm-contain-automation {
+  margin-top: 0.5em;
+}
+
 #bm-contain-automation input[type="checkbox"] {
   vertical-align: middle;
   margin-right: 0.5ch;
@@ -79,6 +83,6 @@ div#bm-overlay {
   font-size: small;
   background-color: rgba(0, 0, 0, 0.2);
   padding: 0 0.5ch;
-  height: 3em;
+  height: 3.75em;
   width: 100%;
 }
