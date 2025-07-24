@@ -43,7 +43,7 @@ jobs:
           else
             echo "README.md was not found. Skipping..."
           fi
-          sed -iE "s#(Latest_Version-)[0-9]+\.[0-9]+\.[0-9]+(-lightblue\\?style=flat)#\\1${get_version}\\2#" docs/README.md
+          sed -i "s|\(https://img\.shields\.io/badge/Latest_Version-\)[^-\ ]*\(-lightblue?style=flat\)|\1${get_version}\2|" docs/README.md
 
       - name: Get the previous commit message
         id: get-commit-message
