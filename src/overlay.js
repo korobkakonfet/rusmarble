@@ -16,16 +16,22 @@ export class Overlay {
    */
   create() {
 
-    // Declarations of all elements used in the overlay
-    const overlay = document.createElement('div'); // Creates a new <div> element
-    const panBar = document.createElement('div'); // Creates the pan bar for the overlay
+    const overlay = document.createElement('div'); // Creates a new <div> element for the overlay
+    overlay.id = 'bm-overlay';
 
-    overlay.id = 'bm-overlay'; // Sets the ID of the overlay
+    const barPan = document.createElement('div'); // Pan bar for the overlay
+    barPan.id = 'bm-bar-pan';
 
-    panBar.id = 'bm-panbar'; // Sets the ID of the pan bar
+    const barHeader = document.createElement('h1'); // Header bar for the overlay
+    const barHeaderImage = document.createElement('img'); // Image in header
+    barHeaderImage.src = 'https://raw.githubusercontent.com/SwingTheVine/Wplace-BlueMarble/main/src/assets/Favicon.png';
+    barHeaderImage.alt = 'Blue Marble Icon';
+    barHeader.appendChild(barHeaderImage); // Appends the image to the header
+    barHeader.append('Blue Marble');
     
     // Construction of the overlay element
-    overlay.appendChild(panBar); // Adds the pan bar to the overlay
+    overlay.appendChild(barPan); // Adds the pan bar to the overlay
+    overlay.appendChild(barHeader); // Adds the header to the overlay
     document.body.appendChild(overlay); // Adds the overlay to the body of the webpage
   }
 }
