@@ -29,6 +29,10 @@ jobs:
       - name: Build userscript
         run: npm run build
 
+      - name: Get the previous commit message
+        id: get-commit-message
+        run: echo "::set-output name=MSG::$(git log -1 --pretty=%B)"
+
       - name: Commit and push built script
         run: |
           git config --global user.name "github-actions[bot]"
@@ -37,6 +41,6 @@ jobs:
           git add dist/*.user.js
           git add BlueMarble.meta.js
           git add package.json
-          git commit -m "ci: build and deploy userscript [skip ci]" || echo "No changes to commit"
+          git commit -m "Bumped version; ${{ steps.get-commit-message.outputs.MSG }}" || echo "No changes to commit"
           git push
           
