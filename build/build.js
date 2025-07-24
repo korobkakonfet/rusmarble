@@ -10,7 +10,7 @@ try {
   process.exit(1);
 }
 
-const metaContent = fs.readFileSync('BlueMarble.meta.js', 'utf8');
+const metaContent = fs.readFileSync('src/BlueMarble.meta.js', 'utf8');
 
 esbuild.build({
   entryPoints: ['src/main.js'],

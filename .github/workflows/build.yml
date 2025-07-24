@@ -24,7 +24,7 @@ jobs:
       - name: Update userscript version
         run: |
           npm version minor --no-git-tag-version
-          node update-version.js
+          node build/update-version.js
 
       - name: Build userscript
         run: npm run build
@@ -39,7 +39,7 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
           git add dist/*.user.js
-          git add BlueMarble.meta.js
+          git add src/BlueMarble.meta.js
           git add package.json
           git commit -m "Bumped version; ${{ steps.get-commit-message.outputs.MSG }}" || echo "No changes to commit"
           git push

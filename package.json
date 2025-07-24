@@ -3,7 +3,7 @@
   "version": "0.3.0",
   "type": "module",
   "scripts": {
-    "build": "node build.js",
+    "build": "node build/build.js",
     "patch": "npm version patch --no-git-tag-version && npm run build"
   },
   "devDependencies": {
