@@ -55,3 +55,8 @@ div#bm-overlay {
 #bm-contain-userinfo {
   margin-top: 0.5em;
 }
+
+#bm-contain-automation input[type="checkbox"] {
+  vertical-align: middle;
+  margin-right: 0.5ch;
+}

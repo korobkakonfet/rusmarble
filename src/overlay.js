@@ -58,27 +58,47 @@ export class Overlay {
     userNextLevel.id = 'bm-user-nextlevel';
     userNextLevel.textContent = 'Next level in...';
     containerUserInfo.appendChild(userNextLevel); // Adds the "amount to next level" field to the user info container
+
+    const containerAutomation = document.createElement('div'); // Automated stuff container
+    containerAutomation.id = 'bm-contain-automation';
+
+    const labelStealthMode = document.createElement('label'); // Stealth Mode checkbox (container) label
+    labelStealthMode.textContent = 'Stealth Mode';
+
+    const inputStealthMode = document.createElement('input'); // Stealth Mode checkbox
+    inputStealthMode.type = 'checkbox';
+    inputStealthMode.id = 'bm-input-stealth';
+    labelStealthMode.prepend(inputStealthMode); // Adds the input to the label
+    containerAutomation.appendChild(labelStealthMode); // Adds the label & checkbox to the automation container
     
     // Construction of the overlay element
     overlay.appendChild(containerOverlayHeader); // Adds the overlay header container to the overlay
     overlay.appendChild(document.createElement('hr')); // Adds a horizontal line to the overlay
     overlay.appendChild(containerUserInfo); // Adds the user info container to the overlay
+    overlay.appendChild(document.createElement('hr')); // Adds a horizontal line to the overlay
+    overlay.appendChild(containerAutomation); // Adds the automation stuff container to the overlay
     document.body.appendChild(overlay); // Adds the overlay to the body of the webpage
 
     this.handleDrag(overlay, barDrag); // Starts handling the drag functionality
   }
 
-  /** Updates the text content of an overlay element.
-   * The element is discovered by it's id
+  /** Updates the inner HTML of the element.
+   * The element is discovered by it's id.
    * @param {string} id - The ID of the element to change
-   * @param {string} text - The text to change to
-   * @since - 0.24.2
+   * @param {string} html - The HTML/text to update with
+   * @param {boolean} [doSafe] - (Optional) Should `textContent` be used instead of `innerHTML` to avoid XSS? False by default
+   * @since 0.24.2
    */
-  updateText(id, text) {
+  updateInnerHTML(id, html, doSafe=false) {
 
     const element = document.getElementById(id); // Retrieve the element
-    
-    if (element) {element.textContent = text;} // If the element exists, update it's text content
+    if (!element) {return;} // Kills itself if the element does not exist
+
+    if (doSafe) {
+      element.textContent = html; // Populate element with plain-text HTML/text
+    } else {
+      element.innerHTML = html; // Populate element with HTML/text
+    }
   }
 
   /** Handles dragging of the overlay.
