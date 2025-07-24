@@ -57,6 +57,7 @@ jobs:
           git add dist/*.user.js
           git add src/BlueMarble.meta.js
           git add package.json
+          git add docs/README.md
           git commit -m "Bumped version; ${{ steps.get-commit-message.outputs.MSG }}" || echo "No changes to commit"
           git push
           
