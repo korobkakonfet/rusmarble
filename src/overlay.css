@@ -7,7 +7,9 @@
   padding: 10px;
   border-radius: 8px;
   z-index: 9000;
-  
+}
+
+div#bm-overlay {
   /* Font stack is as follows:
    * Highest Priority (Roboto Mono)
    * Windows fallback (Courier New)
@@ -16,7 +18,6 @@
    * Any possible monospace font (monospace)
    * Last resort (Arial) */
   font-family: 'Roboto Mono', 'Courier New', 'Monaco', 'DejaVu Sans Mono', monospace, 'Arial';
-  font-weight: bold;
 }
 
 #bm-bar-drag {
@@ -46,5 +47,6 @@
 #bm-overlay h1 {
   display: inline-block;
   font-size: x-large;
+  font-weight: bold;
   vertical-align: middle;
 }
