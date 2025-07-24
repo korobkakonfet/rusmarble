@@ -57,7 +57,7 @@ export class Overlay {
       offsetY = event.clientY - overlay.getBoundingClientRect().top;
       document.body.style.userSelect = 'none'; // Prevents text selection while dragging
       overlay.style.right = ''; // Destroys the right property to unbind the overlay from the right side of the screen
-      overlay.classList.add('dragging'); // Adds a class to indicate a dragging state
+      barDrag.classList.add('dragging'); // Adds a class to indicate a dragging state
     });
 
     // What to do when the touch starts on the barDrag
@@ -69,7 +69,7 @@ export class Overlay {
       offsetY = touch.clientY - overlay.getBoundingClientRect().top;
       document.body.style.userSelect = 'none'; // Prevents text selection while dragging
       overlay.style.right = ''; // Destroys the right property to unbind the overlay from the right side of the screen
-      overlay.classList.add('dragging'); // Adds a class to indicate a dragging state
+      barDrag.classList.add('dragging'); // Adds a class to indicate a dragging state
     }, { passive: false }); // Prevents scrolling from being captured
 
     // What to do when the mouse is moved while dragging
@@ -95,21 +95,21 @@ export class Overlay {
     document.addEventListener('mouseup', function() {
       isDragging = false;
       document.body.style.userSelect = ''; // Restores text selection capability after dragging
-      overlay.classList.remove('dragging'); // Removes the dragging class
+      barDrag.classList.remove('dragging'); // Removes the dragging class
     });
 
     // What to do when the touch ends
     document.addEventListener('touchend', function() {
       isDragging = false;
       document.body.style.userSelect = ''; // Restores text selection capability after dragging
-      overlay.classList.remove('dragging'); // Removes the dragging class
+      barDrag.classList.remove('dragging'); // Removes the dragging class
     });
 
     // What to do when the touch is cancelled
     document.addEventListener('touchcancel', function() {
       isDragging = false;
       document.body.style.userSelect = ''; // Restores text selection capability after dragging
-      overlay.classList.remove('dragging'); // Removes the dragging class
+      barDrag.classList.remove('dragging'); // Removes the dragging class
     });
   }
 }
