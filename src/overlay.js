@@ -21,25 +21,43 @@ export class Overlay {
     overlay.style.top = '10px'; // Position from top of viewport
     overlay.style.right = '75px'; // Position from right of viewport
 
+    const containerOverlayHeader = document.createElement('div');
+
     const barDrag = document.createElement('div'); // Drag bar for the overlay
     barDrag.id = 'bm-bar-drag';
+    containerOverlayHeader.appendChild(barDrag); // Adds the drag bar to the overlay header container
 
     const barHeaderImage = document.createElement('img'); // Image in header
     barHeaderImage.src = 'https://raw.githubusercontent.com/SwingTheVine/Wplace-BlueMarble/main/src/assets/Favicon.png';
     barHeaderImage.alt = 'Blue Marble Icon';
+    containerOverlayHeader.appendChild(barHeaderImage); // Adds the header image to the overlay header container
 
     const barHeader = document.createElement('h1'); // Header bar for the overlay
     barHeader.textContent = 'Blue Marble';
+    containerOverlayHeader.appendChild(barHeader); // Adds the header to the overlay header container
+
+    const containerUserInfo = document.createElement('div'); // User info container
+
+    const userName = document.createElement('p'); // User name field
+    userName.id = 'bm-user-name';
+    userName.textContent = 'Username:';
+    containerUserInfo.appendChild(userName); // Adds the username field to the user info container
+
+    const userDroplets = document.createElement('p'); // User droplet field
+    userDroplets.id = 'bm-user-droplets';
+    userDroplets.textContent = 'Droplets:';
+    containerUserInfo.appendChild(userDroplets); // Adds the droplet field to the user info container
     
     // Construction of the overlay element
-    overlay.appendChild(barDrag); // Adds the drag bar to the overlay
-    overlay.appendChild(barHeaderImage); // Adds the header image to the overlay
-    overlay.appendChild(barHeader); // Adds the header to the overlay
+    overlay.appendChild(containerOverlayHeader); // Adds the overlay header container to the overlay
     overlay.appendChild(document.createElement('hr')); // Adds a horizontal line to the overlay
+    overlay.appendChild(containerUserInfo); // Adds the user info container to the overlay
     document.body.appendChild(overlay); // Adds the overlay to the body of the webpage
 
     this.handleDrag(overlay, barDrag); // Starts handling the drag functionality
   }
+
+
 
   /** Handles dragging of the overlay.
    * @param {HTMLElement} overlay - The overlay element to be moved.

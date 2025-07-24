@@ -41,7 +41,6 @@ inject(() => {
       // Sends a message about the endpoint it spied on
       cloned.json()
         .then(jsonData => {
-          console.log(`JSON: ${jsonData}`);
           window.postMessage({
             source: 'blue-marble',
             endpoint: endpointName,
@@ -65,6 +64,6 @@ const overlay = new Overlay(); // Constructs a new Overlay object
 overlay.create(); // Deploys the overlay to the page
 
 const apiHandler = new ApiHandler(); // Constructs a new ApiHandler object
-apiHandler.manageSpontaneousResponse(overlay); // Reads spontaneous fetch responces
+apiHandler.spontaneousResponseListener(overlay); // Reads spontaneous fetch responces
 
 console.log("Blue Marble userscript has loaded!");

@@ -15,7 +15,7 @@ export class ApiHandler {
    * @param {Overlay} overlay - The Overlay class instance
    * @since 0.11.1
   */
-  manageSpontaneousResponse(overlay) {
+  spontaneousResponseListener(overlay) {
 
     // Triggers whenever a message is sent
     window.addEventListener('message', (event) => {
@@ -29,10 +29,13 @@ export class ApiHandler {
       // For instance, if the fetch was for "me", we can update the overlay stats
       switch (data.endpoint) {
         case 'me':
-          console.log(`${data.jsonData?.name} has ${data.jsonData?.droplets} droplets`);
+          const username = document.getElementById('bm-user-name');
+          const droplets = document.getElementById('bm-user-droplets');
+          if (username) {username.textContent = `Username: ${data.jsonData?.name}`;}
+          if (droplets) {droplets.textContent = `Droplets: ${data.jsonData?.droplets}`;}
           break;
         case 'robots':
-          this.disableAll = data.jsonData?.userscript?.toString().toLowerCase() == 'false';
+          this.disableAll = data.jsonData?.userscript?.toString().toLowerCase() == 'false'; // Disables Blue Marble if site owner wants userscripts disabled
 
       }
     });
