@@ -60,3 +60,17 @@ div#bm-overlay {
   vertical-align: middle;
   margin-right: 0.5ch;
 }
+
+#bm-contain-automation label {
+  margin-right: 0.5ch;
+}
+
+.bm-help {
+  border: white 1px solid;
+  border-radius: 1em;
+  height: 1.25em;
+  width: 1.25em;
+  margin-top: 2px;
+  text-align: center;
+  line-height: 1.25em;
+}

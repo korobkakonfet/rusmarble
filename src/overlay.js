@@ -20,6 +20,8 @@ export class Overlay {
    */
   create() {
 
+    const outputStatusId = 'bm-output-status'; // ID for status element
+
     const overlay = document.createElement('div'); // Creates a new <div> element for the overlay
     overlay.id = 'bm-overlay';
     overlay.style.top = '10px'; // Position from top of viewport
@@ -68,9 +70,17 @@ export class Overlay {
     const inputStealthMode = document.createElement('input'); // Stealth Mode checkbox
     inputStealthMode.type = 'checkbox';
     inputStealthMode.id = 'bm-input-stealth';
+    inputStealthMode.checked = true; // Checkbox checked by default
     labelStealthMode.prepend(inputStealthMode); // Adds the input to the label
     containerAutomation.appendChild(labelStealthMode); // Adds the label & checkbox to the automation container
     
+    // Adds the help icon for stealth mode
+    containerAutomation.appendChild(this.createQuestionBox(
+      'bm-help-stealth',
+      'Waits for the website to make the request, instead of sending a request.',
+      outputStatusId
+    ));
+
     // Construction of the overlay element
     overlay.appendChild(containerOverlayHeader); // Adds the overlay header container to the overlay
     overlay.appendChild(document.createElement('hr')); // Adds a horizontal line to the overlay
@@ -99,6 +109,27 @@ export class Overlay {
     } else {
       element.innerHTML = html; // Populate element with HTML/text
     }
+  }
+
+  /** Creates a help icon.
+   * When clicked, it will populate the text content of the outputId element with the tooltip.
+   * On hover, it will generate a tooltip.
+   * @param {string} id - ID of the help icon
+   * @param {string} tooltip - Flavor message
+   * @param {string} outputId - ID of the element to populate the text content with
+   * @returns {HTMLButtonElement} HTML Button Element
+   * @since 0.25.5
+   */
+  createQuestionBox(id, tooltip, outputId) {
+    const questionBox = document.createElement('button');
+    questionBox.id = id;
+    questionBox.className = 'bm-help';
+    questionBox.textContent = '?';
+    questionBox.title = tooltip; // Tooltip on hover
+    questionBox.onclick = () => {
+      this.updateInnerHTML(outputId, tooltip); // Update output element text with tooltip on click
+    }
+    return questionBox;
   }
 
   /** Handles dragging of the overlay.
