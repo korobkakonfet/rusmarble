@@ -43,7 +43,7 @@ jobs:
           else
             echo "README.md was not found. Skipping..."
           fi
-          sed -iE "s#(Latest_Version-[0-9.]*)[^\D]*#\1${get_version}#" docs/README.md
+          sed -iE "s#(Latest_Version-[0-9.]*)[^\D]*#\\1${get_version}#" docs/README.md
 
       - name: Get the previous commit message
         id: get-commit-message
