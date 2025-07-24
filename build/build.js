@@ -3,7 +3,7 @@ import fs from 'fs';
 import { execSync } from 'child_process';
 
 try {
-  const update = execSync('node update-version.js', { stdio: 'inherit' });
+  const update = execSync('node build/update-version.js', { stdio: 'inherit' });
   console.log('Version updated in meta file successfully');
 } catch (error) {
   console.error('Failed to update version number:', error);
