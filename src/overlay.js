@@ -77,9 +77,17 @@ export class Overlay {
     // Adds the help icon for stealth mode
     containerAutomation.appendChild(this.createQuestionBox(
       'bm-help-stealth',
-      'Waits for the website to make the request, instead of sending a request.',
+      'Help: Waits for the website to make requests, instead of sending requests.',
       outputStatusId
     ));
+
+    containerAutomation.appendChild(document.createElement('br')); // Line break
+
+    const outputStatus = document.createElement('textarea'); // Outputs bot status
+    outputStatus.id = outputStatusId;
+    outputStatus.readOnly = true; // Read-only input field
+    outputStatus.placeholder = 'Status: Sleeping...'; // Default text value
+    containerAutomation.appendChild(outputStatus);
 
     // Construction of the overlay element
     overlay.appendChild(containerOverlayHeader); // Adds the overlay header container to the overlay
@@ -94,6 +102,7 @@ export class Overlay {
 
   /** Updates the inner HTML of the element.
    * The element is discovered by it's id.
+   * If the element is an <input>, it will modify the value attribute instead.
    * @param {string} id - The ID of the element to change
    * @param {string} html - The HTML/text to update with
    * @param {boolean} [doSafe] - (Optional) Should `textContent` be used instead of `innerHTML` to avoid XSS? False by default
@@ -103,6 +112,12 @@ export class Overlay {
 
     const element = document.getElementById(id); // Retrieve the element
     if (!element) {return;} // Kills itself if the element does not exist
+
+    // Input elements don't have innerHTML, so we modify the value attribute instead
+    if (element instanceof HTMLInputElement) {
+      element.value = html;
+      return;
+    } 
 
     if (doSafe) {
       element.textContent = html; // Populate element with plain-text HTML/text
