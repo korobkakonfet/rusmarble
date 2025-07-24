@@ -29,6 +29,10 @@ jobs:
           npm version minor --no-git-tag-version
           node update-version.js
 
+      - name: Set up GitHub token for pushing
+        run: |
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
+
       - name: Commit and push built script
         run: |
           git config user.name "github-actions[bot]"
