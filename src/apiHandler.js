@@ -31,8 +31,13 @@ export class ApiHandler {
         case 'me':
           const username = document.getElementById('bm-user-name');
           const droplets = document.getElementById('bm-user-droplets');
+          const nextLevel = document.getElementById('bm-user-nextlevel');
           if (username) {username.textContent = `Username: ${data.jsonData?.name}`;}
-          if (droplets) {droplets.textContent = `Droplets: ${data.jsonData?.droplets}`;}
+          if (droplets) {droplets.textContent = `Droplets: ${new Intl.NumberFormat().format(data.jsonData?.droplets)}`;}
+          if (nextLevel) {
+            const nextLevelPixels = Math.ceil(Math.pow(Math.floor(data.jsonData?.level) * Math.pow(30, 0.65), (1/0.65)) - data.jsonData?.pixelsPainted);
+            nextLevel.textContent = `Next level in ~${new Intl.NumberFormat().format(nextLevelPixels)} pixel${nextLevelPixels == 1 ? '' : 's'}`;
+          }
           break;
         case 'robots':
           this.disableAll = data.jsonData?.userscript?.toString().toLowerCase() == 'false'; // Disables Blue Marble if site owner wants userscripts disabled

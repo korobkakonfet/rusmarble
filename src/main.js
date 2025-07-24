@@ -60,6 +60,14 @@ inject(() => {
 const cssOverlay = GM_getResourceText("CSS-Overlay");
 GM_addStyle(cssOverlay);
 
+// Imports the Roboto Mono font family
+var stylesheetLink = document.createElement('link');
+stylesheetLink.href = 'https://fonts.googleapis.com/css2?family=Roboto+Mono:ital,wght@0,100..700;1,100..700&display=swap';
+stylesheetLink.rel = 'preload';
+stylesheetLink.as = 'style';
+stylesheetLink.onload = "this.onload=null;this.rel='stylesheet'";
+document.head.appendChild(stylesheetLink);
+
 const overlay = new Overlay(); // Constructs a new Overlay object
 overlay.create(); // Deploys the overlay to the page
 

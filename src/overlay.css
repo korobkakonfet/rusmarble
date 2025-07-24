@@ -7,7 +7,16 @@
   padding: 10px;
   border-radius: 8px;
   z-index: 9000;
-  font-family: 'sans-serif';
+  
+  /* Font stack is as follows:
+   * Highest Priority (Roboto Mono)
+   * Windows fallback (Courier New)
+   * macOS fallback (Monaco)
+   * Linux fallback (DejaVu Sans Mono)
+   * Any possible monospace font (monospace)
+   * Last resort (Arial) */
+  font-family: 'Roboto Mono', 'Courier New', 'Monaco', 'DejaVu Sans Mono', monospace, 'Arial';
+  font-weight: bold;
 }
 
 #bm-bar-drag {
@@ -23,11 +32,14 @@
   cursor: grabbing;
 }
 
+#bm-contain-header {
+  margin-bottom: 0.5em;
+}
+
 #bm-overlay img {
   display: inline-block;
   height: 2.5em;
   margin-right: 1ch;
-  margin-bottom: 0.5em;
   vertical-align: middle;
 }
 

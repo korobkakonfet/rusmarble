@@ -22,6 +22,7 @@ export class Overlay {
     overlay.style.right = '75px'; // Position from right of viewport
 
     const containerOverlayHeader = document.createElement('div');
+    containerOverlayHeader.id = 'bm-contain-header';
 
     const barDrag = document.createElement('div'); // Drag bar for the overlay
     barDrag.id = 'bm-bar-drag';
@@ -37,6 +38,7 @@ export class Overlay {
     containerOverlayHeader.appendChild(barHeader); // Adds the header to the overlay header container
 
     const containerUserInfo = document.createElement('div'); // User info container
+    containerUserInfo.id = 'bm-contain-userinfo';
 
     const userName = document.createElement('p'); // User name field
     userName.id = 'bm-user-name';
@@ -47,6 +49,11 @@ export class Overlay {
     userDroplets.id = 'bm-user-droplets';
     userDroplets.textContent = 'Droplets:';
     containerUserInfo.appendChild(userDroplets); // Adds the droplet field to the user info container
+
+    const userNextLevel = document.createElement('p'); // Amount to next level
+    userNextLevel.id = 'bm-user-nextlevel';
+    userNextLevel.textContent = 'Next level in...';
+    containerUserInfo.appendChild(userNextLevel); // Adds the "amount to next level" field to the user info container
     
     // Construction of the overlay element
     overlay.appendChild(containerOverlayHeader); // Adds the overlay header container to the overlay
