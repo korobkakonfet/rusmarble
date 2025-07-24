@@ -38,12 +38,13 @@ jobs:
       
       - name: Update static version numbers
         run: |
+          current_version=${{ steps.get_version.outputs.current_version }}
           if [ -f "docs/README.md" ]; then
             echo "README.md exists. Modifying..."
           else
             echo "README.md was not found. Skipping..."
           fi
-          sed -i 's|\(Latest_Version-\)[^-\ ]*\(-lightblue\)|\1'$get_version'\2|' docs/README.md
+          sed -i 's|\(Latest_Version-\)[^-\ ]*\(-lightblue\)|\1'$current_version'\2|' docs/README.md
 
       - name: Get the previous commit message
         id: get-commit-message
