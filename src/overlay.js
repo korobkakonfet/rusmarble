@@ -5,10 +5,14 @@
 export class Overlay {
 
   /** Constructor for the Overlay class.
+   * @param {string} name - The name of the userscript
+   * @param {string} version - The version of the userscript 
    * @since 0.0.2
    * @see {@link Overlay}
    */
-  constructor() {
+  constructor(name, version) {
+    this.name = name;
+    this.version = version;
   }
 
   /** Creates and deploys the overlay element
@@ -34,7 +38,7 @@ export class Overlay {
     containerOverlayHeader.appendChild(barHeaderImage); // Adds the header image to the overlay header container
 
     const barHeader = document.createElement('h1'); // Header bar for the overlay
-    barHeader.textContent = 'Blue Marble';
+    barHeader.textContent = this.name;
     containerOverlayHeader.appendChild(barHeader); // Adds the header to the overlay header container
 
     const containerUserInfo = document.createElement('div'); // User info container

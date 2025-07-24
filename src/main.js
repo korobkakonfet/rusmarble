@@ -1,6 +1,9 @@
 import { Overlay } from './overlay.js';
 import { ApiHandler } from './apiHandler.js';
 
+const name = GM_info.script.name.toString();
+const version = GM_info.script.version.toString();
+
 /** Injects code into the client
  * This code will execute outside of TamperMonkey's sandbox
  * @param {*} fn - The code to execute
@@ -68,10 +71,10 @@ stylesheetLink.as = 'style';
 stylesheetLink.onload = "this.onload=null;this.rel='stylesheet'";
 document.head.appendChild(stylesheetLink);
 
-const overlay = new Overlay(); // Constructs a new Overlay object
+const overlay = new Overlay(name, version); // Constructs a new Overlay object
 overlay.create(); // Deploys the overlay to the page
 
 const apiHandler = new ApiHandler(); // Constructs a new ApiHandler object
 apiHandler.spontaneousResponseListener(overlay); // Reads spontaneous fetch responces
 
-console.log("Blue Marble userscript has loaded!");
+console.log(`${name} (${version}) userscript has loaded!`);
