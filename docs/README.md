@@ -23,7 +23,7 @@
 <a href="https://github.com/SwingTheVine/Wplace-BlueMarble/blob/main/LICENSE.txt" target="_blank"><img alt="Software License: MPL-2.0" src="https://img.shields.io/badge/Software_License-GPL--3.0-brightgreen?style=flat"></a>
 <a href="https://discord.gg/tpeBPy46hf" target="_blank"><img alt="Contact Me" src="https://img.shields.io/badge/Contact_Me-gray?style=flat&logo=Discord&logoColor=white&logoSize=auto&labelColor=cornflowerblue"></a>
 <a href="" target="_blank"><img alt="WakaTime" src="https://img.shields.io/badge/Coding_Time-10hrs_0mins-blue?style=flat&logo=wakatime&logoColor=black&logoSize=auto&labelColor=white"></a>
-<a href="" target="_blank"><img alt="Total Patches" src="https://img.shields.io/badge/Total_Patches-431-black?style=flat"></a>
+<a href="" target="_blank"><img alt="Total Patches" src="https://img.shields.io/badge/Total_Patches-36-black?style=flat"></a>
 <a href="" target="_blank"><img alt="Total Lines of Code" src="https://tokei.rs/b1/github/SwingTheVine/Wplace-BlueMarble?category=code"></a>
 <a href="" target="_blank"><img alt="Total Comments" src="https://tokei.rs/b1/github/SwingTheVine/Wplace-BlueMarble?category=comments"></a>
 <a href="" target="_blank"><img alt="Build" src="https://github.com/SwingTheVine/Wplace-BlueMarble/actions/workflows/build.yml/badge.svg"></a>
@@ -50,7 +50,7 @@
   Most of this userscript is licensed under the <code>Mozilla Public License Version 2.0</code> (MPL-2.0). All software, code, and libraries in this repository are licensed under the MPL-2.0 license. However, the "Blue Marble" image in this userscript is owned by NASA and is licensed under the <code>Creative Commons 0 1.0 Universal</code> (CC0 1.0) license.
 </p>
 
-<h2>FAQ<h2>
+<h2>FAQ</h2>
 <p>
   TBA
 </p>

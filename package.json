@@ -1,10 +1,10 @@
 {
   "name": "wplace-bluemarble",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "type": "module",
   "scripts": {
     "build": "node build/build.js",
-    "patch": "npm version patch --no-git-tag-version && npm run build"
+    "patch": "node build/patch.js && npm run build"
   },
   "devDependencies": {
     "esbuild": "^0.25.0"
