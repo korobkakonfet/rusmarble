@@ -68,7 +68,18 @@ export class Overlay {
     this.handleDrag(overlay, barDrag); // Starts handling the drag functionality
   }
 
+  /** Updates the text content of an overlay element.
+   * The element is discovered by it's id
+   * @param {string} id - The ID of the element to change
+   * @param {string} text - The text to change to
+   * @since - 0.24.2
+   */
+  updateText(id, text) {
 
+    const element = document.getElementById(id); // Retrieve the element
+    
+    if (element) {element.textContent = text;} // If the element exists, update it's text content
+  }
 
   /** Handles dragging of the overlay.
    * @param {HTMLElement} overlay - The overlay element to be moved.
