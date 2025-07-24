@@ -19,26 +19,20 @@ export class Overlay {
    */
   create() {
 
-    const div = document.createElement('div'); // Creates a new <div> element
+    // Declarations of all elements used in the overlay
+    const overlay = document.createElement('div'); // Creates a new <div> element
+    const panBar = document.createElement('div'); // Creates the pan bar for the overlay
 
-    div.textContent = this.text; // Sets the text content of the <div> to the passed-in text
+    overlay.id = 'bm-overlay'; // Sets the ID of the overlay
+    overlay.textContent = this.text; // Sets the text content of the overlay to the passed-in text
 
-    // Styles the <div>
-    Object.assign(div.style, {
-        position: 'fixed',
-        top: '10px',
-        right: '10px',
-        backgroundColor: 'rgba(0,0,0,0.7)',
-        color: 'white',
-        padding: '10px',
-        borderRadius: '8px',
-        zIndex: '9999',
-        fontFamily: 'sans-serif'
-    });
+    panBar.id = 'bm-panbar'; // Sets the ID of the pan bar
     
-    document.body.appendChild(div); // Adds the <div> to the body of the webpage
+    // Construction of the overlay element
+    document.body.appendChild(overlay); // Adds the overlay to the body of the webpage
+    overlay.appendChild(panBar); // Adds the pan bar to the overlay
 
-    this.element = div; // Stores the state of the overlay element in the "element" variable
+    this.element = overlay; // Stores the state of the overlay element in the "element" variable
   }
 
   /** Updates the display text of the overlay.
