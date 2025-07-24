@@ -18,7 +18,7 @@
   height: 1em;
 }
 
-#bm-bar-drag:active {
+#bm-bar-drag.dragging {
   background-color: #2e67d0;
   cursor: grabbing;
 }

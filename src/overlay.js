@@ -35,6 +35,7 @@ export class Overlay {
     overlay.appendChild(barDrag); // Adds the drag bar to the overlay
     overlay.appendChild(barHeaderImage); // Adds the header image to the overlay
     overlay.appendChild(barHeader); // Adds the header to the overlay
+    overlay.appendChild(document.createElement('hr')); // Adds a horizontal line to the overlay
     document.body.appendChild(overlay); // Adds the overlay to the body of the webpage
 
     this.handleDrag(overlay, barDrag); // Starts handling the drag functionality
@@ -56,7 +57,20 @@ export class Overlay {
       offsetY = event.clientY - overlay.getBoundingClientRect().top;
       document.body.style.userSelect = 'none'; // Prevents text selection while dragging
       overlay.style.right = ''; // Destroys the right property to unbind the overlay from the right side of the screen
+      overlay.classList.add('dragging'); // Adds a class to indicate a dragging state
     });
+
+    // What to do when the touch starts on the barDrag
+    barDrag.addEventListener('touchstart', function(event) {
+      isDragging = true;
+      const touch = event?.touches?.[0];
+      if (!touch) {return;}
+      offsetX = touch.clientX - overlay.getBoundingClientRect().left;
+      offsetY = touch.clientY - overlay.getBoundingClientRect().top;
+      document.body.style.userSelect = 'none'; // Prevents text selection while dragging
+      overlay.style.right = ''; // Destroys the right property to unbind the overlay from the right side of the screen
+      overlay.classList.add('dragging'); // Adds a class to indicate a dragging state
+    }, { passive: false }); // Prevents scrolling from being captured
 
     // What to do when the mouse is moved while dragging
     document.addEventListener('mousemove', function(event) {
@@ -66,10 +80,36 @@ export class Overlay {
       }
     });
 
+    // What to do when the touch moves while dragging
+    document.addEventListener('touchmove', function(event) {
+      if (isDragging) {
+        const touch = event?.touches?.[0];
+        if (!touch) {return;}
+        overlay.style.left = (touch.clientX - offsetX) + 'px';
+        overlay.style.top = (touch.clientY - offsetY) + 'px';
+        event.preventDefault(); // prevent scrolling while dragging
+      }
+    }, { passive: false }); // Prevents scrolling from being captured
+
     // What to do when the mouse is released
     document.addEventListener('mouseup', function() {
       isDragging = false;
       document.body.style.userSelect = ''; // Restores text selection capability after dragging
+      overlay.classList.remove('dragging'); // Removes the dragging class
+    });
+
+    // What to do when the touch ends
+    document.addEventListener('touchend', function() {
+      isDragging = false;
+      document.body.style.userSelect = ''; // Restores text selection capability after dragging
+      overlay.classList.remove('dragging'); // Removes the dragging class
+    });
+
+    // What to do when the touch is cancelled
+    document.addEventListener('touchcancel', function() {
+      isDragging = false;
+      document.body.style.userSelect = ''; // Restores text selection capability after dragging
+      overlay.classList.remove('dragging'); // Removes the dragging class
     });
   }
 }
