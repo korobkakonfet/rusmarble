@@ -14,8 +14,9 @@
 // @grant        GM_getResourceText
 // @grant        GM_addStyle
 // @resource     CSS-Overlay https://raw.githubusercontent.com/SwingTheVine/Wplace-BlueMarble/main/src/overlay.css
-// @link         https://wplace.live
-// @link         https://www.mozilla.org/en-US/MPL/2.0/
 // ==/UserScript==
 
-(()=>{var t=class{constructor(e){this.text=e,this.element=null}create(){let e=document.createElement("div"),n=document.createElement("div");e.id="bm-overlay",e.textContent=this.text,n.id="bm-panbar",document.body.appendChild(e),e.appendChild(n),this.element=e}updateText(e){this.element&&(this.element.textContent=e)}};var l=GM_getResourceText("CSS-Overlay");GM_addStyle(l);console.log("Blue Marble script has loaded.");var a=new t("Blue Marble");a.create();setTimeout(()=>{a.updateText("Updated text")},5e3);})();
+// Wplace  --> https://wplace.live
+// License --> https://www.mozilla.org/en-US/MPL/2.0/
+
+(()=>{var t=class{constructor(e){this.text=e,this.element=null}create(){let e=document.createElement("div"),n=document.createElement("div");e.id="bm-overlay",e.textContent=this.text,n.id="bm-panbar",document.body.appendChild(e),e.appendChild(n),this.element=e}updateText(e){this.element&&(this.element.textContent=e)}};var l=GM_getResourceText("CSS-Overlay");GM_addStyle(l);console.log("Blue Marble script has loaded.");var o=new t("Blue Marble");o.create();})();

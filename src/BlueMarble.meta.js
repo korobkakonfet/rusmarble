@@ -14,6 +14,7 @@
 // @grant        GM_getResourceText
 // @grant        GM_addStyle
 // @resource     CSS-Overlay https://raw.githubusercontent.com/SwingTheVine/Wplace-BlueMarble/main/src/overlay.css
-// @link         https://wplace.live
-// @link         https://www.mozilla.org/en-US/MPL/2.0/
 // ==/UserScript==
+
+// Wplace  --> https://wplace.live
+// License --> https://www.mozilla.org/en-US/MPL/2.0/

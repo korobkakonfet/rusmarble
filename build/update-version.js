@@ -1,3 +1,8 @@
+/** Updates the version number in the metadata.
+ * This updates the version number in the metadata to the version specified in package.json.
+ * @since 0.0.6
+*/
+
 import fs from 'fs';
 
 const pkg = JSON.parse(fs.readFileSync('package.json', 'utf-8'));

@@ -1,3 +1,8 @@
+/** Builds the userscript using esbuild.
+ * This is for compiling all of the source files into a single userscript file.
+ * @since 0.0.6
+*/
+
 import esbuild from 'esbuild';
 import fs from 'fs';
 import { execSync } from 'child_process';
