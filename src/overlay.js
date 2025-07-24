@@ -85,7 +85,6 @@ export class Overlay {
       offsetX = event.clientX - overlay.getBoundingClientRect().left;
       offsetY = event.clientY - overlay.getBoundingClientRect().top;
       document.body.style.userSelect = 'none'; // Prevents text selection while dragging
-      overlay.style.right = ''; // Destroys the right property to unbind the overlay from the right side of the screen
       barDrag.classList.add('dragging'); // Adds a class to indicate a dragging state
     });
 
@@ -94,18 +93,18 @@ export class Overlay {
       isDragging = true;
       const touch = event?.touches?.[0];
       if (!touch) {return;}
-      offsetX = touch.clientX - overlay.getBoundingClientRect().left;
-      offsetY = touch.clientY - overlay.getBoundingClientRect().top;
+      offsetX = touch.clientX - overlay.getBoundingClientRect().left; // Distance between the left edge of the overlay, and the cursor
+      offsetY = touch.clientY - overlay.getBoundingClientRect().top; // Distance between the top edge of the overlay, and the cursor
       document.body.style.userSelect = 'none'; // Prevents text selection while dragging
-      overlay.style.right = ''; // Destroys the right property to unbind the overlay from the right side of the screen
       barDrag.classList.add('dragging'); // Adds a class to indicate a dragging state
     }, { passive: false }); // Prevents scrolling from being captured
 
     // What to do when the mouse is moved while dragging
     document.addEventListener('mousemove', function(event) {
       if (isDragging) {
-        overlay.style.left = (event.clientX - offsetX) + 'px';
-        overlay.style.top = (event.clientY - offsetY) + 'px';
+        overlay.style.left = (event.clientX - offsetX) + 'px'; // Binds the overlay to the left side of the screen, and sets it's position to the cursor
+        overlay.style.top = (event.clientY - offsetY) + 'px'; // Binds the overlay to the top of the screen, and sets it's position to the cursor
+        overlay.style.right = ''; // Destroys the right property to unbind the overlay from the right side of the screen
       }
     });
 
