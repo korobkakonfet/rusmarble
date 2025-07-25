@@ -132,8 +132,6 @@ export class Overlay {
 
     containerAutomation.appendChild(containerAutomationCoords); // Adds coord container to automation container
 
-    containerAutomation.appendChild(document.createElement('br')); // Line break
-
     const containerAutomationButtons = document.createElement('div'); // Button array for bot
     containerAutomationButtons.id = 'bm-contain-buttons';
 
@@ -143,8 +141,6 @@ export class Overlay {
     containerAutomationButtons.appendChild(this.createButton('bm-button-stop', 'Stop', false));
 
     containerAutomation.appendChild(containerAutomationButtons); // Adds button container to automation container
-
-    containerAutomation.appendChild(document.createElement('br')); // Line break
 
     const outputStatus = document.createElement('textarea'); // Outputs bot status
     outputStatus.id = outputStatusId;
