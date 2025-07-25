@@ -55,7 +55,7 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
-          git add dist/*.user.js
+          git add dist/*
           git add src/BlueMarble.meta.js
           git add package.json
           git add docs/README.md
