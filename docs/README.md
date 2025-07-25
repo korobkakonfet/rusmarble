@@ -7,7 +7,7 @@
     <td>&emsp;<a href="#overview">Overview</a></td>
   </tr>
   <tr>
-    <td>&emsp;&emsp;<a href="#bot-settings">Bot Settings</a></td>
+    <td>&emsp;&emsp;<a href="#script-settings">Script Settings</a></td>
   </tr>
   <tr>
     <td>&emsp;&emsp;<a href="#template-settings">Template Settings</a></td>
@@ -43,11 +43,11 @@
 
 <h2>Overview</h2>
 <p>
-  Welcome to Blue Marble! Blue Marble is a userscript for the website <a href="https://wplace.live/" target="_blank">wplace.live</a>. Blue Marble contains a userbot, which can place pixels for you! You can control the Blue Marble bot from the custom overlay.
+  Welcome to Blue Marble! Blue Marble is a userscript for the website <a href="https://wplace.live/" target="_blank">wplace.live</a>.
 
-  <h3>Bot Settings</h3>
+  <h3>Script Settings</h3>
   <p>
-    There are many settings available for the Blue Marble userbot! Through these settings, you can control how the bot behaves.
+    There are many settings available for the Blue Marble userscript! Through these settings, you can control how the script behaves.
     <h4>Stealth Mode</h4>
     <a href="" target="_blank"><img alt="Default: Enabled" src="https://img.shields.io/badge/Default-Enabled-lightgreen?style=flat"></a>
     <p>
@@ -56,7 +56,7 @@
     <h4>Possessed Mode</h4>
     <a href="" target="_blank"><img alt="Default: Enabled" src="https://img.shields.io/badge/Default-Enabled-lightgreen?style=flat"></a>
     <p>
-      In Possessed Mode, Blue Marble will prioritize controling the game over directly interacting with the server. For example, assume a situation where Blue Marble is trying to place a pixel. However, the tile is not loaded. Typically, Blue Marble would make a request to the server to fetch the tile. When <b>Possessed Mode</b> is enabled, Blue Marble will teleport the game to the tile, which causes the game to fetch the tile. The difference lies in <i>who</i> sends the request to the server. When <b>Stealth Mode</b> and <b>Possessed Mode</b> are both enabled, it is harder to detect the userbot since most actions are made through the game, not the userbot.
+      In Possessed Mode, Blue Marble will prioritize controling the game over directly interacting with the server. For example, assume a situation where Blue Marble is trying to place a pixel. However, the tile is not loaded. Typically, Blue Marble would make a request to the server to fetch the tile. When <b>Possessed Mode</b> is enabled, Blue Marble will teleport the game to the tile, which causes the game to fetch the tile. The difference lies in <i>who</i> sends the request to the server. When <b>Stealth Mode</b> and <b>Possessed Mode</b> are both enabled, it is harder to detect the userscript since most actions are made through the game, not the userscript.
     </p>
     <h4>Panic Mode</h4>
     <a href="" target="_blank"><img alt="Default: Disabled" src="https://img.shields.io/badge/Default-Disabled-red?style=flat"></a>

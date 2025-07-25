@@ -134,17 +134,16 @@ export class Overlay {
 
     containerAutomation.appendChild(this.createInputFile('bm-input-file')); // Adds the file upload element to the automation container
 
-    const containerAutomationButtons = document.createElement('div'); // Button array for bot
+    const containerAutomationButtons = document.createElement('div'); // Button array for template
     containerAutomationButtons.id = 'bm-contain-buttons';
 
-    // Button array for bot
-    containerAutomationButtons.appendChild(this.createButton('bm-button-start', 'Start'));
-    containerAutomationButtons.appendChild(this.createButton('bm-button-pause', 'Pause', false));
-    containerAutomationButtons.appendChild(this.createButton('bm-button-stop', 'Stop'));
+    // Button array for template
+    containerAutomationButtons.appendChild(this.createButton('bm-button-enable', 'Enable'));
+    containerAutomationButtons.appendChild(this.createButton('bm-button-disable', 'Disable'));
 
     containerAutomation.appendChild(containerAutomationButtons); // Adds button container to automation container
 
-    const outputStatus = document.createElement('textarea'); // Outputs bot status
+    const outputStatus = document.createElement('textarea'); // Outputs script status
     outputStatus.id = outputStatusId;
     outputStatus.readOnly = true; // Read-only input field
     outputStatus.placeholder = `Status: Sleeping...\nVersion: ${this.version}`; // Default text value
