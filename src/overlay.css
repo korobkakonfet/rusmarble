@@ -59,13 +59,12 @@ div#bm-overlay {
   vertical-align: middle;
 }
 
-/* The user info container */
-#bm-contain-userinfo {
-  margin-top: 0.5em;
-}
-
-/* The automation information container */
-#bm-contain-automation {
+/* The containers that need spacing from each-other */
+#bm-contain-userinfo,
+#bm-contain-automation,
+#bm-contain-coords,
+#bm-contain-buttons,
+#bm-output-status {
   margin-top: 0.5em;
 }
 
@@ -103,6 +102,44 @@ div#bm-overlay {
   fill: #111;
 }
 
+/* Tile (x, y) & Pixel (x, y) input fields */
+#bm-contain-coords input[type="text"] {
+  width: 7.5ch;
+  margin-left: 1ch;
+  background-color: rgba(0, 0, 0, 0.2);
+  padding: 0 0.5ch;
+  font-size: small;
+}
+
+/* Automation button container */
+#bn-contain-buttons {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-content: center;
+  justify-content: center;
+  align-items: center;
+  gap: 1ch;
+}
+
+/* Automation button array buttons */
+#bn-contain-buttons button {
+  background-color: lightslategray;
+  border-radius: 1em;
+  padding: 0 0.75ch;
+}
+
+/* Automation button array buttons when hovered/selected */
+#bn-contain-buttons button:hover,
+#bn-contain-buttons button:focus {
+  background-color: slategray;
+}
+
+/* Automation button array buttons when disabled */
+#bn-contain-buttons button:disabled {
+  background-color: dimgray;
+}
+
 /* Output status area */
 #bm-output-status {
   font-size: small;
@@ -110,13 +147,4 @@ div#bm-overlay {
   padding: 0 0.5ch;
   height: 3.75em;
   width: 100%;
-  margin-top: 0.5em;
-}
-
-/* Tile (x, y) & Pixel (x, y) input fields */
-#bm-contain-coords input[type="text"] {
-  width: 7.5ch;
-  margin-left: 1ch;
-  background-color: rgba(0, 0, 0, 0.2);
-  padding: 0 0.5ch;
 }

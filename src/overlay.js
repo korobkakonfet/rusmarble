@@ -72,7 +72,7 @@ export class Overlay {
     ));
     
     // Adds the help icon for stealth mode
-    containerAutomation.appendChild(this.createQuestionBox(
+    containerAutomation.appendChild(this.createButtonQuestion(
       'bm-help-stealth',
       'Help: Waits for the website to make requests, instead of sending requests.',
       outputStatusId
@@ -88,7 +88,7 @@ export class Overlay {
     ));
 
     // Adds the help icon for possessed mode
-    containerAutomation.appendChild(this.createQuestionBox(
+    containerAutomation.appendChild(this.createButtonQuestion(
       'bm-help-possessed',
       'Help: Controls the website as if it were possessed.',
       outputStatusId
@@ -103,7 +103,7 @@ export class Overlay {
     ));
 
     // Adds the help icon for panic mode
-    containerAutomation.appendChild(this.createQuestionBox(
+    containerAutomation.appendChild(this.createButtonQuestion(
       'bm-help-panic',
       'Help: Stops placing for a while if it detects a user nearby.',
       outputStatusId
@@ -117,6 +117,7 @@ export class Overlay {
     const buttonCoords = document.createElement('button');
     buttonCoords.id = 'bm-button-coords';
     buttonCoords.className = 'bm-help';
+    buttonCoords.style = 'margin-top: 0';
     buttonCoords.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 6"><circle cx="2" cy="2" r="2"></circle><path d="M2 6 L3.7 3 L0.3 3 Z"></path><circle cx="2" cy="2" r="0.7" fill="white"></circle></svg></svg>';
     buttonCoords.onclick = () => {
       //this.updateInnerHTML(outputId, tooltip); // Update output element text with tooltip on click
@@ -130,6 +131,18 @@ export class Overlay {
     containerAutomationCoords.appendChild(this.createInputText('bm-input-py', 'Pixl Y', '', '4'));
 
     containerAutomation.appendChild(containerAutomationCoords); // Adds coord container to automation container
+
+    containerAutomation.appendChild(document.createElement('br')); // Line break
+
+    const containerAutomationButtons = document.createElement('div'); // Button array for bot
+    containerAutomationButtons.id = 'bm-contain-buttons';
+
+    // Button array for bot
+    containerAutomationButtons.appendChild(this.createButton('bm-button-start', 'Start'));
+    containerAutomationButtons.appendChild(this.createButton('bm-button-start', 'Pause', false));
+    containerAutomationButtons.appendChild(this.createButton('bm-button-start', 'Stop', false));
+
+    containerAutomation.appendChild(containerAutomationButtons); // Adds button container to automation container
 
     containerAutomation.appendChild(document.createElement('br')); // Line break
 
@@ -185,16 +198,29 @@ export class Overlay {
    * @returns {HTMLButtonElement} HTML Button Element
    * @since 0.25.5
    */
-  createQuestionBox(id, tooltip, outputId) {
-    const questionBox = document.createElement('button');
-    questionBox.id = id;
-    questionBox.className = 'bm-help';
-    questionBox.textContent = '?';
-    questionBox.title = tooltip; // Tooltip on hover
-    questionBox.onclick = () => {
+  createButtonQuestion(id, tooltip, outputId) {
+    const buttonQuestion = this.createButton(id, '?'); // Creates a button
+    buttonQuestion.className = 'bm-help';
+    buttonQuestion.title = tooltip; // Tooltip on hover
+    buttonQuestion.onclick = () => {
       this.updateInnerHTML(outputId, tooltip); // Update output element text with tooltip on click
     }
-    return questionBox;
+    return buttonQuestion;
+  }
+
+  /** Creates a button
+   * @param {string} id - The ID of the button
+   * @param {string} text - The text content of the button
+   * @param {boolean} [isEnabled] - (Optional) Is the button enabled? Default is true
+   * @returns {HTMLButtonElement} HTML Button Element
+   * @since 0.33.1
+   */
+  createButton(id, text, isEnabled=true) {
+    const button = document.createElement('button');
+    button.id = id;
+    button.textContent = text;
+    button.disabled = !isEnabled;
+    return button;
   }
 
   /** Creates a text input field
