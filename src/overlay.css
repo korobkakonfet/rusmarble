@@ -88,6 +88,12 @@ div#bm-overlay {
   margin-top: 2px;
   text-align: center;
   line-height: 1.25em;
+  background-color: dimgray;
+}
+
+/* Question Mark button when hovered/focused */
+.bm-help:hover, .bm-help:focus {
+  background-color: gray;
 }
 
 /* Pin button */
@@ -112,7 +118,7 @@ div#bm-overlay {
 }
 
 /* Automation button container */
-#bn-contain-buttons {
+#bm-contain-buttons {
   display: flex;
   flex-direction: row;
   flex-wrap: wrap;
@@ -123,21 +129,21 @@ div#bm-overlay {
 }
 
 /* Automation button array buttons */
-#bn-contain-buttons button {
-  background-color: lightslategray;
+#bm-contain-buttons button {
+  background-color: dimgray;
   border-radius: 1em;
   padding: 0 0.75ch;
 }
 
-/* Automation button array buttons when hovered/selected */
-#bn-contain-buttons button:hover,
-#bn-contain-buttons button:focus {
-  background-color: slategray;
+/* Automation button array buttons when hovered/focused */
+#bm-contain-buttons button:hover, #bm-contain-buttons button:focus {
+  background-color: gray;
 }
 
 /* Automation button array buttons when disabled */
-#bn-contain-buttons button:disabled {
-  background-color: dimgray;
+#bm-contain-buttons button:disabled {
+  background-color: lightslategray;
+  text-decoration: line-through;
 }
 
 /* Output status area */
