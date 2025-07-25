@@ -59,15 +59,6 @@ div#bm-overlay {
   vertical-align: middle;
 }
 
-/* The containers that need spacing from each-other */
-#bm-contain-userinfo,
-#bm-contain-automation,
-#bm-contain-coords,
-#bm-contain-buttons,
-#bm-output-status {
-  margin-top: 0.5em;
-}
-
 /* Checkboxes in the automation container */
 #bm-contain-automation input[type="checkbox"] {
   vertical-align: middle;
@@ -122,15 +113,36 @@ div#bm-overlay {
   gap: 1ch;
 }
 
-/* Automation button array buttons */
-#bm-contain-buttons button {
-  border-radius: 1em;
-  padding: 0 0.75ch;
+/* The template file upload container */
+div:has(> #bm-input-file) > button {
+  width: 100%;
+  text-align: left;
+}
+
+/* Output status area */
+#bm-output-status {
+  font-size: small;
+  background-color: rgba(0, 0, 0, 0.2);
+  padding: 0 0.5ch;
+  height: 3.75em;
+  width: 100%;
+}
+
+/* The elements that need spacing from each-other */
+#bm-contain-userinfo,
+#bm-contain-automation,
+#bm-contain-coords,
+#bm-contain-buttons,
+div:has(> #bm-input-file),
+#bm-output-status {
+  margin-top: 0.5em;
 }
 
 /* All overlay buttons */
 #bm-overlay button {
   background-color: #144eb9;
+  border-radius: 1em;
+  padding: 0 0.75ch;
 }
 
 /* All overlay buttons when hovered/focused */
@@ -147,13 +159,4 @@ div#bm-overlay {
 /* All overlay buttons when disabled */
 #bm-overlay button:disabled {
   text-decoration: line-through;
-}
-
-/* Output status area */
-#bm-output-status {
-  font-size: small;
-  background-color: rgba(0, 0, 0, 0.2);
-  padding: 0 0.5ch;
-  height: 3.75em;
-  width: 100%;
 }

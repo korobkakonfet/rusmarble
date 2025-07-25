@@ -125,22 +125,14 @@ export class Overlay {
     containerAutomationCoords.appendChild(buttonCoords); // Adds the coordinate button to the automation container
 
     // Tile (x,y) and Pixel (x,y) input fields
-    containerAutomationCoords.appendChild(this.createInputText('bm-input-tx', 'Tile X', '', '4'));
-    containerAutomationCoords.appendChild(this.createInputText('bm-input-ty', 'Tile Y', '', '4'));
-    containerAutomationCoords.appendChild(this.createInputText('bm-input-px', 'Pixl X', '', '4'));
-    containerAutomationCoords.appendChild(this.createInputText('bm-input-py', 'Pixl Y', '', '4'));
+    containerAutomationCoords.appendChild(this.createInputText('bm-input-tx', 'Tl X', '', '4'));
+    containerAutomationCoords.appendChild(this.createInputText('bm-input-ty', 'Tl Y', '', '4'));
+    containerAutomationCoords.appendChild(this.createInputText('bm-input-px', 'Px X', '', '4'));
+    containerAutomationCoords.appendChild(this.createInputText('bm-input-py', 'Px Y', '', '4'));
 
     containerAutomation.appendChild(containerAutomationCoords); // Adds coord container to automation container
 
-    const fileUpload = document.createElement('input');
-    fileUpload.id = 'bm-input-file';
-    fileUpload.type = 'file';
-    fileUpload.addEventListener('change', (event) => {
-      const file = event.target.files[0];
-      if (!file) {return;} // Kills itself if there is no file
-      console.log(`Uploaded file: ${file.name}`);
-    })
-    containerAutomation.appendChild(fileUpload); // Adds the file upload element to the automation container
+    containerAutomation.appendChild(this.createInputFile('bm-input-file', 20)); // Adds the file upload element to the automation container
 
     const containerAutomationButtons = document.createElement('div'); // Button array for bot
     containerAutomationButtons.id = 'bm-contain-buttons';
@@ -265,6 +257,42 @@ export class Overlay {
     input.checked = checkboxDefault;
     label.prepend(input); // Adds the input as the first child of the label (before the text)
     return label;
+  }
+
+  /** Creates a custom file upload input.
+   * Only the button is displayed, but interacting with it will simulate the file input
+   * @param {string} inputId - The file input element ID
+   * @param {number} [maxChars] - (Optional) The maximum number of characters in the displayed file name. Zero by default
+   * @returns {HTMLDivElement} HTML Div Element with Button and Input children
+   * @since 0.36.1
+   */
+  createInputFile(inputId, maxChars=0) {
+    const container = document.createElement('div');
+
+    const input = document.createElement('input');
+    input.id = inputId;
+    input.type = 'file';
+    input.style = 'display: none'; // Hides the file input
+
+    const button = document.createElement('button');
+    button.textContent = 'Upload File';
+    button.addEventListener('click', () => {
+      input.click(); // Clicks the file input
+    });
+
+    // Changes the button text content (and trims the file name)
+    input.addEventListener('change', () => {
+      if (input.files.length > 0) {
+        const name = input.files[0].name;
+        button.textContent = !!maxChars ? `${name.slice(0, maxChars)}${name.length > maxChars ? `…` : ``}` : input.files[0].name;
+      } else {
+        button.textContent = 'Upload File';
+      }
+    });
+
+    container.appendChild(input);
+    container.appendChild(button);
+    return container;
   }
 
   /** Handles dragging of the overlay.
