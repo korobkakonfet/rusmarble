@@ -132,6 +132,16 @@ export class Overlay {
 
     containerAutomation.appendChild(containerAutomationCoords); // Adds coord container to automation container
 
+    const fileUpload = document.createElement('input');
+    fileUpload.id = 'bm-input-file';
+    fileUpload.type = 'file';
+    fileUpload.addEventListener('change', (event) => {
+      const file = event.target.files[0];
+      if (!file) {return;} // Kills itself if there is no file
+      console.log(`Uploaded file: ${file.name}`);
+    })
+    containerAutomation.appendChild(fileUpload); // Adds the file upload element to the automation container
+
     const containerAutomationButtons = document.createElement('div'); // Button array for bot
     containerAutomationButtons.id = 'bm-contain-buttons';
 
