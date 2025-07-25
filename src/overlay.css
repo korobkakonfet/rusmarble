@@ -92,7 +92,12 @@ div#bm-overlay {
 }
 
 /* Pin button */
-#button-coords svg {
+#bm-button-coords {
+  vertical-align: middle;
+}
+
+/* Pin button image*/
+#bm-button-coords svg {
   width: 50%;
   margin: 0 auto;
   fill: #111;
@@ -108,6 +113,10 @@ div#bm-overlay {
   margin-top: 0.5em;
 }
 
+/* Tile (x, y) & Pixel (x, y) input fields */
 #bm-contain-coords input[type="text"] {
-  width: 7ch;
+  width: 7.5ch;
+  margin-left: 1ch;
+  background-color: rgba(0, 0, 0, 0.2);
+  padding: 0 0.5ch;
 }

@@ -124,10 +124,10 @@ export class Overlay {
     containerAutomationCoords.appendChild(buttonCoords); // Adds the coordinate button to the automation container
 
     // Tile (x,y) and Pixel (x,y) input fields
-    containerAutomationCoords.appendChild(this.createInputText('bm-input-tx', 'Tile X'));
-    containerAutomationCoords.appendChild(this.createInputText('bm-input-ty', 'Tile Y'));
-    containerAutomationCoords.appendChild(this.createInputText('bm-input-px', 'Pixel X'));
-    containerAutomationCoords.appendChild(this.createInputText('bm-input-py', 'Pixel Y'));
+    containerAutomationCoords.appendChild(this.createInputText('bm-input-tx', 'Tile X', '', '4'));
+    containerAutomationCoords.appendChild(this.createInputText('bm-input-ty', 'Tile Y', '', '4'));
+    containerAutomationCoords.appendChild(this.createInputText('bm-input-px', 'Pixl X', '', '4'));
+    containerAutomationCoords.appendChild(this.createInputText('bm-input-py', 'Pixl Y', '', '4'));
 
     containerAutomation.appendChild(containerAutomationCoords); // Adds coord container to automation container
 
@@ -201,17 +201,19 @@ export class Overlay {
    * @param {string} inputId - The ID for the text input
    * @param {string} [placeholder] - (Optional) The placeholder text of the input
    * @param {string} [text] - (Optional) The text content of the input
+   * @param {string} [maxLength] - (Optional) The maximum character amount of the input
    * @param {boolean} [isReadOnly] - (Optional) Should the input be readOnly? False by default
    * @returns {HTMLInputElement} HTML Input Element
    * @since 0.30.3
    */
-  createInputText(inputId, placeholder='', text='', isReadOnly=false) {
+  createInputText(inputId, placeholder='', text='', maxLength='', isReadOnly=false) {
     const input = document.createElement('input');
     input.id = inputId;
     input.type = 'text';
     input.placeholder = placeholder;
     input.value = text;
     input.readOnly = isReadOnly;
+    input.maxLength = maxLength;
     return input;
   }
 
