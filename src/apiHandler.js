@@ -26,9 +26,15 @@ export class ApiHandler {
       // Kills itself if the message was not intended for Blue Marble
       if (!(data && data.source === 'blue-marble')) {return;}
 
+      // Trims endpoint to the second to last non-number, non-null directoy.
+      // E.g. "wplace.live/api/pixel/0/0?payload" -> "pixel"
+      const endpointText = data.endpoint.split('?')[0].split('/').filter(s => s && isNaN(Number(s))).pop();
+
+      console.log(`Recieved message about "${endpointText}"`);
+
       // Each case is something that Blue Marble can use from the fetch.
       // For instance, if the fetch was for "me", we can update the overlay stats
-      switch (data.endpoint) {
+      switch (endpointText) {
         case 'me':
           const nextLevelPixels = Math.ceil(Math.pow(Math.floor(data.jsonData?.level) * Math.pow(30, 0.65), (1/0.65)) - data.jsonData?.pixelsPainted); // Calculates pixels to the next level
 

@@ -140,7 +140,7 @@ export class Overlay {
     // Button array for bot
     containerAutomationButtons.appendChild(this.createButton('bm-button-start', 'Start'));
     containerAutomationButtons.appendChild(this.createButton('bm-button-pause', 'Pause', false));
-    containerAutomationButtons.appendChild(this.createButton('bm-button-stop', 'Stop', false));
+    containerAutomationButtons.appendChild(this.createButton('bm-button-stop', 'Stop'));
 
     containerAutomation.appendChild(containerAutomationButtons); // Adds button container to automation container
 

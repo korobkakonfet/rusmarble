@@ -37,7 +37,7 @@ inject(() => {
 
       // Retrieves the endpoint name. Unknown endpoint = "ignore"
       let endpointName = ((args[0] instanceof Request) ? args[0]?.url : args[0]) || 'ignore';
-      endpointName = endpointName.split('/').filter(Boolean).pop() || 'ignore';
+      //endpointName = endpointName.split('/').filter(Boolean).pop() || 'ignore';
 
       console.log(`Sending JSON message about endpoint "${endpointName}"`);
 
