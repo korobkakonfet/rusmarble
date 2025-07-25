@@ -95,7 +95,7 @@ div#bm-overlay {
 
 /* Tile (x, y) & Pixel (x, y) input fields */
 #bm-contain-coords input[type="text"] {
-  width: 7.5ch;
+  width: 5.5ch;
   margin-left: 1ch;
   background-color: rgba(0, 0, 0, 0.2);
   padding: 0 0.5ch;

@@ -281,6 +281,7 @@ export class Overlay {
 
     // Changes the button text content (and trims the file name)
     input.addEventListener('change', () => {
+      button.style.maxWidth = `${button.offsetWidth}px`;
       if (input.files.length > 0) {
         button.textContent = input.files[0].name;
       } else {
