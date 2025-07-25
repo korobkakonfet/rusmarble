@@ -59,8 +59,8 @@ inject(() => {
   };
 });
 
-// Imports overlay CSS from src folder on github
-const cssOverlay = GM_getResourceText("CSS-Overlay");
+// Imports the CSS file from dist folder on github
+const cssOverlay = GM_getResourceText("CSS-BM-File");
 GM_addStyle(cssOverlay);
 
 // Imports the Roboto Mono font family
