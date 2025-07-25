@@ -65,7 +65,7 @@ export class Overlay {
     containerAutomation.id = 'bm-contain-automation';
 
     // Stealth Mode checkbox
-    containerAutomation.appendChild(this.createLineCheckbox(
+    containerAutomation.appendChild(this.createInputCheckbox(
       'Stealth',
       'bm-input-stealth',
       true
@@ -81,7 +81,7 @@ export class Overlay {
     containerAutomation.appendChild(document.createElement('br')); // Line break
 
     // Possessed Mode checkbox
-    containerAutomation.appendChild(this.createLineCheckbox(
+    containerAutomation.appendChild(this.createInputCheckbox(
       'Possessed',
       'bm-input-possessed',
       true
@@ -97,7 +97,7 @@ export class Overlay {
     containerAutomation.appendChild(document.createElement('br')); // Line break
 
     // Panic mode checkbox
-    containerAutomation.appendChild(this.createLineCheckbox(
+    containerAutomation.appendChild(this.createInputCheckbox(
       'Panic',
       'bm-input-panic'
     ));
@@ -111,10 +111,32 @@ export class Overlay {
 
     containerAutomation.appendChild(document.createElement('br')); // Line break
 
+    const containerAutomationCoords = document.createElement('div'); // Coords container
+    containerAutomationCoords.id = 'bm-contain-coords';
+
+    const buttonCoords = document.createElement('button');
+    buttonCoords.id = 'bm-button-coords';
+    buttonCoords.className = 'bm-help';
+    buttonCoords.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 6"><circle cx="2" cy="2" r="2"></circle><path d="M2 6 L3.7 3 L0.3 3 Z"></path><circle cx="2" cy="2" r="0.7" fill="white"></circle></svg></svg>';
+    buttonCoords.onclick = () => {
+      //this.updateInnerHTML(outputId, tooltip); // Update output element text with tooltip on click
+    }
+    containerAutomationCoords.appendChild(buttonCoords); // Adds the coordinate button to the automation container
+
+    // Tile (x,y) and Pixel (x,y) input fields
+    containerAutomationCoords.appendChild(this.createInputText('bm-input-tx', 'Tile X'));
+    containerAutomationCoords.appendChild(this.createInputText('bm-input-ty', 'Tile Y'));
+    containerAutomationCoords.appendChild(this.createInputText('bm-input-px', 'Pixel X'));
+    containerAutomationCoords.appendChild(this.createInputText('bm-input-py', 'Pixel Y'));
+
+    containerAutomation.appendChild(containerAutomationCoords); // Adds coord container to automation container
+
+    containerAutomation.appendChild(document.createElement('br')); // Line break
+
     const outputStatus = document.createElement('textarea'); // Outputs bot status
     outputStatus.id = outputStatusId;
     outputStatus.readOnly = true; // Read-only input field
-    outputStatus.placeholder = 'Status: Sleeping...'; // Default text value
+    outputStatus.placeholder = `Status: Sleeping...\nVersion: ${this.version}`; // Default text value
     containerAutomation.appendChild(outputStatus);
 
     // Construction of the overlay element
@@ -175,14 +197,32 @@ export class Overlay {
     return questionBox;
   }
 
-  /** Creates the checkbox line/label
+  /** Creates a text input field
+   * @param {string} inputId - The ID for the text input
+   * @param {string} [placeholder] - (Optional) The placeholder text of the input
+   * @param {string} [text] - (Optional) The text content of the input
+   * @param {boolean} [isReadOnly] - (Optional) Should the input be readOnly? False by default
+   * @returns {HTMLInputElement} HTML Input Element
+   * @since 0.30.3
+   */
+  createInputText(inputId, placeholder='', text='', isReadOnly=false) {
+    const input = document.createElement('input');
+    input.id = inputId;
+    input.type = 'text';
+    input.placeholder = placeholder;
+    input.value = text;
+    input.readOnly = isReadOnly;
+    return input;
+  }
+
+  /** Creates the checkbox input
    * @param {string} labelText - The text for the label
    * @param {string} checkboxId - The ID for the checkbox input
    * @param {boolean} [checkboxDefault] - (Optional) The default status of the checkbox (true = checked). False by default.
    * @returns {HTMLLabelElement} HTML Label Element with Input child
    * @since 0.27.1
    */
-  createLineCheckbox(labelText, checkboxId, checkboxDefault=false) {
+  createInputCheckbox(labelText, checkboxId, checkboxDefault=false) {
     const label = document.createElement('label');
     label.textContent = labelText;
     const input = document.createElement('input');

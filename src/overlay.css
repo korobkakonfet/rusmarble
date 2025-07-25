@@ -1,5 +1,6 @@
 /* @since 0.5.1 */
 
+/* The entire overlay */
 #bm-overlay {
   position: fixed;
   background-color: rgba(21, 48, 99, 0.9);
@@ -9,6 +10,7 @@
   z-index: 9000;
 }
 
+/* The entire overlay BUT it is cascading */
 div#bm-overlay {
   /* Font stack is as follows:
    * Highest Priority (Roboto Mono)
@@ -21,6 +23,7 @@ div#bm-overlay {
   letter-spacing: 0.05em;
 }
 
+/* The drag bar */
 #bm-bar-drag {
   margin-bottom: 0.5em;
   /* For background circles, width & height should be odd, cx & cy should be half of width & height, and r should be less than or equal to cx & cy */
@@ -30,14 +33,17 @@ div#bm-overlay {
   height: 1em;
 }
 
+/* When the overlay is being dragged */
 #bm-bar-drag.dragging {
   cursor: grabbing;
 }
 
+/* The container for the overlay header */
 #bm-contain-header {
   margin-bottom: 0.5em;
 }
 
+/* The Blue Marble image */
 #bm-overlay img {
   display: inline-block;
   height: 2.5em;
@@ -45,6 +51,7 @@ div#bm-overlay {
   vertical-align: middle;
 }
 
+/* The Blue Marble header */
 #bm-overlay h1 {
   display: inline-block;
   font-size: x-large;
@@ -52,23 +59,28 @@ div#bm-overlay {
   vertical-align: middle;
 }
 
+/* The user info container */
 #bm-contain-userinfo {
   margin-top: 0.5em;
 }
 
+/* The automation information container */
 #bm-contain-automation {
   margin-top: 0.5em;
 }
 
+/* Checkboxes in the automation container */
 #bm-contain-automation input[type="checkbox"] {
   vertical-align: middle;
   margin-right: 0.5ch;
 }
 
+/* Checkbox label/flavor text in the automation container */
 #bm-contain-automation label {
   margin-right: 0.5ch;
 }
 
+/* Question Mark button */
 .bm-help {
   border: white 1px solid;
   border-radius: 1em;
@@ -79,6 +91,14 @@ div#bm-overlay {
   line-height: 1.25em;
 }
 
+/* Pin button */
+#button-coords svg {
+  width: 50%;
+  margin: 0 auto;
+  fill: #111;
+}
+
+/* Output status area */
 #bm-output-status {
   font-size: small;
   background-color: rgba(0, 0, 0, 0.2);
@@ -86,4 +106,8 @@ div#bm-overlay {
   height: 3.75em;
   width: 100%;
   margin-top: 0.5em;
+}
+
+#bm-contain-coords input[type="text"] {
+  width: 7ch;
 }
