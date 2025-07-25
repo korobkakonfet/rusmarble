@@ -7,6 +7,9 @@
     <td>&emsp;<a href="#overview">Overview</a></td>
   </tr>
   <tr>
+    <td>&emsp;&emsp;<a href="#bot-settings">Bot Settings</a></td>
+  </tr>
+  <tr>
     <td>&emsp;<a href="#how-versioning-works">How Versioning Works</a></td>
   </tr>
   <tr>
@@ -31,7 +34,43 @@
 
 <h2>Overview</h2>
 <p>
-  TBA
+  Welcome to Blue Marble! Blue Marble is a userscript for the website <a href="https://wplace.live/" target="_blank">wplace.live</a>. Blue Marble contains a userbot, which can place pixels for you! You can control the Blue Marble bot from the custom overlay.
+
+  <h3>Bot Settings</h3>
+  <p>
+    There are many settings available for the Blue Marble userbot! Through these settings, you can control how the bot behaves.
+    <h4>Stealth Mode</h4>
+    <a href="" target="_blank"><img alt="Default: Enabled" src="https://img.shields.io/badge/Default-Enabled-lightgreen?style=flat"></a>
+    <p>
+      Stealth Mode, when enabled, requires the game to make a request to the server instead of Blue Marble making its own requests. However, this means Blue Marble will wait indefinitely until the request is made. <b>This should be used with Possessed Mode</b> so Blue Marble can "suggest" the game make certain requests instead of waiting for the requests to naturally occur.
+    </p>
+    <h4>Possessed Mode</h4>
+    <a href="" target="_blank"><img alt="Default: Enabled" src="https://img.shields.io/badge/Default-Enabled-lightgreen?style=flat"></a>
+    <p>
+      In Possessed Mode, Blue Marble will prioritize controling the game over directly interacting with the server. For example, assume a situation where Blue Marble is trying to place a pixel. However, the tile is not loaded. Typically, Blue Marble would make a request to the server to fetch the tile. When <b>Possessed Mode</b> is enabled, Blue Marble will teleport the game to the tile, which causes the game to fetch the tile. The difference lies in <i>who</i> sends the request to the server. When <b>Stealth Mode</b> and <b>Possessed Mode</b> are both enabled, it is harder to detect the userbot since most actions are made through the game, not the userbot.
+    </p>
+    <h4>Panic Mode</h4>
+    <a href="" target="_blank"><img alt="Default: Disabled" src="https://img.shields.io/badge/Default-Disabled-red?style=flat"></a>
+    <p>
+      When Panic Mode is enabled, Blue Marble will avoid placing pixels if another user placed there within the last few minutes. Griefers might see resistance as a "challenge" they have to overcome, so Blue Marble will wait for them to get bored and move on before resuming placement.
+      <br>
+      Note: Panic Mode will trigger for any user, including your allies.
+    </p>
+  </p>
+
+  <h3>Template Settings</h3>
+  <p>
+    <h4>Transparent Pixels</h4>
+    <p>
+      Templates for Blue Marble work slightly different from normal. Since there is a "Transparent" color, and transparent pixels in templates are typically ignored, your template should have a custom color to signify "Transparent" colored pixels. If a specific pixel can be any color, it should be transparent in the template. If a specific pixel should be "Transparent" color, it should have the <code>#deface</code> hex color. Any <code>#deface</code> colored pixel in your template will be interpereted as the "Transparent" color. Any transparent colored pixel in your template will be interpereted as ignored.
+    </p>
+    <h4>Coordinates</h4>
+    <p>
+      The coordinate system for wplace.live is unique. Instead of all pixels having a global coordinate number (x, y), the coordinate number is relative to the tile. This means you need to know the tile number and the coordinate number to do anything.
+      <br>
+      The template is aligned from the top left corner. You can auto-fill this position using the "pin" icon next to the coordinate input boxes.
+    </p>
+  </p>
 </p>
 
 <h2>How Versioning Works</h2>
@@ -52,5 +91,9 @@
 
 <h2>FAQ</h2>
 <p>
-  TBA
+  <h3>How do I hide the overlay?</h3>
+  <p><b>A:</b> Turn the userscript off and refresh the page.</p>
+
+  <h3>Why do game notifications appear on top of the overlay?</h3>
+  <p><b>A:</b> Game notifications only appear when they need immediate attention. Therefore, they have priority over the overlay (which typically needs no attention).</p>
 </p>

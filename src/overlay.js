@@ -66,7 +66,7 @@ export class Overlay {
 
     // Stealth Mode checkbox
     containerAutomation.appendChild(this.createLineCheckbox(
-      'Stealth Mode',
+      'Stealth',
       'bm-input-stealth',
       true
     ));
@@ -80,9 +80,9 @@ export class Overlay {
 
     containerAutomation.appendChild(document.createElement('br')); // Line break
 
-    // Possessed Mode
+    // Possessed Mode checkbox
     containerAutomation.appendChild(this.createLineCheckbox(
-      'Possessed Mode',
+      'Possessed',
       'bm-input-possessed',
       true
     ));
@@ -96,13 +96,13 @@ export class Overlay {
 
     containerAutomation.appendChild(document.createElement('br')); // Line break
 
-    // Panic option
+    // Panic mode checkbox
     containerAutomation.appendChild(this.createLineCheckbox(
       'Panic',
       'bm-input-panic'
     ));
 
-    // Adds the help icon for panic
+    // Adds the help icon for panic mode
     containerAutomation.appendChild(this.createQuestionBox(
       'bm-help-panic',
       'Help: Stops placing for a while if it detects a user nearby.',
