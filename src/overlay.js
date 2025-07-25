@@ -132,7 +132,7 @@ export class Overlay {
 
     containerAutomation.appendChild(containerAutomationCoords); // Adds coord container to automation container
 
-    containerAutomation.appendChild(this.createInputFile('bm-input-file', 20)); // Adds the file upload element to the automation container
+    containerAutomation.appendChild(this.createInputFile('bm-input-file')); // Adds the file upload element to the automation container
 
     const containerAutomationButtons = document.createElement('div'); // Button array for bot
     containerAutomationButtons.id = 'bm-contain-buttons';
@@ -262,11 +262,10 @@ export class Overlay {
   /** Creates a custom file upload input.
    * Only the button is displayed, but interacting with it will simulate the file input
    * @param {string} inputId - The file input element ID
-   * @param {number} [maxChars] - (Optional) The maximum number of characters in the displayed file name. Zero by default
    * @returns {HTMLDivElement} HTML Div Element with Button and Input children
    * @since 0.36.1
    */
-  createInputFile(inputId, maxChars=0) {
+  createInputFile(inputId) {
     const container = document.createElement('div');
 
     const input = document.createElement('input');
@@ -283,8 +282,7 @@ export class Overlay {
     // Changes the button text content (and trims the file name)
     input.addEventListener('change', () => {
       if (input.files.length > 0) {
-        const name = input.files[0].name;
-        button.textContent = !!maxChars ? `${name.slice(0, maxChars)}${name.length > maxChars ? `…` : ``}` : input.files[0].name;
+        button.textContent = input.files[0].name;
       } else {
         button.textContent = 'Upload File';
       }
