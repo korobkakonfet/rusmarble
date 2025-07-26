@@ -94,12 +94,20 @@ div#bm-overlay {
 }
 
 /* Tile (x, y) & Pixel (x, y) input fields */
-#bm-contain-coords input[type="text"] {
-  width: 5.5ch;
+#bm-contain-coords input[type="number"] {
+  -moz-appearance: textfield;
+  width: 4.5ch;
   margin-left: 1ch;
   background-color: rgba(0, 0, 0, 0.2);
   padding: 0 0.5ch;
   font-size: small;
+}
+
+/* Removes scroll bar on tile & pixel input fields */
+#bm-contain-coords input[type="number"]::-webkit-outer-spin-button,
+#bm-contain-coords input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 /* Automation button container */

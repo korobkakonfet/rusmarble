@@ -72,9 +72,11 @@ stylesheetLink.onload = "this.onload=null;this.rel='stylesheet'";
 document.head.appendChild(stylesheetLink);
 
 const overlay = new Overlay(name, version); // Constructs a new Overlay object
-overlay.create(); // Deploys the overlay to the page
-
 const apiHandler = new ApiHandler(); // Constructs a new ApiHandler object
+
+overlay.setApiHandler(apiHandler); // Sets the API handler
+
+overlay.create(); // Deploys the overlay to the page
 apiHandler.spontaneousResponseListener(overlay); // Reads spontaneous fetch responces
 
 console.log(`${name} (${version}) userscript has loaded!`);
