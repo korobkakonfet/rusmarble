@@ -58,13 +58,6 @@
     <p>
       In Possessed Mode, Blue Marble will prioritize controling the game over directly interacting with the server. For example, assume a situation where Blue Marble is trying to place a pixel. However, the tile is not loaded. Typically, Blue Marble would make a request to the server to fetch the tile. When <b>Possessed Mode</b> is enabled, Blue Marble will teleport the game to the tile, which causes the game to fetch the tile. The difference lies in <i>who</i> sends the request to the server. When <b>Stealth Mode</b> and <b>Possessed Mode</b> are both enabled, it is harder to detect the userscript since most actions are made through the game, not the userscript.
     </p>
-    <h4>Panic Mode</h4>
-    <a href="" target="_blank"><img alt="Default: Disabled" src="https://img.shields.io/badge/Default-Disabled-red?style=flat"></a>
-    <p>
-      When Panic Mode is enabled, Blue Marble will avoid placing pixels if another user placed there within the last few minutes. Griefers might see resistance as a "challenge" they have to overcome, so Blue Marble will wait for them to get bored and move on before resuming placement.
-      <br>
-      Note: Panic Mode will trigger for any user, including your allies.
-    </p>
   </p>
 
   <h3>Template Settings</h3>

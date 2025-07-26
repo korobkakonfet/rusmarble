@@ -96,21 +96,6 @@ export class Overlay {
 
     containerAutomation.appendChild(document.createElement('br')); // Line break
 
-    // Panic mode checkbox
-    containerAutomation.appendChild(this.createInputCheckbox(
-      'Panic',
-      'bm-input-panic'
-    ));
-
-    // Adds the help icon for panic mode
-    containerAutomation.appendChild(this.createButtonQuestion(
-      'bm-help-panic',
-      'Help: Stops placing for a while if it detects a user nearby.',
-      outputStatusId
-    ));
-
-    containerAutomation.appendChild(document.createElement('br')); // Line break
-
     const containerAutomationCoords = document.createElement('div'); // Coords container
     containerAutomationCoords.id = 'bm-contain-coords';
 
