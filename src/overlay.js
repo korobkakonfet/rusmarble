@@ -124,10 +124,10 @@ export class Overlay {
     containerAutomationCoords.appendChild(buttonCoords); // Adds the coordinate button to the automation container
 
     // Tile (x,y) and Pixel (x,y) input fields
-    containerAutomationCoords.appendChild(this.createInputNumber('bm-input-tx', 'Tl X', '', '4', '0', '2047', '1'));
-    containerAutomationCoords.appendChild(this.createInputNumber('bm-input-ty', 'Tl Y', '', '4', '0', '2047', '1'));
-    containerAutomationCoords.appendChild(this.createInputNumber('bm-input-px', 'Px X', '', '3', '0', '999', '1'));
-    containerAutomationCoords.appendChild(this.createInputNumber('bm-input-py', 'Px Y', '', '3', '0', '999', '1'));
+    containerAutomationCoords.appendChild(this.createInputNumber('bm-input-tx', 'Tl X', '', '0', '2047', '1'));
+    containerAutomationCoords.appendChild(this.createInputNumber('bm-input-ty', 'Tl Y', '', '0', '2047', '1'));
+    containerAutomationCoords.appendChild(this.createInputNumber('bm-input-px', 'Px X', '', '0', '999', '1'));
+    containerAutomationCoords.appendChild(this.createInputNumber('bm-input-py', 'Px Y', '', '0', '999', '1'));
 
     containerAutomation.appendChild(containerAutomationCoords); // Adds coord container to automation container
 
