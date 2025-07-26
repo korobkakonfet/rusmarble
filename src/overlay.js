@@ -116,16 +116,16 @@ export class Overlay {
         this.handleDisplayError('Coordinates are malformed! Did you try clicking on the canvas first?');
         return;
       }
-      this.updateInnerHTML('bm-input-tx', coords?.[0] || '000');
-      this.updateInnerHTML('bm-input-ty', coords?.[1] || '000');
+      this.updateInnerHTML('bm-input-tx', coords?.[0] || '0000');
+      this.updateInnerHTML('bm-input-ty', coords?.[1] || '0000');
       this.updateInnerHTML('bm-input-px', coords?.[2] || '000');
       this.updateInnerHTML('bm-input-py', coords?.[3] || '000');
     }
     containerAutomationCoords.appendChild(buttonCoords); // Adds the coordinate button to the automation container
 
     // Tile (x,y) and Pixel (x,y) input fields
-    containerAutomationCoords.appendChild(this.createInputNumber('bm-input-tx', 'Tl X', '', '3', '0', '999', '1'));
-    containerAutomationCoords.appendChild(this.createInputNumber('bm-input-ty', 'Tl Y', '', '3', '0', '999', '1'));
+    containerAutomationCoords.appendChild(this.createInputNumber('bm-input-tx', 'Tl X', '', '4', '0', '2047', '1'));
+    containerAutomationCoords.appendChild(this.createInputNumber('bm-input-ty', 'Tl Y', '', '4', '0', '2047', '1'));
     containerAutomationCoords.appendChild(this.createInputNumber('bm-input-px', 'Px X', '', '3', '0', '999', '1'));
     containerAutomationCoords.appendChild(this.createInputNumber('bm-input-py', 'Px Y', '', '3', '0', '999', '1'));
 
@@ -243,7 +243,6 @@ export class Overlay {
    * @param {string} inputId - The ID for the number input
    * @param {string} [placeholder] - (Optional) The placeholder text of the input
    * @param {string} [text] - (Optional) The text content of the input
-   * @param {string} [maxLength] - (Optional) The maximum character amount of the input
    * @param {string} [numMin] - (Optional) The minimum possible number the user can input
    * @param {string} [numMax] - (Optional) The maximum possible number the user can input
    * @param {string} [numStep] - (Optional) The increment that numbers are considered valid inputs. E.g. a step of "1" will only allow integers
@@ -251,8 +250,8 @@ export class Overlay {
    * @returns {HTMLInputElement} HTML Input Element
    * @since 0.41.9
    */
-  createInputNumber(inputId, placeholder='', text='', maxLength='', numMin='', numMax='', numStep='', isReadOnly=false) {
-    const input = this.createInputText(inputId, placeholder, text, maxLength, isReadOnly); // A shortcut :P
+  createInputNumber(inputId, placeholder='', text='', numMin='', numMax='', numStep='', isReadOnly=false) {
+    const input = this.createInputText(inputId, placeholder, text, '', isReadOnly); // A shortcut :P
     input.type = 'number';
     input.min = numMin;
     input.max = numMax;

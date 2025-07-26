@@ -5,9 +5,11 @@
 export class ApiHandler {
 
   /** Constructor for ApiHandler class
+   * @param {CoordsHandler} coordsHandler - The CoordsHandler instance
    * @since 0.11.34
    */
-  constructor() {
+  constructor(coordsHandler) {
+    this.coordsHandler = coordsHandler;
     this.disableAll = false; // Should the entire userscript be disabled?
     this.coordsTilePixel = []; // Contains the last detected tile/pixel coordinate pair requested
   }
@@ -50,6 +52,30 @@ export class ApiHandler {
           const payloadExtractor = new URLSearchParams(data.endpoint.split('?')[1]); // Declares a new payload deconstructor and passes in the fetch request payload
           const coordsPixel = [payloadExtractor.get('x'), payloadExtractor.get('y')]; // Retrieves the deconstructed pixel coords from the payload
           this.coordsTilePixel = [...coordsTile, ...coordsPixel]; // Combines the two arrays such that [x, y, x, y]
+          const displayTP = this.coordsHandler.serverTPtoDisplayTP(coordsTile, coordsPixel);
+          
+          const spanElements = document.querySelectorAll('span'); // Retrieves all span elements
+
+          // For every span element, find the one we want (pixel numbers when canvas clicked)
+          for (const element of spanElements) {
+            if (element.textContent.trim().includes(`${displayTP[0]}, ${displayTP[1]}`)) {
+
+              let displayCoords = document.querySelector('#bm-display-coords'); // Find the additional pixel coords span
+
+              const text = `(Tl X: ${coordsTile[0]}, Tl Y: ${coordsTile[1]}, Px X: ${coordsPixel[0]}, Px Y: ${coordsPixel[1]})`;
+              
+              // If we could not find the addition coord span, we make it then update the textContent with the new coords
+              if (!displayCoords) {
+                displayCoords = document.createElement('span');
+                displayCoords.id = 'bm-display-coords';
+                displayCoords.textContent = text;
+                displayCoords.style = 'margin-left: calc(var(--spacing)*3);';
+                element.parentNode.parentNode.parentNode.insertAdjacentElement('afterend', displayCoords);
+              } else {
+                displayCoords.textContent = text;
+              }
+            }
+          }
           break;
 
         case 'robots': // Request to retrieve what script types are allowed
