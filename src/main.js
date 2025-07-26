@@ -1,4 +1,5 @@
 import { Overlay } from './overlay.js';
+import { Observers } from './observers.js';
 import { CoordsHandler } from './coordsHandler.js';
 import { ApiHandler } from './apiHandler.js';
 
@@ -72,6 +73,7 @@ stylesheetLink.as = 'style';
 stylesheetLink.onload = "this.onload=null;this.rel='stylesheet'";
 document.head.appendChild(stylesheetLink);
 
+const observers = new Observers(); // Constructs a new Observers object
 const overlay = new Overlay(name, version); // Constructs a new Overlay object
 const coordsHandler = new CoordsHandler(); // Constructs a new CoordsHandler object
 const apiHandler = new ApiHandler(coordsHandler); // Constructs a new ApiHandler object
