@@ -73,11 +73,11 @@ div#bm-overlay {
 /* Question Mark button */
 .bm-help {
   border: white 1px solid;
-  height: 1.25em;
-  width: 1.25em;
+  height: 1.5em;
+  width: 1.5em;
   margin-top: 2px;
   text-align: center;
-  line-height: 1.25em;
+  line-height: 1em;
   padding: 0 !important; /* Overrides the padding in "#bm-overlay button" */
 }
 

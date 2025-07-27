@@ -19,6 +19,8 @@ export default class ApiHandler {
 
   /** Determines if the spontaneously recieved response is something we want.
    * Otherwise, we can ignore it.
+   * Note: Due to aggressive compression, make your calls like `data['jsonData']['name']` instead of `data.jsonData.name`
+   * 
    * @param {Overlay} overlay - The Overlay class instance
    * @since 0.11.1
   */
@@ -28,13 +30,14 @@ export default class ApiHandler {
     window.addEventListener('message', (event) => {
 
       const data = event.data; // The data of the message
+      const dataJSON = data['jsonData']; // The JSON response, if any
 
       // Kills itself if the message was not intended for Blue Marble
-      if (!(data && data.source === 'blue-marble')) {return;}
+      if (!(data && data['source'] === 'blue-marble')) {return;}
 
       // Trims endpoint to the second to last non-number, non-null directoy.
       // E.g. "wplace.live/api/pixel/0/0?payload" -> "pixel"
-      const endpointText = data.endpoint.split('?')[0].split('/').filter(s => s && isNaN(Number(s))).pop();
+      const endpointText = data['endpoint'].split('?')[0].split('/').filter(s => s && isNaN(Number(s))).pop();
 
       console.log(`Recieved message about "${endpointText}"`);
 
@@ -45,23 +48,27 @@ export default class ApiHandler {
         case 'me': // Request to retrieve user data
 
           // If the game can not retrieve the userdata...
-          if (data.jsonData?.status && data.jsonData?.status?.toString()[0] != '2') {
+          if (dataJSON['status'] && dataJSON['status']?.toString()[0] != '2') {
             // The server is probably down (NOT a 2xx status)
-
+            
             overlay.handleDisplayError(`The game is down!\nCould not fetch userdata.`);
             return; // Kills itself before attempting to display null userdata
           }
 
-          const nextLevelPixels = Math.ceil(Math.pow(Math.floor(data.jsonData?.level) * Math.pow(30, 0.65), (1/0.65)) - data.jsonData?.pixelsPainted); // Calculates pixels to the next level
+          const nextLevelPixels = Math.ceil(Math.pow(Math.floor(dataJSON['level']) * Math.pow(30, 0.65), (1/0.65)) - dataJSON['pixelsPainted']); // Calculates pixels to the next level
+          
+          const clog = console.log;
+          clog(dataJSON);
+          clog(dataJSON?.droplets);
 
-          overlay.updateInnerHTML('bm-user-name', `Username: <b>${Utils.escapeHTML(data.jsonData?.name)}</b>`); // Updates the text content of the username field
-          overlay.updateInnerHTML('bm-user-droplets', `Droplets: <b>${new Intl.NumberFormat().format(data.jsonData?.droplets)}</b>`); // Updates the text content of the droplets field
+          overlay.updateInnerHTML('bm-user-name', `Username: <b>${Utils.escapeHTML(dataJSON['name'])}</b>`); // Updates the text content of the username field
+          overlay.updateInnerHTML('bm-user-droplets', `Droplets: <b>${new Intl.NumberFormat().format(dataJSON['droplets'])}</b>`); // Updates the text content of the droplets field
           overlay.updateInnerHTML('bm-user-nextlevel', `Next level in <b>${new Intl.NumberFormat().format(nextLevelPixels)}</b> pixel${nextLevelPixels == 1 ? '' : 's'}`); // Updates the text content of the next level field
           break;
 
         case 'pixel': // Request to retrieve pixel data
-          const coordsTile = data.endpoint.split('?')[0].split('/').filter(s => s && !isNaN(Number(s))); // Retrieves the tile coords as [x, y]
-          const payloadExtractor = new URLSearchParams(data.endpoint.split('?')[1]); // Declares a new payload deconstructor and passes in the fetch request payload
+          const coordsTile = data['endpoint'].split('?')[0].split('/').filter(s => s && !isNaN(Number(s))); // Retrieves the tile coords as [x, y]
+          const payloadExtractor = new URLSearchParams(data['endpoint'].split('?')[1]); // Declares a new payload deconstructor and passes in the fetch request payload
           const coordsPixel = [payloadExtractor.get('x'), payloadExtractor.get('y')]; // Retrieves the deconstructed pixel coords from the payload
           this.coordsTilePixel = [...coordsTile, ...coordsPixel]; // Combines the two arrays such that [x, y, x, y]
           const displayTP = this.coordsHandler.serverTPtoDisplayTP(coordsTile, coordsPixel);
@@ -91,7 +98,7 @@ export default class ApiHandler {
           break;
 
         case 'robots': // Request to retrieve what script types are allowed
-          this.disableAll = data.jsonData?.userscript?.toString().toLowerCase() == 'false'; // Disables Blue Marble if site owner wants userscripts disabled
+          this.disableAll = dataJSON['userscript']?.toString().toLowerCase() == 'false'; // Disables Blue Marble if site owner wants userscripts disabled
           break;
 
       }

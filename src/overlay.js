@@ -591,7 +591,8 @@ export default class Overlay {
    * @since 0.41.6
    */
   handleDisplayError(text) {
-    console.error(`${this.name}: ${text}`); // Outputs something like "ScriptName: text" as an error to the console
+    const consoleError = console.error; // Idk anymore...
+    consoleError(`${this.name}: ${text}`); // Outputs something like "ScriptName: text" as an error to the console
     this.updateInnerHTML(this.outputStatusId, 'Error: ' + text, true);
   }
 }
