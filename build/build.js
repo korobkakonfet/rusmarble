@@ -4,7 +4,6 @@
  * 2. Bundle the JS files into one file (esbuild)
  * 3. Bundle the CSS files into one file (esbuild)
  * 4. Compress & obfuscate the bundled JS file (terner)
- * 5. Create a sourcemap
  * @since 0.0.6
 */
 
@@ -55,23 +54,16 @@ const resultEsbuild = await esbuild.build({
   platform: 'browser', // The platform the bundled code will be operating on
   legalComments: 'inline', // What level of legal comments are preserved? (Hard: none, Soft: inline)
   minify: false, // Should the code be minified?
-  write: false, // Should we write the outfile?
-  sourcemap: true,
+  write: false, // Should we write the outfile to the disk?
 }).catch(() => process.exit(1));
 
 // Retrieves the JS file and map file
 const resultEsbuildJS = resultEsbuild.outputFiles.find(file => file.path.endsWith('.js'));
-const resultEsbuildMap = resultEsbuild.outputFiles.find(file => file.path.endsWith('.map'));
 
 // Obfuscates the JS file
 let resultTerser = await terser.minify(resultEsbuildJS.text, {
-  sourceMap: {
-    //content: resultEsbuildMap.text, // The esbundle sourcemap
-    filename: 'BlueMarble.user.js', // The file to make a sourcemap for
-    url: ' ' // (This value is intentional) The sourcemap url to point to.
-  },
   mangle: {
-    toplevel: true, // Obfuscate top-level class/function names
+    //toplevel: true, // Obfuscate top-level class/function names
     keep_classnames: false, // Should class names be preserved?
     keep_fnames: false, // Should function names be preserved?
     reserved: [], // List of keywords to preserve
@@ -83,11 +75,14 @@ let resultTerser = await terser.minify(resultEsbuildJS.text, {
   },
   format: {
     comments: 'some' // Save legal comments
+  },
+  compress: {
+    dead_code: isGitHub, // Should unreachable code be removed?
+    drop_console: isGitHub, // Should console code be removed?
+    drop_debugger: isGitHub, // SHould debugger code be removed?
+    passes: 2 // How many times terser will compress the code
   }
 });
-
-// Creates the sourcemap file
-fs.writeFileSync('dist/BlueMarble.user.js.map', resultTerser.map.replace(`"sources":["0"]`, `"sources":["BlueMarble.user.js"]`), 'utf8');
 
 // Adds the banner
 fs.writeFileSync('dist/BlueMarble.user.js', metaContent + resultTerser.code, 'utf8');

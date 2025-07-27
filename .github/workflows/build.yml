@@ -7,27 +7,6 @@ on:
 
 jobs:
 
-  # Updates the Auto branch to match Main
-  update-auto:
-    permissions:
-      contents: write
-
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Update Auto To Main
-        run: |
-          git fetch origin
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
-          git checkout auto || git checkout -b auto
-          git reset --hard origin/main
-          git push --force origin auto
-
   # Builds the code
   # This is bundling, obfuscating, version bumping, etc.
   build:
@@ -36,17 +15,9 @@ jobs:
     
     runs-on: ubuntu-latest
 
-    needs: [update-auto] # Needs the update-auto job to finish first
-
-    outputs:
-      msg: ${{ steps.get-commit-message.outputs.MSG }}
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          ref: auto # Checks out the auto branch
-          fetch-depth: 0
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -85,63 +56,14 @@ jobs:
         id: get-commit-message
         run: echo "MSG=$(git log -1 --pretty=%B)" >> $GITHUB_OUTPUT
 
-        # This should happen on 'auto' branch
       - name: Commit and push built script
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
-          git checkout auto || git checkout -b auto
           git add dist/*
           git add src/BlueMarble.meta.js
           git add package.json
           git add docs/README.md
           git commit -m "Bumped version; ${{ steps.get-commit-message.outputs.MSG }}" || echo "No changes to commit"
           git push
-
-  update-map:
-
-    permissions:
-      contents: write
-    
-    runs-on: ubuntu-latest
-
-    needs: [update-auto, build] # Needs the update-auto and build jobs to finish first
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: auto # Checks out the auto branch
-          fetch-depth: 0
-
-      - name: Get SHA of origin/auto
-        run: |
-          git fetch origin auto
-          AUTO_SHA=$(git rev-parse origin/auto)
-          echo "Auto SHA: $AUTO_SHA"
-          echo "AUTO_SHA=$AUTO_SHA" >> $GITHUB_ENV
-
-      - name: Update Source Map URL
-        run: |
-          sed -i "s|sourceMappingURL=.*|sourceMappingURL=https://raw.githubusercontent.com/${{ github.repository }}/${AUTO_SHA}/dist/BlueMarble.user.js.map|" dist/BlueMarble.user.js
-          echo "Updated sourceMappingURL:"
-          grep 'sourceMappingURL=' dist/BlueMarble.user.js
-
-      - name: Commit New Source Map URL
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
-          git add dist/BlueMarble.user.js
-          git commit -m "Merge version; ${{ needs.build.outputs.MSG }}" || echo "No changes to commit"
-          git push
-
-      - name: Merge Auto -> Main
-        run: |
-          git fetch origin
-          git checkout origin/main -B main
-          git merge --squash origin/auto
-          git commit -m "Release version; ${{ needs.build.outputs.MSG }}" || echo "No changes to commit"
-          git push origin main
-          

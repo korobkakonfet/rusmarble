@@ -57,10 +57,6 @@ export default class ApiHandler {
 
           const nextLevelPixels = Math.ceil(Math.pow(Math.floor(dataJSON['level']) * Math.pow(30, 0.65), (1/0.65)) - dataJSON['pixelsPainted']); // Calculates pixels to the next level
           
-          const clog = console.log;
-          clog(dataJSON);
-          clog(dataJSON?.droplets);
-
           overlay.updateInnerHTML('bm-user-name', `Username: <b>${Utils.escapeHTML(dataJSON['name'])}</b>`); // Updates the text content of the username field
           overlay.updateInnerHTML('bm-user-droplets', `Droplets: <b>${new Intl.NumberFormat().format(dataJSON['droplets'])}</b>`); // Updates the text content of the droplets field
           overlay.updateInnerHTML('bm-user-nextlevel', `Next level in <b>${new Intl.NumberFormat().format(nextLevelPixels)}</b> pixel${nextLevelPixels == 1 ? '' : 's'}`); // Updates the text content of the next level field
