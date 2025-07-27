@@ -80,7 +80,13 @@ const apiHandler = new ApiHandler(coordsHandler); // Constructs a new ApiHandler
 
 overlay.setApiHandler(apiHandler); // Sets the API handler
 
-overlay.create(); // Deploys the overlay to the page
+// Deploys the overlay to the page
+overlay.addDiv({'id': 'bm-overlay', 'style': 'top: 10px; right: 75px;'})
+  .addDiv({'id': 'bm-contain-header'})
+    .addDiv({'id': 'bm-bar-drag'}).buildElement()
+    .addImg({'alt': 'Blue Marble Icon', 'src': 'https://raw.githubusercontent.com/SwingTheVine/Wplace-BlueMarble/main/src/assets/Favicon.png'}).buildElement()
+.buildOverlay(document.body);
+
 apiHandler.spontaneousResponseListener(overlay); // Reads spontaneous fetch responces
 
 console.log(`${name} (${version}) userscript has loaded!`);

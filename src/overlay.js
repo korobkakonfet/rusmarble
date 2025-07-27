@@ -13,8 +13,14 @@ export class Overlay {
   constructor(name, version) {
     this.name = name; // Name of userscript
     this.version = version; // Version of userscript
+
     this.apiHandler = null; // The API handler instance. Later populated when setApiHandler is called
+    
     this.outputStatusId = 'bm-output-status'; // ID for status element
+
+    this.overlay = null; // The overlay root DOM HTMLElement
+    this.currentParent = null; // The current parent HTMLElement in the overlay
+    this.parentStack = []; // Tracks the parent elements BEFORE the currentParent so we can nest elements
   }
 
   /** Populates the apiHandler variable with the apiHandler class.
@@ -22,6 +28,119 @@ export class Overlay {
    * @since 0.41.4
    */
   setApiHandler(apiHandler) {this.apiHandler = apiHandler;}
+
+  /** Creates an element.
+   * For internal use of the {@link Overlay} class
+   * @param {string} tag - The tag name as a string.
+   * @param {Object.<string, any>} [properties={}] - The DOM properties of the element.
+   * @returns {HTMLElement} HTML Element
+   * @since 0.43.2
+   */
+  createElement(tag, properties = {}, additionalProperties={}) {
+
+    const element = document.createElement(tag); // Creates the element
+
+    // If this is the first element made...
+    if (!this.overlay) {
+      this.overlay = element; // Declare it the highest overlay element
+      this.currentParent = element;
+    } else {
+      this.currentParent.appendChild(element); // ...else delcare it the child of the last element
+      this.parentStack.push(this.currentParent);
+      this.currentParent = element;
+    }
+
+    // For every passed in property (shared by all like-elements), apply the it to the element
+    for (const [property, value] of Object.entries(properties)) {
+      element[property] = value;
+    }
+
+    // For every passed in additional property, apply the it to the element
+    for (const [property, value] of Object.entries(additionalProperties)) {
+      element[property] = value;
+    }
+    
+    return element;
+  }
+
+  /** Finishes building an element.
+   * Call this after you are finished adding children.
+   * If the element will have no children, call it anyways.
+   * @returns {Overlay} Overlay class instance (this)
+   * @since 0.43.2
+   * @example
+   * overlay
+   *   .addDiv()
+   *     .addHeader1().buildElement() // Breaks out of the <h1>
+   *     .addParagraph().buildElement() // Breaks out of the <p>
+   *   .buildElement() // Breaks out of the <div>
+   *   .addHr() // Since there are no more elements, calling buildElement() is optional
+   * .buildOverlay();
+   */
+  buildElement() {
+    if (this.parentStack.length > 0) {
+      this.currentParent = this.parentStack.pop();
+    }
+    return this;
+  }
+
+  /** Finishes building the overlay and displays it.
+   * Call this when you are done chaining methods.
+   * @param {HTMLElement} parent - The parent HTMLElement this overlay should be appended to as a child.
+   * @since 0.43.2
+   * @example
+   * overlay
+   *   .addDiv()
+   *     .addParagraph().buildElement()
+   *   .buildElement()
+   * .buildOverlay(document.body); // Adds DOM structure to document body
+   * // <div><p></p></div>
+   */
+  buildOverlay(parent) {
+    parent.appendChild(this.overlay);
+  }
+
+  /** Adds a `<div>` to the overlay.
+   * This `<div>` element will have properties shared between all `<div>` elements in the overlay.
+   * You can override the shared properties by using a callback.
+   * @param {Object.<string, any>} [additionalProperties={}] - The DOM properties of the `<div>` that are NOT shared between all overlay `<div>` elements. These should be camelCase.
+   * @param {function(HTMLElement):void} [callback=()=>{}] - Additional modification to the div.
+   * @returns {Overlay} Overlay class instance (this)
+   * @since 0.43.2
+   * @example
+   * // Assume all <div> elements have a shared class (e.g. {'className': 'bar'})
+   * overlay.addDiv({'id': 'foo'}).buildOverlay();
+   * // <div id="foo" class="bar"></div>
+   */
+  addDiv(additionalProperties = {}, callback = () => {}) {
+
+    const properties = {}; // Shared <div> DOM properties
+
+    const div = this.createElement('div', properties, additionalProperties); // Creates the div element
+    callback(div); // Runs (optionally) passed in script
+    return this;
+  }
+
+  /** Adds a `<img>` to the overlay.
+   * This `<img>` element will have properties shared between all `<img>` elements in the overlay.
+   * You can override the shared properties by using a callback.
+   * @param {Object.<string, any>} [additionalProperties={}] - The DOM properties of the `<img>` that are NOT shared between all overlay `<img>` elements. These should be camelCase.
+   * @param {function(HTMLElement):void} [callback=()=>{}] - Additional modification to the img.
+   * @returns {Overlay} Overlay class instance (this)
+   * @since 0.43.2
+   * @example
+   * // Assume all <img> elements have a shared class (e.g. {'className': 'bar'})
+   * overlay.addimg({'id': 'foo'}).buildOverlay();
+   * // <img id="foo" class="bar">
+   */
+  addImg(additionalProperties = {}, callback = () => {}) {
+
+    const properties = {}; // Shared <div> DOM properties
+
+    const img = this.createElement('img', properties, additionalProperties); // Creates the div element
+    callback(img); // Runs (optionally) passed in script
+    return this;
+  }
 
   /** Creates and deploys the overlay element
    * @since 0.0.2
