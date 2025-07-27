@@ -2,7 +2,10 @@
  * Note: Fetch spying is done in main.js, not here.
  * @since 0.11.1
  */
-export class ApiHandler {
+
+import Utils from "./utils";
+
+export default class ApiHandler {
 
   /** Constructor for ApiHandler class
    * @param {CoordsHandler} coordsHandler - The CoordsHandler instance
@@ -51,7 +54,7 @@ export class ApiHandler {
 
           const nextLevelPixels = Math.ceil(Math.pow(Math.floor(data.jsonData?.level) * Math.pow(30, 0.65), (1/0.65)) - data.jsonData?.pixelsPainted); // Calculates pixels to the next level
 
-          overlay.updateInnerHTML('bm-user-name', `Username: <b>${data.jsonData?.name}</b>`); // Updates the text content of the username field
+          overlay.updateInnerHTML('bm-user-name', `Username: <b>${Utils.escapeHTML(data.jsonData?.name)}</b>`); // Updates the text content of the username field
           overlay.updateInnerHTML('bm-user-droplets', `Droplets: <b>${new Intl.NumberFormat().format(data.jsonData?.droplets)}</b>`); // Updates the text content of the droplets field
           overlay.updateInnerHTML('bm-user-nextlevel', `Next level in <b>${new Intl.NumberFormat().format(nextLevelPixels)}</b> pixel${nextLevelPixels == 1 ? '' : 's'}`); // Updates the text content of the next level field
           break;

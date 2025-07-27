@@ -1,7 +1,7 @@
 /** Handles translation of coordinate systems.
  * @since 0.42.4
  */
-export class CoordsHandler {
+export default class CoordsHandler {
 
   /** Converts the server tile-pixel coordinate system to the displayed tile-pixel coordinate system.
    * @param {string[]} tile - The tile to convert (as an array like ["12", "124"])

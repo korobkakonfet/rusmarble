@@ -17,7 +17,7 @@
  *   </div>
  * </body>
 */
-export class Overlay {
+export default class Overlay {
 
   /** Constructor for the Overlay class.
    * @param {string} name - The name of the userscript

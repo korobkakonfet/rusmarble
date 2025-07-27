@@ -1,7 +1,7 @@
-import { Overlay } from './overlay.js';
-import { Observers } from './observers.js';
-import { CoordsHandler } from './coordsHandler.js';
-import { ApiHandler } from './apiHandler.js';
+import Overlay from './overlay.js';
+import Observers from './observers.js';
+import CoordsHandler from './coordsHandler.js';
+import ApiHandler from './apiHandler.js';
 
 const name = GM_info.script.name.toString();
 const version = GM_info.script.version.toString();

@@ -2,7 +2,7 @@
  * This is not an object, but rather a "collection" of functions (in a class).
  * @since 0.43.2
  */
-export class Observers {
+export default class Observers {
 
   /** The constructor for the observer class
    * @since 0.43.2
@@ -29,7 +29,7 @@ export class Observers {
           if (!(node instanceof HTMLElement)) {continue;} // Does not track non-HTMLElements
           
           if (node.matches?.(this.targetDisplayCoords)) {
-            
+
           }
         }
       }
