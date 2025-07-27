@@ -88,7 +88,7 @@ overlay.setApiHandler(apiHandler); // Sets the API handler
 overlay.addDiv({'id': 'bm-overlay', 'style': 'top: 10px; right: 75px;'})
   .addDiv({'id': 'bm-contain-header'})
     .addDiv({'id': 'bm-bar-drag'}).buildElement()
-    .addImg({'alt': 'Blue Marble Icon', 'src': 'https://raw.githubusercontent.com/SwingTheVine/Wplace-BlueMarble/main/src/assets/Favicon.png'}).buildElement()
+    .addImg({'alt': 'Blue Marble Icon', 'src': 'https://raw.githubusercontent.com/SwingTheVine/Wplace-BlueMarble/main/dist/assets/Favicon.png'}).buildElement()
     .addHeader(1, {'textContent': name}).buildElement()
   .buildElement()
 
