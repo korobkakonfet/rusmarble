@@ -3,7 +3,7 @@
  * @since 0.11.1
  */
 
-import Utils from "./utils";
+import Utils from "./Utils";
 
 export default class ApiManager {
 
