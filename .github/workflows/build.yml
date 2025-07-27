@@ -115,16 +115,16 @@ jobs:
           ref: auto # Checks out the auto branch
           fetch-depth: 0
 
-      - name: Get SHA of origin/main
+      - name: Get SHA of origin/auto
         run: |
-          git fetch origin main
-          MAIN_SHA=$(git rev-parse origin/main)
-          echo "Main SHA: $MAIN_SHA"
-          echo "MAIN_SHA=$MAIN_SHA" >> $GITHUB_ENV
+          git fetch origin auto
+          AUTO_SHA=$(git rev-parse origin/auto)
+          echo "Auto SHA: $AUTO_SHA"
+          echo "AUTO_SHA=$AUTO_SHA" >> $GITHUB_ENV
 
       - name: Update Source Map URL
         run: |
-          sed -i "s|sourceMappingURL=.*|sourceMappingURL=https://raw.githubusercontent.com/${{ github.repository }}/${MAIN_SHA}/dist/app.js.map|" dist/app.js
+          sed -i "s|sourceMappingURL=.*|sourceMappingURL=https://raw.githubusercontent.com/${{ github.repository }}/${AUTO_SHA}/dist/BlueMarble.user.js.map|" dist/BlueMarble.user.js
 
       - name: Commit New Source Map URL
         run: |
