@@ -134,5 +134,6 @@ jobs:
           git fetch origin
           git checkout main || git checkout -b main
           git merge --squash origin/auto
+          git add dist/BlueMarble.user.js
           git commit -m "Release version; ${{ needs.build.outputs.MSG }}" || echo "No changes to commit"
           
