@@ -81,12 +81,6 @@ const resultTerser = await terser.minify(resultEsbuildJS.text, {
       reserved: [] // What properties should be preserved?
     },
   },
-  compress: {
-    dead_code: isGitHub, // Should unreachable code be removed?
-    drop_console: isGitHub, // Should console code be removed?
-    drop_debugger: isGitHub, // Should debugger code be removed?
-    passes: 2 // Number of times the compression algorithm runs
-  },
   format: {
     comments: 'some' // Save legal comments
   }
