@@ -125,15 +125,23 @@ jobs:
       - name: Update Source Map URL
         run: |
           sed -i "s|sourceMappingURL=.*|sourceMappingURL=https://raw.githubusercontent.com/${{ github.repository }}/${AUTO_SHA}/dist/BlueMarble.user.js.map|" dist/BlueMarble.user.js
+          echo "Updated sourceMappingURL:"
+          grep 'sourceMappingURL=' dist/BlueMarble.user.js
 
       - name: Commit New Source Map URL
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
-          git fetch origin
-          git checkout main || git checkout -b main
-          git merge --squash origin/auto
           git add dist/BlueMarble.user.js
+          git commit -m "Merge version; ${{ needs.build.outputs.MSG }}" || echo "No changes to commit"
+          git push
+
+      - name: Merge Auto -> Main
+        run: |
+          git fetch origin
+          git checkout origin/main -B main
+          git merge --squash origin/auto
           git commit -m "Release version; ${{ needs.build.outputs.MSG }}" || echo "No changes to commit"
+          git push origin main
           
