@@ -17,7 +17,7 @@ const require = createRequire(import.meta.url);
 // CommonJS imports (require)
 const terser = require('terser');
 
-const isGitHub = !!process.env.GITHUB_ACTIONS; // Is this running in a GitHub Action Workflow?
+const isGitHub = !!process.env?.GITHUB_ACTIONS; // Is this running in a GitHub Action Workflow?
 
 // Tries to bump the version
 try {

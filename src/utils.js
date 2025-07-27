@@ -24,4 +24,16 @@ export default class Utils {
     div.textContent = text; // Puts the text in a PLAIN-TEXT property
     return div.innerHTML; // Returns the HTML property of the div
   }
+
+  /** Converts the server tile-pixel coordinate system to the displayed tile-pixel coordinate system.
+   * @param {string[]} tile - The tile to convert (as an array like ["12", "124"])
+   * @param {string[]} pixel - The pixel to convert (as an array like ["12", "124"])
+   * @returns {number[]} [tile, pixel]
+   * @since 0.42.4
+   * @example
+   * console.log(serverTPtoDisplayTP(['12', '123'], ['34', '567'])); // [34, 3567]
+   */
+  static serverTPtoDisplayTP(tile, pixel) {
+    return [((parseInt(tile[0]) % 4) * 1000) + parseInt(pixel[0]), ((parseInt(tile[1]) % 4) * 1000) + parseInt(pixel[1])];
+  }
 }

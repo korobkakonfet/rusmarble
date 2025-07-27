@@ -29,7 +29,7 @@ export default class Overlay {
     this.name = name; // Name of userscript
     this.version = version; // Version of userscript
 
-    this.apiHandler = null; // The API handler instance. Later populated when setApiHandler is called
+    this.apiManager = null; // The API manager instance. Later populated when setApiManager is called
     
     this.outputStatusId = 'bm-output-status'; // ID for status element
 
@@ -38,11 +38,11 @@ export default class Overlay {
     this.parentStack = []; // Tracks the parent elements BEFORE the currentParent so we can nest elements
   }
 
-  /** Populates the apiHandler variable with the apiHandler class.
-   * @param {apiHandler} apiHandler - The apiHandler class instance
+  /** Populates the apiManager variable with the apiManager class.
+   * @param {apiManager} apiManager - The apiManager class instance
    * @since 0.41.4
    */
-  setApiHandler(apiHandler) {this.apiHandler = apiHandler;}
+  setApiManager(apiManager) {this.apiManager = apiManager;}
 
   /** Creates an element.
    * For **internal use** of the {@link Overlay} class.

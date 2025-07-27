@@ -1,7 +1,6 @@
 import Overlay from './overlay.js';
 import Observers from './observers.js';
-import CoordsHandler from './coordsHandler.js';
-import ApiHandler from './apiHandler.js';
+import ApiManager from './apiManager.js';
 
 const name = GM_info.script.name.toString();
 const version = GM_info.script.version.toString();
@@ -78,10 +77,9 @@ document.head.appendChild(stylesheetLink);
 
 const observers = new Observers(); // Constructs a new Observers object
 const overlay = new Overlay(name, version); // Constructs a new Overlay object
-const coordsHandler = new CoordsHandler(); // Constructs a new CoordsHandler object
-const apiHandler = new ApiHandler(coordsHandler); // Constructs a new ApiHandler object
+const apiManager = new ApiManager(); // Constructs a new ApiManager object
 
-overlay.setApiHandler(apiHandler); // Sets the API handler
+overlay.setApiManager(apiManager); // Sets the API manager
 
 // Deploys the overlay to the page
 // Parent/child relationships in the DOM structure below are indicated by indentation
@@ -113,7 +111,7 @@ overlay.addDiv({'id': 'bm-overlay', 'style': 'top: 10px; right: 75px;'})
       .addButton({'id': 'bm-button-coords', 'className': 'bm-help', 'style': 'margin-top: 0;', 'innerHTML': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 6"><circle cx="2" cy="2" r="2"></circle><path d="M2 6 L3.7 3 L0.3 3 Z"></path><circle cx="2" cy="2" r="0.7" fill="white"></circle></svg></svg>'},
         (instance, button) => {
           button.onclick = () => {
-            const coords = instance.apiHandler?.coordsTilePixel; // Retrieves the coords from the API handler
+            const coords = instance.apiManager?.coordsTilePixel; // Retrieves the coords from the API manager
             if (!coords?.[0]) {
               instance.handleDisplayError('Coordinates are malformed! Did you try clicking on the canvas first?');
               return;
@@ -130,9 +128,20 @@ overlay.addDiv({'id': 'bm-overlay', 'style': 'top: 10px; right: 75px;'})
       .addInput({'type': 'number', 'id': 'bm-input-px', 'placeholder': 'Px X', 'min': 0, 'max': 2047, 'step': 1}).buildElement()
       .addInput({'type': 'number', 'id': 'bm-input-py', 'placeholder': 'Px Y', 'min': 0, 'max': 2047, 'step': 1}).buildElement()
     .buildElement()
-    .addInputFile({'id': 'bm-input-file-template', 'textContent': 'Upload Template'}).buildElement()
+    .addInputFile({'id': 'bm-input-file-template', 'textContent': 'Upload Template', 'accept': 'image/png, image/jpeg, image/webp, image/bmp, image/gif'}).buildElement()
     .addDiv({'id': 'bm-contain-buttons'})
-      .addButton({'id': 'bm-button-enable', 'textContent': 'Enable'}).buildElement()
+      .addButton({'id': 'bm-button-enable', 'textContent': 'Enable'}, (instance, button) => {
+        button.onclick = () => {
+          const input = document.querySelector('#bm-input-file-template');
+
+          // Kills itself if there is no file
+          if (!input?.files[0]) {instance.handleDisplayError(`No file selected!`); return;}
+
+          const url = URL.createObjectURL(input.files[0]); // Creates a blob URL
+          window.open(url, '_blank'); // Opens a new tab with blob
+          setTimeout(() => URL.revokeObjectURL(url), 10000); // Destroys the blob 10 seconds later
+        }
+      }).buildElement()
       .addButton({'id': 'bm-button-disable', 'textContent': 'Disable'}).buildElement()
     .buildElement()
     .addTextarea({'id': overlay.outputStatusId, 'placeholder': `Status: Sleeping...\nVersion: ${version}`, 'readOnly': true}).buildElement()
@@ -141,6 +150,6 @@ overlay.addDiv({'id': 'bm-overlay', 'style': 'top: 10px; right: 75px;'})
 
 overlay.handleDrag('#bm-overlay', '#bm-bar-drag'); // Creates dragging capability on the drag bar for dragging the overlay
 
-apiHandler.spontaneousResponseListener(overlay); // Reads spontaneous fetch responces
+apiManager.spontaneousResponseListener(overlay); // Reads spontaneous fetch responces
 
 console.log(`${name} (${version}) userscript has loaded!`);

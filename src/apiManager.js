@@ -1,18 +1,16 @@
-/** ApiHandler class for handling API requests, responses, and interactions.
+/** ApiManager class for handling API requests, responses, and interactions.
  * Note: Fetch spying is done in main.js, not here.
  * @since 0.11.1
  */
 
 import Utils from "./utils";
 
-export default class ApiHandler {
+export default class ApiManager {
 
-  /** Constructor for ApiHandler class
-   * @param {CoordsHandler} coordsHandler - The CoordsHandler instance
+  /** Constructor for ApiManager class
    * @since 0.11.34
    */
-  constructor(coordsHandler) {
-    this.coordsHandler = coordsHandler;
+  constructor() {
     this.disableAll = false; // Should the entire userscript be disabled?
     this.coordsTilePixel = []; // Contains the last detected tile/pixel coordinate pair requested
   }
@@ -66,8 +64,15 @@ export default class ApiHandler {
           const coordsTile = data['endpoint'].split('?')[0].split('/').filter(s => s && !isNaN(Number(s))); // Retrieves the tile coords as [x, y]
           const payloadExtractor = new URLSearchParams(data['endpoint'].split('?')[1]); // Declares a new payload deconstructor and passes in the fetch request payload
           const coordsPixel = [payloadExtractor.get('x'), payloadExtractor.get('y')]; // Retrieves the deconstructed pixel coords from the payload
+          
+          // Don't save the coords if there are previous coords that could be used
+          if (this.coordsTilePixel.length && (!coordsTile.length || !coordsPixel.length)) {
+            overlay.handleDisplayError(`Coordinates are malformed!\nDid you try clicking the canvas first?`);
+            return; // Kills itself
+          }
+          
           this.coordsTilePixel = [...coordsTile, ...coordsPixel]; // Combines the two arrays such that [x, y, x, y]
-          const displayTP = this.coordsHandler.serverTPtoDisplayTP(coordsTile, coordsPixel);
+          const displayTP = Utils.serverTPtoDisplayTP(coordsTile, coordsPixel);
           
           const spanElements = document.querySelectorAll('span'); // Retrieves all span elements
 
