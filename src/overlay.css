@@ -112,7 +112,7 @@ div#bm-overlay {
 }
 
 /* Automation button container */
-#bm-contain-buttons {
+#bm-contain-buttons-template {
   display: flex;
   flex-direction: row;
   flex-wrap: wrap;
@@ -139,11 +139,23 @@ div:has(> #bm-input-file-template) > button {
   width: 100%;
 }
 
+/* The action buttons below the status textarea */
+#bm-contain-buttons-action {
+  display: flex;
+  justify-content: space-between;
+}
+
+/* All small elements */
+#bm-overlay small {
+  font-size: x-small;
+  color: lightgray;
+}
+
 /* The elements that need spacing from each-other */
 #bm-contain-userinfo,
 #bm-contain-automation,
 #bm-contain-coords,
-#bm-contain-buttons,
+#bm-contain-buttons-template,
 div:has(> #bm-input-file-template),
 #bm-output-status {
   margin-top: 0.5em;

@@ -170,6 +170,31 @@ export default class Overlay {
     return this;
   }
 
+  /** Adds a `<small>` to the overlay.
+   * This `<small>` element will have properties shared between all `<small>` elements in the overlay.
+   * You can override the shared properties by using a callback.
+   * @param {Object.<string, any>} [additionalProperties={}] - The DOM properties of the `<small>` that are NOT shared between all overlay `<small>` elements. These should be camelCase.
+   * @param {function(Overlay, HTMLParagraphElement):void} [callback=()=>{}] - Additional JS modification to the `<small>`.
+   * @returns {Overlay} Overlay class instance (this)
+   * @since 0.55.8
+   * @example
+   * // Assume all <small> elements have a shared class (e.g. {'className': 'bar'})
+   * overlay.addSmall({'id': 'foo', 'textContent': 'Foobar.'}).buildOverlay(document.body);
+   * // Output:
+   * // (Assume <body> already exists in the webpage)
+   * <body>
+   *   <small id="foo" class="bar">Foobar.</small>
+   * </body>
+   */
+  addSmall(additionalProperties = {}, callback = () => {}) {
+
+    const properties = {}; // Shared <small> DOM properties
+
+    const small = this.#createElement('small', properties, additionalProperties); // Creates the <small> element
+    callback(this, small); // Runs any script passed in through the callback
+    return this;
+  }
+
   /** Adds a `<img>` to the overlay.
    * This `<img>` element will have properties shared between all `<img>` elements in the overlay.
    * You can override the shared properties by using a callback.

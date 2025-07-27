@@ -1,6 +1,7 @@
 import Overlay from './Overlay.js';
 import Observers from './Observers.js';
 import ApiManager from './ApiManager.js';
+import TemplateManager from './TemplateManager.js';
 
 const name = GM_info.script.name.toString();
 const version = GM_info.script.version.toString();
@@ -77,6 +78,7 @@ document.head.appendChild(stylesheetLink);
 
 const observers = new Observers(); // Constructs a new Observers object
 const overlay = new Overlay(name, version); // Constructs a new Overlay object
+const templateManager = new TemplateManager(); // Constructs a new TemplateManager object
 const apiManager = new ApiManager(); // Constructs a new ApiManager object
 
 overlay.setApiManager(apiManager); // Sets the API manager
@@ -129,7 +131,7 @@ overlay.addDiv({'id': 'bm-overlay', 'style': 'top: 10px; right: 75px;'})
       .addInput({'type': 'number', 'id': 'bm-input-py', 'placeholder': 'Px Y', 'min': 0, 'max': 2047, 'step': 1}).buildElement()
     .buildElement()
     .addInputFile({'id': 'bm-input-file-template', 'textContent': 'Upload Template', 'accept': 'image/png, image/jpeg, image/webp, image/bmp, image/gif'}).buildElement()
-    .addDiv({'id': 'bm-contain-buttons'})
+    .addDiv({'id': 'bm-contain-buttons-template'})
       .addButton({'id': 'bm-button-enable', 'textContent': 'Enable'}, (instance, button) => {
         button.onclick = () => {
           const input = document.querySelector('#bm-input-file-template');
@@ -137,14 +139,19 @@ overlay.addDiv({'id': 'bm-overlay', 'style': 'top: 10px; right: 75px;'})
           // Kills itself if there is no file
           if (!input?.files[0]) {instance.handleDisplayError(`No file selected!`); return;}
 
-          const url = URL.createObjectURL(input.files[0]); // Creates a blob URL
-          window.open(url, '_blank'); // Opens a new tab with blob
-          setTimeout(() => URL.revokeObjectURL(url), 10000); // Destroys the blob 10 seconds later
+          templateManager.setTemplateImage(input.files[0]);
         }
       }).buildElement()
       .addButton({'id': 'bm-button-disable', 'textContent': 'Disable'}).buildElement()
     .buildElement()
     .addTextarea({'id': overlay.outputStatusId, 'placeholder': `Status: Sleeping...\nVersion: ${version}`, 'readOnly': true}).buildElement()
+    .addDiv({'id': 'bm-contain-buttons-action'})
+      .addDiv()
+        .addButton({'id': 'bm-button-teleport', 'className': 'bm-help', 'textContent': '🕴'}).buildElement()
+        .addButton({'id': 'bm-button-favorite', 'className': 'bm-help', 'innerHTML': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><polygon points="10,2 12,7.5 18,7.5 13.5,11.5 15.5,18 10,14 4.5,18 6.5,11.5 2,7.5 8,7.5" fill="gold" stroke="black" stroke-width="1.4"></polygon></svg>'}).buildElement()
+        .addButton({'id': 'bm-button-templates', 'className': 'bm-help', 'innerHTML': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><rect width="20" height="20" stroke-width="3" stroke="black" fill="none"></rect><circle cx="10" cy="8" r="4"></circle><circle cx="10" cy="18" r="7"></circle></svg>'}).buildElement()
+      .addSmall({'textContent': 'Made by SwingTheVine'}).buildElement()
+    .buildElement()
   .buildElement()
 .buildOverlay(document.body);
 

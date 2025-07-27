@@ -36,4 +36,15 @@ export default class Utils {
   static serverTPtoDisplayTP(tile, pixel) {
     return [((parseInt(tile[0]) % 4) * 1000) + parseInt(pixel[0]), ((parseInt(tile[1]) % 4) * 1000) + parseInt(pixel[1])];
   }
+
+  /** Negative-Safe Modulo. You can pass negative numbers into this.
+   * @param {number} a - The first number
+   * @param {number} b - The second number
+   * @returns {number} Result
+   * @author osuplace
+   * @since 0.55.8
+   */
+  static negativeSafeModulo(a, b) {
+    return (a % b + b) % b;
+}
 }
