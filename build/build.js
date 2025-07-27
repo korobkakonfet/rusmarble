@@ -55,16 +55,19 @@ const resultEsbuild = await esbuild.build({
   platform: 'browser', // The platform the bundled code will be operating on
   legalComments: 'inline', // What level of legal comments are preserved? (Hard: none, Soft: inline)
   minify: false, // Should the code be minified?
-  write: false // Should we write the outfile?
+  write: false, // Should we write the outfile?
+  sourcemap: true,
 }).catch(() => process.exit(1));
 
-// Retrieves the JS file
+// Retrieves the JS file and map file
 const resultEsbuildJS = resultEsbuild.outputFiles.find(file => file.path.endsWith('.js'));
+const resultEsbuildMap = resultEsbuild.outputFiles.find(file => file.path.endsWith('.map'));
 
 // Obfuscates the JS file
 const resultTerser = await terser.minify(resultEsbuildJS.text, {
   sourceMap: {
-    filename: 'dist/BlueMarble.user.js', // The file to make a sourcemap for
+    content: resultEsbuildMap.text, // The esbundle sourcemap
+    filename: 'BlueMarble.user.js', // The file to make a sourcemap for
     url: ' ' // (This setting is intentional) The sourcemap url to point to.
   },
   mangle: {
