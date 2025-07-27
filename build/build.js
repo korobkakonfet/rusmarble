@@ -1,9 +1,9 @@
 /** Builds the userscript using esbuild.
  * This will:
  * 1. Update the package version across the entire project
- * 2. Bundle the JS files into one file
- * 3. Bundle the CSS files into one file
- * 4. Compress & obfuscate the bundled JS file
+ * 2. Bundle the JS files into one file (esbuild)
+ * 3. Bundle the CSS files into one file (esbuild)
+ * 4. Compress & obfuscate the bundled JS file (terner)
  * 5. Create a sourcemap
  * @since 0.0.6
 */
@@ -17,6 +17,8 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 // CommonJS imports (require)
 const terser = require('terser');
+
+const isGitHub = !!process.env.GITHUB_ACTIONS; // Is this running in a GitHub Action Workflow?
 
 // Tries to bump the version
 try {
@@ -49,25 +51,21 @@ const resultEsbuild = await esbuild.build({
   bundle: true, // Should the code be bundled?
   outfile: 'dist/BlueMarble.user.js', // The file the bundled code is exported to
   format: 'iife', // What format the bundler bundles the code into
-  drop: process.env?.GITHUB_ACTIONS ? ['console', 'debugger'] : [], // Tells esbuild to remove console and debug logs if this file is run in a GitHub (Actions) Workflow
   target: 'es2020', // What is the minimum version/year that should be supported? When omited, it attempts to support backwards compatability with legacy browsers
   platform: 'browser', // The platform the bundled code will be operating on
-  sourcemap: true, // Should a sourcemap be generated?
   legalComments: 'inline', // What level of legal comments are preserved? (Hard: none, Soft: inline)
   minify: false, // Should the code be minified?
   write: false // Should we write the outfile?
 }).catch(() => process.exit(1));
 
-// Retrieves the JS file and map file
+// Retrieves the JS file
 const resultEsbuildJS = resultEsbuild.outputFiles.find(file => file.path.endsWith('.js'));
-const resultEsbuildMap = resultEsbuild.outputFiles.find(file => file.path.endsWith('.js.map'));
 
 // Obfuscates the JS file
 const resultTerser = await terser.minify(resultEsbuildJS.text, {
   sourceMap: {
-    content: resultEsbuildMap.text, // esbuild sourcemap
     filename: 'dist/BlueMarble.user.js', // The file to make a sourcemap for
-    url: 'dist/BlueMarble.user.js.map' // The sourcemap to be made
+    url: ' ' // (This setting is intentional) The sourcemap url to point to.
   },
   mangle: {
     toplevel: true, // Obfuscate top-level class/function names
@@ -81,9 +79,9 @@ const resultTerser = await terser.minify(resultEsbuildJS.text, {
     },
   },
   compress: {
-    dead_code: true, // Should unreachable code be removed?
-    drop_console: true, // Should console code be removed?
-    drop_debugger: true, // SHould debugger code be removed?
+    dead_code: isGitHub, // Should unreachable code be removed?
+    drop_console: isGitHub, // Should console code be removed?
+    drop_debugger: isGitHub, // Should debugger code be removed?
     passes: 2 // Number of times the compression algorithm runs
   },
   format: {
