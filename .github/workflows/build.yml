@@ -56,7 +56,7 @@ jobs:
         run: |
           dist_size=$(find dist -type f -exec cat {} + | wc -c)
           src_size=$(find src dist/assets -type f -exec cat {} + | wc -c)
-          percentage=$(awk "BEGIN {printf \"%.2f\", ($dist_size * 100) / $src_size}")
+          percentage=$(awk "BEGIN {printf \"%.2f\", 100 - ($dist_size * 100) / $src_size}")
           echo "Compression: $percentage"
           badge_url="https://img.shields.io/badge/Compression-${percentage}%25-blue"
           sed -i -E 's#https://img.shields.io/badge/Compression-[^"]*#'"$badge_url"'#' docs/README.md
