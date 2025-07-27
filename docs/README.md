@@ -38,6 +38,7 @@
 <a href="" target="_blank"><img alt="Total Patches" src="https://img.shields.io/badge/Total_Patches-200-black?style=flat"></a>
 <a href="" target="_blank"><img alt="Total Lines of Code" src="https://tokei.rs/b1/github/SwingTheVine/Wplace-BlueMarble?category=code"></a>
 <a href="" target="_blank"><img alt="Total Comments" src="https://tokei.rs/b1/github/SwingTheVine/Wplace-BlueMarble?category=comments"></a>
+<a href="" target="_blank"><img alt="Compression" src="https://img.shields.io/badge/Compression-0%25-blue"></a>
 <a href="" target="_blank"><img alt="Build" src="https://github.com/SwingTheVine/Wplace-BlueMarble/actions/workflows/build.yml/badge.svg"></a>
 <a href="" target="_blank"><img alt="CodeQL" src="https://github.com/SwingTheVine/Wplace-BlueMarble/actions/workflows/github-code-scanning/codeql/badge.svg"></a>
 
