@@ -12,6 +12,12 @@ export default class Utils {
    * @example
    * const paragraph = document.createElement('p');
    * paragraph.innerHTML = escapeHTML('<u>Foobar.</u>');
+   * // Output:
+   * // (Does not include the paragraph element)
+   * // (Output is not HTML formatted)
+   * <p>
+   *   "<u>Foobar.</u>"
+   * </p>
    */
   static escapeHTML(text) {
     const div = document.createElement('div'); // Creates a div
