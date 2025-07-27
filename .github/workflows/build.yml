@@ -83,7 +83,7 @@ jobs:
 
       - name: Get the previous commit message
         id: get-commit-message
-        run: echo "MSG::$(git log -1 --pretty=%B)" >> $GITHUB_OUTPUT
+        run: echo "MSG=$(git log -1 --pretty=%B)" >> $GITHUB_OUTPUT
 
         # This should happen on 'auto' branch
       - name: Commit and push built script
@@ -124,7 +124,7 @@ jobs:
 
       - name: Update Source Map URL
         run: |
-          sed -i "s|sourceMappingURL=.*|sourceMappingURL=https://raw.githubusercontent.com/${{ github.repository }}/${COMMIT_SHA}/dist/app.js.map|" dist/app.js
+          sed -i "s|sourceMappingURL=.*|sourceMappingURL=https://raw.githubusercontent.com/${{ github.repository }}/${MAIN_SHA}/dist/app.js.map|" dist/app.js
 
       - name: Commit New Source Map URL
         run: |
@@ -135,6 +135,4 @@ jobs:
           git checkout main || git checkout -b main
           git merge --squash origin/auto
           git commit -m "Release version; ${{ needs.build.outputs.MSG }}" || echo "No changes to commit"
-
-  
           
