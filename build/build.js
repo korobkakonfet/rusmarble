@@ -64,11 +64,11 @@ const resultEsbuildJS = resultEsbuild.outputFiles.find(file => file.path.endsWit
 const resultEsbuildMap = resultEsbuild.outputFiles.find(file => file.path.endsWith('.map'));
 
 // Obfuscates the JS file
-const resultTerser = await terser.minify(resultEsbuildJS.text, {
+let resultTerser = await terser.minify(resultEsbuildJS.text, {
   sourceMap: {
-    content: resultEsbuildMap.text, // The esbundle sourcemap
+    //content: resultEsbuildMap.text, // The esbundle sourcemap
     filename: 'BlueMarble.user.js', // The file to make a sourcemap for
-    url: ' ' // (This setting is intentional) The sourcemap url to point to.
+    url: ' ' // (This value is intentional) The sourcemap url to point to.
   },
   mangle: {
     toplevel: true, // Obfuscate top-level class/function names
@@ -87,7 +87,7 @@ const resultTerser = await terser.minify(resultEsbuildJS.text, {
 });
 
 // Creates the sourcemap file
-fs.writeFileSync('dist/BlueMarble.user.js.map', resultTerser.map, 'utf8');
+fs.writeFileSync('dist/BlueMarble.user.js.map', resultTerser.map.replace(`"sources":["0"]`, `"sources":["BlueMarble.user.js"]`), 'utf8');
 
 // Adds the banner
 fs.writeFileSync('dist/BlueMarble.user.js', metaContent + resultTerser.code, 'utf8');
