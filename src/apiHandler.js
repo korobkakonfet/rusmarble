@@ -40,6 +40,15 @@ export class ApiHandler {
       switch (endpointText) {
 
         case 'me': // Request to retrieve user data
+
+          // If the game can not retrieve the userdata...
+          if (data.jsonData?.status && data.jsonData?.status?.toString()[0] != '2') {
+            // The server is probably down (NOT a 2xx status)
+
+            overlay.handleDisplayError(`The game is down!\nCould not fetch userdata.`);
+            return; // Kills itself before attempting to display null userdata
+          }
+
           const nextLevelPixels = Math.ceil(Math.pow(Math.floor(data.jsonData?.level) * Math.pow(30, 0.65), (1/0.65)) - data.jsonData?.pixelsPainted); // Calculates pixels to the next level
 
           overlay.updateInnerHTML('bm-user-name', `Username: <b>${data.jsonData?.name}</b>`); // Updates the text content of the username field

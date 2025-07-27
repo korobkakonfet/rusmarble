@@ -70,7 +70,10 @@ var stylesheetLink = document.createElement('link');
 stylesheetLink.href = 'https://fonts.googleapis.com/css2?family=Roboto+Mono:ital,wght@0,100..700;1,100..700&display=swap';
 stylesheetLink.rel = 'preload';
 stylesheetLink.as = 'style';
-stylesheetLink.onload = "this.onload=null;this.rel='stylesheet'";
+stylesheetLink.onload = function () {
+  this.onload = null;
+  this.rel = 'stylesheet';
+};
 document.head.appendChild(stylesheetLink);
 
 const observers = new Observers(); // Constructs a new Observers object
@@ -81,11 +84,62 @@ const apiHandler = new ApiHandler(coordsHandler); // Constructs a new ApiHandler
 overlay.setApiHandler(apiHandler); // Sets the API handler
 
 // Deploys the overlay to the page
+// Parent/child relationships in the DOM structure below are indicated by indentation
 overlay.addDiv({'id': 'bm-overlay', 'style': 'top: 10px; right: 75px;'})
   .addDiv({'id': 'bm-contain-header'})
     .addDiv({'id': 'bm-bar-drag'}).buildElement()
     .addImg({'alt': 'Blue Marble Icon', 'src': 'https://raw.githubusercontent.com/SwingTheVine/Wplace-BlueMarble/main/src/assets/Favicon.png'}).buildElement()
+    .addHeader(1, {'textContent': name}).buildElement()
+  .buildElement()
+
+  .addHr().buildElement()
+
+  .addDiv({'id': 'bm-contain-userinfo'})
+    .addP({'id': 'bm-user-name', 'textContent': 'Username:'}).buildElement()
+    .addP({'id': 'bm-user-droplets', 'textContent': 'Droplets:'}).buildElement()
+    .addP({'id': 'bm-user-nextlevel', 'textContent': 'Next level in...'}).buildElement()
+  .buildElement()
+
+  .addHr().buildElement()
+
+  .addDiv({'id': 'bm-contain-automation'})
+    .addCheckbox({'id': 'bm-input-stealth', 'textContent': 'Stealth', 'checked': true}).buildElement()
+    .addButtonHelp({'title': 'Waits for the website to make requests, instead of sending requests.'}).buildElement()
+    .addBr().buildElement()
+    .addCheckbox({'id': 'bm-input-possessed', 'textContent': 'Possessed', 'checked': true}).buildElement()
+    .addButtonHelp({'title': 'Controls the website as if it were possessed.'}).buildElement()
+    .addBr().buildElement()
+    .addDiv({'id': 'bm-contain-coords'})
+      .addButton({'id': 'bm-button-coords', 'className': 'bm-help', 'style': 'margin-top: 0;', 'innerHTML': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 6"><circle cx="2" cy="2" r="2"></circle><path d="M2 6 L3.7 3 L0.3 3 Z"></path><circle cx="2" cy="2" r="0.7" fill="white"></circle></svg></svg>'},
+        (instance, button) => {
+          button.onclick = () => {
+            const coords = instance.apiHandler?.coordsTilePixel; // Retrieves the coords from the API handler
+            if (!coords?.[0]) {
+              instance.handleDisplayError('Coordinates are malformed! Did you try clicking on the canvas first?');
+              return;
+            }
+            instance.updateInnerHTML('bm-input-tx', coords?.[0] || '');
+            instance.updateInnerHTML('bm-input-ty', coords?.[1] || '');
+            instance.updateInnerHTML('bm-input-px', coords?.[2] || '');
+            instance.updateInnerHTML('bm-input-py', coords?.[3] || '');
+          }
+        }
+      ).buildElement()
+      .addInput({'type': 'number', 'id': 'bm-input-tx', 'placeholder': 'Tl X', 'min': 0, 'max': 2047, 'step': 1}).buildElement()
+      .addInput({'type': 'number', 'id': 'bm-input-ty', 'placeholder': 'Tl Y', 'min': 0, 'max': 2047, 'step': 1}).buildElement()
+      .addInput({'type': 'number', 'id': 'bm-input-px', 'placeholder': 'Px X', 'min': 0, 'max': 2047, 'step': 1}).buildElement()
+      .addInput({'type': 'number', 'id': 'bm-input-py', 'placeholder': 'Px Y', 'min': 0, 'max': 2047, 'step': 1}).buildElement()
+    .buildElement()
+    .addInputFile({'id': 'bm-input-file-template', 'textContent': 'Upload Template'}).buildElement()
+    .addDiv({'id': 'bm-contain-buttons'})
+      .addButton({'id': 'bm-button-enable', 'textContent': 'Enable'}).buildElement()
+      .addButton({'id': 'bm-button-disable', 'textContent': 'Disable'}).buildElement()
+    .buildElement()
+    .addTextarea({'id': overlay.outputStatusId, 'placeholder': `Status: Sleeping...\nVersion: ${version}`, 'readOnly': true}).buildElement()
+  .buildElement()
 .buildOverlay(document.body);
+
+overlay.handleDrag('#bm-overlay', '#bm-bar-drag'); // Creates dragging capability on the drag bar for dragging the overlay
 
 apiHandler.spontaneousResponseListener(overlay); // Reads spontaneous fetch responces
 
