@@ -1,7 +1,7 @@
 import Overlay from './Overlay.js';
-import Observers from './Observers.js';
-import ApiManager from './ApiManager.js';
-import TemplateManager from './TemplateManager.js';
+import Observers from './observers.js';
+import ApiManager from './apiManager.js';
+import TemplateManager from './templateManager.js';
 
 const name = GM_info.script.name.toString();
 const version = GM_info.script.version.toString();

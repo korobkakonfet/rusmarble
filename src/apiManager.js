@@ -3,7 +3,7 @@
  * @since 0.11.1
  */
 
-import Utils from "./Utils";
+import { escapeHTML, serverTPtoDisplayTP } from "./utils.js";
 
 export default class ApiManager {
 
@@ -55,7 +55,7 @@ export default class ApiManager {
 
           const nextLevelPixels = Math.ceil(Math.pow(Math.floor(dataJSON['level']) * Math.pow(30, 0.65), (1/0.65)) - dataJSON['pixelsPainted']); // Calculates pixels to the next level
           
-          overlay.updateInnerHTML('bm-user-name', `Username: <b>${Utils.escapeHTML(dataJSON['name'])}</b>`); // Updates the text content of the username field
+          overlay.updateInnerHTML('bm-user-name', `Username: <b>${escapeHTML(dataJSON['name'])}</b>`); // Updates the text content of the username field
           overlay.updateInnerHTML('bm-user-droplets', `Droplets: <b>${new Intl.NumberFormat().format(dataJSON['droplets'])}</b>`); // Updates the text content of the droplets field
           overlay.updateInnerHTML('bm-user-nextlevel', `Next level in <b>${new Intl.NumberFormat().format(nextLevelPixels)}</b> pixel${nextLevelPixels == 1 ? '' : 's'}`); // Updates the text content of the next level field
           break;
@@ -72,7 +72,7 @@ export default class ApiManager {
           }
           
           this.coordsTilePixel = [...coordsTile, ...coordsPixel]; // Combines the two arrays such that [x, y, x, y]
-          const displayTP = Utils.serverTPtoDisplayTP(coordsTile, coordsPixel);
+          const displayTP = serverTPtoDisplayTP(coordsTile, coordsPixel);
           
           const spanElements = document.querySelectorAll('span'); // Retrieves all span elements
 
