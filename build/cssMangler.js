@@ -37,7 +37,14 @@ import fs from 'fs';
 /** Mangles the CSS selectors in a JS and CSS file.
  * Both the JS and CSS file are needed to ensure the names are synced.
  * A prefix is needed on all selectors to ensure the proper matching.
- * The prefix is case-sensitive.
+ * The input prefix is case-sensitive, and can match inside words.
+ * Assume the input prefix matching is as greedy as possible. Make sure your input prefix is unique!
+ * 
+ * For example:
+ *  - `bm` is a bad prefix because it will match `Submit Form` (Not unique enough)
+ *  - `b-` is a bad prefix because it will match `This is my b-day!` (Not long enough)
+ *  - `bm-` is a good prefix because no words end with or contain `bm-`
+ * 
  * The default mangling is all valid single byte characters for CSS selectors (which is, ironically, 64 characters).
  * You can optionally return the key-value mapping of all selector names.
  * @param {string} inputPrefix - The prefix to search for.

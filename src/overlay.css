@@ -94,7 +94,7 @@ div#bm-overlay {
 }
 
 /* Container for action buttons, that is inside the action button container */
-div#bm-button-teleport {
+div > #bm-button-teleport {
   display: flex;
   gap: 0.5ch;
 }
