@@ -133,6 +133,7 @@ jobs:
         run: |
           sed -i "/@resource/ s/sha=[a-f0-9]\{40\}/sha=${AUTO_SHA}/g" dist/BlueMarble.user.js src/BlueMarble.meta.js
           echo "Updated resourceLinkSHA:"
+          grep "@resource" dist/BlueMarble.user.js src/BlueMarble.meta.js
 
       - name: Commit Resource Link SHA
         run: |
