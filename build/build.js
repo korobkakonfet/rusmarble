@@ -92,11 +92,32 @@ let resultTerser = await terser.minify(resultEsbuildJS.text, {
 // Writes the obfuscated/mangled JS code to a file
 fs.writeFileSync('dist/BlueMarble.user.js', resultTerser.code, 'utf8');
 
+let importedMapCSS = {}; // The imported CSS map
+
+// Only import a CSS map if we are NOT in production (GitHub Workflow)
+// Theoretically, if the previous map is always imported, the names would not scramble. However, the names would never decrease in number...
+if (isGitHub) {
+  try {
+    importedMapCSS = JSON.parse(fs.readFileSync('dist/BlueMarble.user.css.map.json', 'utf8'));
+  } catch {
+    console.log(`${consoleStyle.YELLOW}Warning! Could not find a CSS map to import. A 100% new CSS map will be generated...${consoleStyle.RESET}`);
+  }
+}
+
 // Mangles the CSS selectors
-// If we are NOT in production (GitHub Workflow), then generate the CSS mapping
-const mapCSS = mangleSelectors('bm-', 'bm-', 'dist/BlueMarble.user.js', 'dist/BlueMarble.user.css', !isGitHub);
+// If we are in production (GitHub Workflow), then generate the CSS mapping
+const mapCSS = mangleSelectors({
+  inputPrefix: 'bm-',
+  outputPrefix: 'bm-',
+  pathJS: 'dist/BlueMarble.user.js',
+  pathCSS: 'dist/BlueMarble.user.css',
+  importMap: importedMapCSS,
+  returnMap: isGitHub
+});
+
+// If a map was returned, write it to the file
 if (mapCSS) {
-  fs.writeFileSync('dist/mapCSS.json', JSON.stringify(mapCSS, null, 2));
+  fs.writeFileSync('dist/BlueMarble.user.css.map.json', JSON.stringify(mapCSS, null, 2));
 }
 
 // Adds the banner

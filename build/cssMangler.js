@@ -47,12 +47,15 @@ import fs from 'fs';
  * 
  * The default mangling is all valid single byte characters for CSS selectors (which is, ironically, 64 characters).
  * You can optionally return the key-value mapping of all selector names.
- * @param {string} inputPrefix - The prefix to search for.
- * @param {string} outputPrefix - The prefix to replace with.
- * @param {string} pathJS - The path to the JS file.
- * @param {string} pathCSS - The path to the CSS file.
- * @param {boolean} [returnMap=false] - Should this function return the key-value map Object?
- * @param {string} [encoding=''] - The characters you want the mangled selectors to consist of.
+ * You can optionally pass in a map to be used. If you do, any selectors not in the map will be added.
+ * @param {Object} params - The parameters object.
+ * @param {string} params.inputPrefix - The prefix to search for.
+ * @param {string} params.outputPrefix - The prefix to replace with.
+ * @param {string} params.pathJS - The path to the JS file.
+ * @param {string} params.pathCSS - The path to the CSS file.
+ * @param {Object<string, string>} [params.importMap={}] - Imported map to use.
+ * @param {boolean} [params.returnMap=false] - Should this function return the key-value map Object?
+ * @param {string} [params.encoding=''] - The characters you want the mangled selectors to consist of.
  * @returns {Object<string, string>|undefined} A mapping of the mangled CSS selectors as an Object, or `undefined` if `returnMap` is not `true`.
  * @since 0.56.1
  * @example
@@ -75,19 +78,63 @@ import fs from 'fs';
  * #b-1 {color:red;}
  * .b-0 {background-color:blue;}
  * // Optional returned map Object:
- * console.log(JSON.stringify(mangleSelectors('bm-', 'b-', 'bundled.js', 'bundled.css', true), null, 2));
+ * console.log(
+ *   JSON.stringify(
+ *     mangleSelectors({
+ *         inputPrefix: 'bm-',
+ *         outputPrefix: 'b-',
+ *         pathJS: 'bundled.js',
+ *         pathCSS: 'bundled.css',
+ *         returnMap: true
+ *       }),
+ *     null, 2
+ *   )
+ * );
+ * // Return Map:
  * {
  *   "bm-paragraph-class": "b-0",
  *   "bm-paragraph-id": "b-1",
  * }
  */
-export default function mangleSelectors(inputPrefix, outputPrefix, pathJS, pathCSS, returnMap=false, encoding='') {
+export default function mangleSelectors({
+  inputPrefix = '',
+  outputPrefix = '',
+  pathJS = '',
+  pathCSS = '',
+  importMap = {},
+  returnMap = false,
+  encoding = ''
+} = {}) {
+
+  if (!inputPrefix || !outputPrefix || !pathJS || !pathCSS) {
+    throw new Error(`mangleSelectors() was called without the required variables: ${!inputPrefix ? 'inputPrefix ' : ''}${!outputPrefix ? 'outputPrefix ' : ''}${!pathJS ? 'pathJS ' : ''}${!pathCSS ? 'pathCSS' : ''}`);
+  }
 
   encoding = encoding || '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_'; // Default encoding
   
   const fileInputJS = fs.readFileSync(pathJS, 'utf8'); // The JS file
   const fileInputCSS = fs.readFileSync(pathCSS, 'utf8'); // The CSS file
 
+  /** How many keys-value pairs there are in the in the imported map, along with an "index shift" if a map was imported.
+   * @example
+   * // Assume the imported map has 10 keys.
+   * // The first key of the new map has an index of 0.
+   * // If we add 10 + 0, we get an index collision.
+   * // Therefore, we add 10 + 2 + 0.
+   * // However, if no map is imported, the map will start it's index at 2. We don't want that.
+   * // Therefore, if we abuse the fact that `true` is `1`, and `false` is `0`, we can add `2 * !!importMap.length` which will only shift the index by 2 if a map was imported.
+   * @example
+   * const importMap = {};
+   * console.log(importMapLength); // 0
+   * @example
+   * const importMap = {'foo': 'bar'};
+   * console.log(importMapLength); // 3
+   * @example
+   * const importMap = {'foo': 'bar', 'bar': 'foo'};
+   * console.log(importMapLength); // 4
+   */
+  const importMapLength = Object.keys(importMap).length + (2 * !!Object.keys(importMap).length); 
+  
   // One of each of all matching selectors
   // File -> RegEx -> Array (Duplicates) -> Set (Unique) -> Array (Unique)
   let matchedSelectors = [...new Set([...fileInputJS.matchAll(new RegExp(`\\b${escapeRegex(inputPrefix)}[a-zA-Z0-9_-]+`, 'g'))].map(match => match[0]))];
@@ -98,8 +145,16 @@ export default function mangleSelectors(inputPrefix, outputPrefix, pathJS, pathC
   matchedSelectors.sort((a, b) => b.length - a.length);
 
   // Converts the string[] to an Object (key-value)
-  matchedSelectors = Object.fromEntries(matchedSelectors.map((key, value) => [key, outputPrefix + numberToEncoded(matchedSelectors.indexOf(key), encoding)]));
-
+  matchedSelectors = { 
+    ...importMap, 
+    ...Object.fromEntries(
+      matchedSelectors
+        .filter(key => !(key in importMap))
+        .map(key => [key, outputPrefix + numberToEncoded(importMapLength + matchedSelectors.indexOf(key), encoding)]
+      )
+    )
+  };
+  
   // Compile the RegEx from the selector map
   const regex = new RegExp(Object.keys(matchedSelectors).map(selector => escapeRegex(selector)).join('|'), 'g');
 
