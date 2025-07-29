@@ -44,3 +44,30 @@ export function serverTPtoDisplayTP(tile, pixel) {
 export function negativeSafeModulo(a, b) {
   return (a % b + b) % b;
 }
+
+/** Bypasses terser's stripping of console function calls.
+ * This is so the non-obfuscated code will contain debugging console calls, but the distributed version won't.
+ * However, the distributed version needs to call the console somehow, so this wrapper function is how.
+ * This is the same as `console.log()`.
+ * @param {...any} args - Arguments to be passed into the `log()` function of the Console
+ * @since 0.58.9
+ */
+export function consoleLog(...args) {((consoleLog) => consoleLog(...args))(console.log);}
+
+/** Bypasses terser's stripping of console function calls.
+ * This is so the non-obfuscated code will contain debugging console calls, but the distributed version won't.
+ * However, the distributed version needs to call the console somehow, so this wrapper function is how.
+ * This is the same as `console.error()`.
+ * @param {...any} args - Arguments to be passed into the `error()` function of the Console
+ * @since 0.58.13
+ */
+export function consoleError(...args) {((consoleError) => consoleError(...args))(console.error);}
+
+/** Bypasses terser's stripping of console function calls.
+ * This is so the non-obfuscated code will contain debugging console calls, but the distributed version won't.
+ * However, the distributed version needs to call the console somehow, so this wrapper function is how.
+ * This is the same as `console.warn()`.
+ * @param {...any} args - Arguments to be passed into the `warn()` function of the Console
+ * @since 0.58.13
+ */
+export function consoleWarn(...args) {((consoleWarn) => consoleWarn(...args))(console.warn);}

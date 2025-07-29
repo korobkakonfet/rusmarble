@@ -37,7 +37,7 @@ export default class ApiManager {
       // E.g. "wplace.live/api/pixel/0/0?payload" -> "pixel"
       const endpointText = data['endpoint'].split('?')[0].split('/').filter(s => s && isNaN(Number(s))).pop();
 
-      console.log(`Recieved message about "${endpointText}"`);
+      console.log(`%cBlue Marble%c: Recieved message about "${endpointText}"`, 'color: cornflowerblue;', '');
 
       // Each case is something that Blue Marble can use from the fetch.
       // For instance, if the fetch was for "me", we can update the overlay stats
