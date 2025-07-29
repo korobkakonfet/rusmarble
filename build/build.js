@@ -4,6 +4,7 @@
  * 2. Bundle the JS files into one file (esbuild)
  * 3. Bundle the CSS files into one file (esbuild)
  * 4. Compress & obfuscate the bundled JS file (terner)
+ * 5. Runs the CSS selector mangler (cssMandler.js)
  * @since 0.0.6
 */
 
@@ -11,6 +12,7 @@
 import esbuild from 'esbuild';
 import fs from 'fs';
 import { execSync } from 'child_process';
+import mangleSelectors from './cssMangler.js';
 
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
@@ -57,7 +59,7 @@ const resultEsbuild = await esbuild.build({
   write: false, // Should we write the outfile to the disk?
 }).catch(() => process.exit(1));
 
-// Retrieves the JS file and map file
+// Retrieves the JS file
 const resultEsbuildJS = resultEsbuild.outputFiles.find(file => file.path.endsWith('.js'));
 
 // Obfuscates the JS file
@@ -84,5 +86,15 @@ let resultTerser = await terser.minify(resultEsbuildJS.text, {
   }
 });
 
+// Writes the obfuscated/mangled JS code to a file
+fs.writeFileSync('dist/BlueMarble.user.js', resultTerser.code, 'utf8');
+
+// Mangles the CSS selectors
+mangleSelectors('bm-', 'bm-', 'dist/BlueMarble.user.js', 'dist/BlueMarble.user.css');
+
 // Adds the banner
-fs.writeFileSync('dist/BlueMarble.user.js', metaContent + resultTerser.code, 'utf8');
+fs.writeFileSync(
+  'dist/BlueMarble.user.js', 
+  metaContent + fs.readFileSync('dist/BlueMarble.user.js', 'utf8'), 
+  'utf8'
+);

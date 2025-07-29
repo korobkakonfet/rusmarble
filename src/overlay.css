@@ -93,6 +93,24 @@ div#bm-overlay {
   fill: #111;
 }
 
+/* Container for action buttons, that is inside the action button container */
+div#bm-button-teleport {
+  display: flex;
+  gap: 0.5ch;
+}
+
+/* Favorite (Star) button image */
+/* Templates (Person) button image */
+#bm-button-favorite svg,
+#bm-button-template svg {
+  height: 1em;
+  margin: 0 auto;
+  margin-top: 2px;
+  text-align: center;
+  line-height: 1em;
+  vertical-align: bottom;
+}
+
 /* Tile (x, y) & Pixel (x, y) input fields */
 #bm-contain-coords input[type="number"] {
   appearance: auto;
