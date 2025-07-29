@@ -26,7 +26,7 @@ function inject(callback) {
     script.remove();
 }
 
-/** What code to execute instantly in the client (webpage).
+/** What code to execute instantly in the client (webpage) to spy on fetch calls.
  * This code will execute outside of TamperMonkey's sandbox.
  * @since 0.11.15
  */
@@ -71,6 +71,24 @@ inject(() => {
 
     return response; // Returns the original response
   };
+});
+
+/** What code to execute instantly in the client (webpage) to spy on the canvas.
+ * This code will execute outside of TamperMonkey's sandbox.
+ * @since 0.60.14
+ */
+inject(() => {
+
+  const script = document.currentScript; // Gets the current script HTML Script Element
+  const name = script?.getAttribute('bm-name') || 'Blue Marble'; // Gets the name value that was passed in. Defaults to "Blue Marble" if nothing was found
+  const consoleStyle = script?.getAttribute('bm-cStyle') || ''; // Gets the console style value that was passed in. Defaults to no styling if nothing was found
+  
+  const originalMap = maplibregl.Map;
+  maplibregl.Map = function (...args) {
+    const instance = new originalMap(...args);
+    window.__bm_interceptedMap;
+    return instance;
+  }
 });
 
 // Imports the CSS file from dist folder on github
@@ -166,6 +184,7 @@ function buildOverlayMain() {
             templateManager.setTemplateImage(input.files[0]);
 
             templateManager.tempDraw();
+            console.log(templateManager.canvasTemplate);
             instance.handleDisplayStatus(`Drew to canvas!`);
           }
         }).buildElement()
