@@ -239,8 +239,6 @@ function buildOverlayMain() {
 
             templateManager.setTemplateImage(input.files[0]);
 
-            templateManager.tempDraw();
-            console.log(templateManager.canvasTemplate);
             instance.handleDisplayStatus(`Drew to canvas!`);
           }
         }).buildElement()

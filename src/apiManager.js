@@ -28,7 +28,7 @@ export default class ApiManager {
   spontaneousResponseListener(overlay) {
 
     // Triggers whenever a message is sent
-    window.addEventListener('message', (event) => {
+    window.addEventListener('message', async (event) => {
 
       const data = event.data; // The data of the message
       const dataJSON = data['jsonData']; // The JSON response, if any
@@ -110,12 +110,26 @@ export default class ApiManager {
           const blobUUID = data['blobID'];
           const blobData = data['blobData'];
 
-          const gojo = this.templateManager.drawGojo();
+          let templateBlob = blobData; // By default, apply no template
+
+          console.log(`templateState: ${this.templateManager.templateState || null}`);
+
+          // Only apply the template if a template is loaded
+          // Otherwise, draw the template so the next attempted load will not need a re-draw
+          switch (this.templateManager.templateState) {
+            case 'file': // Draw the template
+              console.log(`Attempting to draw template...`);
+              templateBlob = await this.templateManager.drawTemplate(blobData);
+              break;
+            case 'template': // The template is already processed, pass it in
+              templateBlob = this.templateManager.template;
+              break;
+          }
           
           window.postMessage({
             source: 'blue-marble',
             blobID: blobUUID,
-            blobData: gojo,
+            blobData: templateBlob,
             blink: data['blink']
           });
           break;
