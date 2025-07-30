@@ -7,14 +7,14 @@
 // @license      MPL-2.0
 // @supportURL   https://discord.gg/tpeBPy46hf
 // @homepageURL  https://github.com/SwingTheVine/Wplace-BlueMarble
-// @icon         https://raw.githubusercontent.com/SwingTheVine/Wplace-BlueMarble/main/dist/assets/Favicon.png
+// @icon         https://raw.githubusercontent.com/SwingTheVine/Wplace-BlueMarble/899680ef97e601a01ccb5db02e0831f96c8bfc38/dist/assets/Favicon.png
 // @updateURL    https://raw.githubusercontent.com/SwingTheVine/Wplace-BlueMarble/main/dist/BlueMarble.user.js
 // @downloadURL  https://raw.githubusercontent.com/SwingTheVine/Wplace-BlueMarble/main/dist/BlueMarble.user.js
 // @run-at       document-start
 // @match        *://*.wplace.live/*
 // @grant        GM_getResourceText
 // @grant        GM_addStyle
-// @resource     CSS-BM-File https://raw.githubusercontent.com/SwingTheVine/Wplace-BlueMarble/main/dist/BlueMarble.user.css
+// @resource     CSS-BM-File https://raw.githubusercontent.com/SwingTheVine/Wplace-BlueMarble/899680ef97e601a01ccb5db02e0831f96c8bfc38/dist/BlueMarble.user.css
 // ==/UserScript==
 
 // Wplace  --> https://wplace.live
