@@ -26,6 +26,7 @@
   "bm-input-py": "bm-o",
   "bm-overlay": "bm-p",
   "bm-cStyle": "bm-q",
-  "bm-name": "bm-r",
-  "bm-help": "bm-s"
+  "bm-canvas": "bm-r",
+  "bm-name": "bm-s",
+  "bm-help": "bm-t"
 }
