@@ -110,21 +110,21 @@ export default class ApiManager {
           const blobUUID = data['blobID'];
           const blobData = data['blobData'];
 
-          let templateBlob = blobData; // By default, apply no template
+          // let templateBlob = blobData; // By default, apply no template
 
           console.log(`templateState: ${this.templateManager.templateState || null}`);
-
+          let templateBlob = !!this.templateManager.templateState ? await this.templateManager.drawTemplate(blobData) : blobData;
           // Only apply the template if a template is loaded
           // Otherwise, draw the template so the next attempted load will not need a re-draw
-          switch (this.templateManager.templateState) {
-            case 'file': // Draw the template
-              console.log(`Attempting to draw template...`);
-              templateBlob = await this.templateManager.drawTemplate(blobData);
-              break;
-            case 'template': // The template is already processed, pass it in
-              templateBlob = this.templateManager.template;
-              break;
-          }
+          // switch (this.templateManager.templateState) {
+          //   case 'file': // Draw the template
+          //     console.log(`Attempting to draw template...`);
+          //     templateBlob = await this.templateManager.drawTemplate(blobData);
+          //     break;
+          //   case 'template': // The template is already processed, pass it in
+          //     templateBlob = this.templateManager.template;
+          //     break;
+          // }
           
           window.postMessage({
             source: 'blue-marble',

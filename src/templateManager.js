@@ -8,6 +8,7 @@ export default class TemplateManager {
    */
   constructor() {
     this.canvasTemplate = null; // Our canvas
+    this.canvasTemplateZoomed = null; // The template when zoomed out
     this.canvasTemplateID = 'bm-canvas'; // Our canvas ID
     this.canvasMainID = 'div#map canvas.maplibregl-canvas'; // The selector for the main canvas
     this.template = null; // The template image.
