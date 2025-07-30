@@ -3,14 +3,17 @@
  * @since 0.11.1
  */
 
+import TemplateManager from "./templateManager.js";
 import { escapeHTML, serverTPtoDisplayTP } from "./utils.js";
 
 export default class ApiManager {
 
   /** Constructor for ApiManager class
+   * @param {TemplateManager} templateManager 
    * @since 0.11.34
    */
-  constructor() {
+  constructor(templateManager) {
+    this.templateManager = templateManager;
     this.disableAll = false; // Should the entire userscript be disabled?
     this.coordsTilePixel = []; // Contains the last detected tile/pixel coordinate pair requested
   }
@@ -33,9 +36,13 @@ export default class ApiManager {
       // Kills itself if the message was not intended for Blue Marble
       if (!(data && data['source'] === 'blue-marble')) {return;}
 
+      // Kills itself if the message has no endpoint (intended for Blue Marble, but not this function)
+      if (!data['endpoint']) {return;}
+
       // Trims endpoint to the second to last non-number, non-null directoy.
       // E.g. "wplace.live/api/pixel/0/0?payload" -> "pixel"
-      const endpointText = data['endpoint'].split('?')[0].split('/').filter(s => s && isNaN(Number(s))).pop();
+      // E.g. "wplace.live/api/files/s0/tiles/0/0/0.png" -> "tiles"
+      const endpointText = data['endpoint']?.split('?')[0].split('/').filter(s => s && isNaN(Number(s))).filter(s => s && !s.includes('.')).pop();
 
       console.log(`%cBlue Marble%c: Recieved message about "${endpointText}"`, 'color: cornflowerblue;', '');
 
@@ -96,6 +103,21 @@ export default class ApiManager {
               }
             }
           }
+          break;
+        
+        case 'tiles':
+
+          const blobUUID = data['blobID'];
+          const blobData = data['blobData'];
+
+          const gojo = this.templateManager.drawGojo();
+          
+          window.postMessage({
+            source: 'blue-marble',
+            blobID: blobUUID,
+            blobData: gojo,
+            blink: data['blink']
+          });
           break;
 
         case 'robots': // Request to retrieve what script types are allowed

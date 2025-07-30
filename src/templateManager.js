@@ -15,7 +15,7 @@ export default class TemplateManager {
     this.onResize = this.onResize.bind(this); // Binds the handler for `resize` to this class instance's function
     this.onZoom = this.onZoom.bind(this); // Binds the handler for `zoom` to this class instance's function
     this.template = null; // The template image.
-    this.state = ''; // The state of the template ('blob', 'proccessing', 'template', etc.)
+    this.templateState = ''; // The state of the template ('blob', 'proccessing', 'template', etc.)
   }
 
   /** Retrieves the pixel art canvas.
@@ -41,8 +41,10 @@ export default class TemplateManager {
     canvasTemplateNew.style.position = 'absolute';
     canvasTemplateNew.style.top = '0';
     canvasTemplateNew.style.left = '0';
-    canvasTemplateNew.style.height = canvasMain?.style?.height;
-    canvasTemplateNew.style.width = canvasMain?.style?.width;
+    canvasTemplateNew.style.height = `${canvasMain?.clientHeight * (window.devicePixelRatio || 1)}px`;
+    canvasTemplateNew.style.width = `${canvasMain?.clientWidth * (window.devicePixelRatio || 1)}px`;
+    canvasTemplateNew.height = canvasMain?.clientHeight * (window.devicePixelRatio || 1);
+    canvasTemplateNew.width = canvasMain?.clientWidth * (window.devicePixelRatio || 1);
     canvasTemplateNew.style.zIndex = '8999';
     canvasTemplateNew.style.pointerEvents = 'none';
     canvasMain?.parentElement?.appendChild(canvasTemplateNew); // Append the newCanvas as a child of the parent of the main canvas
@@ -62,7 +64,7 @@ export default class TemplateManager {
   setTemplateImage(file) {
 
     this.template = file;
-    this.state = 'file';
+    this.templateState = 'file';
 
     const url = URL.createObjectURL(file); // Creates a blob URL
     window.open(url, '_blank'); // Opens a new tab with blob
@@ -80,6 +82,13 @@ export default class TemplateManager {
       }
       drawLoop();
     }
+  }
+
+  drawGojo() {
+    
+    if (this.templateState != 'file') {return;}
+
+    return this.template;
   }
 
   /** What to do to our canvas when the canvas is panned.
@@ -104,10 +113,10 @@ export default class TemplateManager {
     const canvasMain = document.querySelector(this.canvasMainID);
     const canvasTemplate = this.getCanvas();
     if (!canvasTemplate || !canvasMain) {return;}
-    canvasTemplate.style.height = canvasMain.style.height;
-    canvasTemplate.style.width = canvasMain.style.width;
-    canvasTemplate.height = canvasMain.height;
-    canvasTemplate.width = canvasMain.width;
+    canvasTemplate.style.height = `${canvasMain?.clientHeight * (window.devicePixelRatio || 1)}px`;
+    canvasTemplate.style.width = `${canvasMain?.clientWidth * (window.devicePixelRatio || 1)}px`;
+    canvasTemplate.height = canvasMain?.clientHeight * (window.devicePixelRatio || 1);
+    canvasTemplate.width = canvasMain?.clientWidth * (window.devicePixelRatio || 1);
     this.tempDraw();
   }
 }

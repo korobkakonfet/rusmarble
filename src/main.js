@@ -35,7 +35,25 @@ inject(() => {
   const script = document.currentScript; // Gets the current script HTML Script Element
   const name = script?.getAttribute('bm-name') || 'Blue Marble'; // Gets the name value that was passed in. Defaults to "Blue Marble" if nothing was found
   const consoleStyle = script?.getAttribute('bm-cStyle') || ''; // Gets the console style value that was passed in. Defaults to no styling if nothing was found
-  
+  const fetchedBlobQueue = new Map(); // Blobs being processed
+
+  window.addEventListener('message', (event) => {
+    const { source, endpoint, blobID, blobData, blink } = event.data;
+
+    const elapsed = Date.now() - blink;
+
+    // Since this code does not run in the userscript, we can't use consoleLog().
+    console.groupCollapsed(`%c${name}%c: ${fetchedBlobQueue.size} Recieved IMAGE message about blob "${blobID}"`, consoleStyle, '');
+    console.log(`Blob fetch took %c${String(Math.floor(elapsed/60000)).padStart(2,'0')}:${String(Math.floor(elapsed/1000) % 60).padStart(2,'0')}.${String(elapsed % 1000).padStart(3,'0')}%c MM:SS.mmm`, consoleStyle, '');
+    console.log(fetchedBlobQueue);
+    console.groupEnd();
+
+    // The modified blob won't have an endpoint, so we ignore any message without one.
+    if ((source == 'blue-marble') && !!blobID && !!blobData && !endpoint) {
+      fetchedBlobQueue.get(blobID)(blobData);
+    }
+  });
+
   // Spys on "spontaneous" fetch requests made by the client
   const originalFetch = window.fetch; // Saves a copy of the original fetch
 
@@ -45,12 +63,13 @@ inject(() => {
     const response = await originalFetch.apply(this, args); // Sends a fetch
     const cloned = response.clone(); // Makes a copy of the response
 
+    // Retrieves the endpoint name. Unknown endpoint = "ignore"
+    const endpointName = ((args[0] instanceof Request) ? args[0]?.url : args[0]) || 'ignore';
+
     // Check Content-Type to only process JSON
     const contentType = cloned.headers.get('content-type') || '';
     if (contentType.includes('application/json')) {
 
-      // Retrieves the endpoint name. Unknown endpoint = "ignore"
-      let endpointName = ((args[0] instanceof Request) ? args[0]?.url : args[0]) || 'ignore';
 
       // Since this code does not run in the userscript, we can't use consoleLog().
       console.log(`%c${name}%c: Sending JSON message about endpoint "${endpointName}"`, consoleStyle, '');
@@ -67,28 +86,65 @@ inject(() => {
         .catch(err => {
           console.error(`%c${name}%c: Failed to parse JSON: `, consoleStyle, '', err);
         });
+    } else if (contentType.includes('image/') && (!endpointName.includes('openfreemap'))) {
+      // Fetch custom for all images but opensourcemap
+
+      const blink = Date.now(); // Current time
+
+      const blob = await cloned.blob(); // The original blob
+
+      // Since this code does not run in the userscript, we can't use consoleLog().
+      console.log(`%c${name}%c: ${fetchedBlobQueue.size} Sending IMAGE message about endpoint "${endpointName}"`, consoleStyle, '');
+
+      // Returns the manipulated blob
+      return new Promise((resolve) => {
+        const blobUUID = crypto.randomUUID(); // Generates a random UUID
+
+        // Store the blob while we wait for processing
+        fetchedBlobQueue.set(blobUUID, (blobProcessed) => {
+          // The response that triggers when the blob is finished processing
+
+          // Creates a new response
+          resolve(new Response(blobProcessed, {
+            headers: cloned.headers,
+            status: cloned.status,
+            statusText: cloned.statusText
+          }));
+
+          // Removes the processed blob from the queue
+          fetchedBlobQueue.delete(blobUUID);
+
+          // Since this code does not run in the userscript, we can't use consoleLog().
+          console.log(`%c${name}%c: ${fetchedBlobQueue.size} Processed blob "${blobUUID}"`, consoleStyle, '');
+        });
+
+        window.postMessage({
+          source: 'blue-marble',
+          endpoint: endpointName,
+          blobID: blobUUID,
+          blobData: blob,
+          blink: blink
+        });
+      }).catch(exception => {
+        const elapsed = Date.now();
+        console.error(`%c${name}%c: Failed to Promise blob!`, consoleStyle, '');
+        console.groupCollapsed(`%c${name}%c: Details of failed blob Promise:`, consoleStyle, '');
+        console.log(`Endpoint: ${endpointName}\nThere are ${fetchedBlobQueue.size} blobs processing...\nBlink: ${blink.toLocaleString()}\nTime Since Blink: ${String(Math.floor(elapsed/60000)).padStart(2,'0')}:${String(Math.floor(elapsed/1000) % 60).padStart(2,'0')}.${String(elapsed % 1000).padStart(3,'0')} MM:SS.mmm`);
+        console.error(`Exception stack:`, exception);
+        console.groupEnd();
+      });
+
+      // cloned.blob().then(blob => {
+      //   window.postMessage({
+      //     source: 'blue-marble',
+      //     endpoint: endpointName,
+      //     blobData: blob
+      //   }, '*');
+      // });
     }
 
     return response; // Returns the original response
   };
-});
-
-/** What code to execute instantly in the client (webpage) to spy on the canvas.
- * This code will execute outside of TamperMonkey's sandbox.
- * @since 0.60.14
- */
-inject(() => {
-
-  const script = document.currentScript; // Gets the current script HTML Script Element
-  const name = script?.getAttribute('bm-name') || 'Blue Marble'; // Gets the name value that was passed in. Defaults to "Blue Marble" if nothing was found
-  const consoleStyle = script?.getAttribute('bm-cStyle') || ''; // Gets the console style value that was passed in. Defaults to no styling if nothing was found
-  
-  const originalMap = maplibregl.Map;
-  maplibregl.Map = function (...args) {
-    const instance = new originalMap(...args);
-    window.__bm_interceptedMap;
-    return instance;
-  }
 });
 
 // Imports the CSS file from dist folder on github
@@ -110,7 +166,7 @@ document.head.appendChild(stylesheetLink);
 const observers = new Observers(); // Constructs a new Observers object
 const overlay = new Overlay(name, version); // Constructs a new Overlay object
 const templateManager = new TemplateManager(); // Constructs a new TemplateManager object
-const apiManager = new ApiManager(); // Constructs a new ApiManager object
+const apiManager = new ApiManager(templateManager); // Constructs a new ApiManager object
 
 overlay.setApiManager(apiManager); // Sets the API manager
 
