@@ -69,7 +69,13 @@ export default class TemplateManager {
     // setTimeout(() => URL.revokeObjectURL(url), 10000); // Destroys the blob 10 seconds later
   }
 
-  async drawTemplate(tileBlob) {
+  /** Draws the template on the tile.
+   * @param {File|Blob} tileBlob - The blob of the tile
+   * @param {Array<number, number, number, number>} [coordsTilePixel=[0,0,0,0]] - A number array of the four coordinates
+   * @returns {File|Blob} A image/png blob file
+   * @since 0.63.59
+   */
+  async drawTemplate(tileBlob, coordsTilePixel=[0, 0, 0, 0]) {
 
     // Only continue if template state is NOT 'file' NOR 'template'
     if (!((this.templateState == 'file') || (this.templateState == 'template'))) {return;}
@@ -78,13 +84,10 @@ export default class TemplateManager {
     const drawMult = 3; // Multiplier of draw size
     const drawSize = tileSize * drawMult; // Draw multiplier
 
-    // const [templateBitmap, tileBitmap] = await Promise.all([
-    //   createImageBitmap(await this.shrinkPixelsInPlace(this.template)),
-    //   createImageBitmap(tileBlob)
-    // ]);
+    coordsTilePixel = !!coordsTilePixel?.length ? coordsTilePixel : [0, 0, 0, 0]; // Set to default if [] passed in
     
-    // If the template has already been drawn, don't draw it again
     console.log(this.template);
+    // If the template has already been drawn, don't draw it again
     const templateBitmap = this.templateState == 'template' ? this.template : await createImageBitmap(await this.shreadBlob(this.template));
     const tileBitmap = await createImageBitmap(tileBlob);
 
@@ -93,8 +96,13 @@ export default class TemplateManager {
 
     context.imageSmoothingEnabled = false; // Nearest neighbor
 
+    // Tells the canvas to ignore anything outside of this area
+    context.beginPath();
+    context.rect(0, 0, drawSize, drawSize);
+    context.clip();
+
     context.clearRect(0, 0, drawSize, drawSize); // Draws transparent background
-    context.drawImage(templateBitmap, 0, 0); // TODO: Change X Y here
+    context.drawImage(templateBitmap, coordsTilePixel[2]*3, coordsTilePixel[3]*3);
     context.drawImage(tileBitmap, 0, 0, drawSize, drawSize);
 
     const final = await canvas.convertToBlob({ type: 'image/png' });
@@ -105,9 +113,9 @@ export default class TemplateManager {
       this.template = templateBitmap; // Store the drawn template
       this.templateState = 'template'; // Indicate that the template has been drawn
 
-      const url = URL.createObjectURL(final); // Creates a blob URL
-      window.open(url, '_blank'); // Opens a new tab with blob
-      setTimeout(() => URL.revokeObjectURL(url), 10000); // Destroys the blob 10 seconds later
+      // const url = URL.createObjectURL(final); // Creates a blob URL
+      // window.open(url, '_blank'); // Opens a new tab with blob
+      // setTimeout(() => URL.revokeObjectURL(url), 10000); // Destroys the blob 10 seconds later
     }
 
     return final;

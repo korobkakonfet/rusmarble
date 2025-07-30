@@ -107,25 +107,20 @@ export default class ApiManager {
         
         case 'tiles':
 
+          // Runs only if the tile has the a template
+          let tileCoordsTile = data['endpoint'].split('/');
+          tileCoordsTile = [parseInt(tileCoordsTile[tileCoordsTile.length - 2]), parseInt(tileCoordsTile[tileCoordsTile.length - 1].replace('.png', ''))];
+          
           const blobUUID = data['blobID'];
           const blobData = data['blobData'];
+          let templateBlob = blobData; // By default, apply no template
 
-          // let templateBlob = blobData; // By default, apply no template
+          if ((tileCoordsTile[0] == this.coordsTilePixel[0]) && (tileCoordsTile[1] == this.coordsTilePixel[1])) {
 
-          console.log(`templateState: ${this.templateManager.templateState || null}`);
-          let templateBlob = !!this.templateManager.templateState ? await this.templateManager.drawTemplate(blobData) : blobData;
-          // Only apply the template if a template is loaded
-          // Otherwise, draw the template so the next attempted load will not need a re-draw
-          // switch (this.templateManager.templateState) {
-          //   case 'file': // Draw the template
-          //     console.log(`Attempting to draw template...`);
-          //     templateBlob = await this.templateManager.drawTemplate(blobData);
-          //     break;
-          //   case 'template': // The template is already processed, pass it in
-          //     templateBlob = this.templateManager.template;
-          //     break;
-          // }
-          
+            console.log(`templateState: ${this.templateManager.templateState || null}`);
+            templateBlob = !!this.templateManager.templateState ? await this.templateManager.drawTemplate(blobData, this.coordsTilePixel) : blobData;
+          }
+
           window.postMessage({
             source: 'blue-marble',
             blobID: blobUUID,
@@ -137,7 +132,6 @@ export default class ApiManager {
         case 'robots': // Request to retrieve what script types are allowed
           this.disableAll = dataJSON['userscript']?.toString().toLowerCase() == 'false'; // Disables Blue Marble if site owner wants userscripts disabled
           break;
-
       }
     });
   }
