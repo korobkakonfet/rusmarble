@@ -131,11 +131,12 @@ jobs:
 
       - name: Update Resource Link SHA
         run: |
-          sed -i "/@resource/ s/sha=[a-f0-9]\{40\}/sha=${AUTO_SHA}/g" dist/BlueMarble.user.js src/BlueMarble.meta.js
-          sed -i "/@icon/ s/sha=[a-f0-9]\{40\}/sha=${AUTO_SHA}/g" dist/BlueMarble.user.js src/BlueMarble.meta.js
+          echo "Auto SHA: $AUTO_SHA"
+          sed -i ""/@icon/ s/\(\/[a-f0-9]\{40\}\/\)/\/${AUTO_SHA}\//g"" dist/BlueMarble.user.js src/BlueMarble.meta.js
+          sed -i ""/@resource/ s/\(\/[a-f0-9]\{40\}\/\)/\/${AUTO_SHA}\//g"" dist/BlueMarble.user.js src/BlueMarble.meta.js
           echo "Updated resourceLinkSHA:"
-          grep "@resource" dist/BlueMarble.user.js src/BlueMarble.meta.js
           grep "@icon" dist/BlueMarble.user.js src/BlueMarble.meta.js
+          grep "@resource" dist/BlueMarble.user.js src/BlueMarble.meta.js
         env:
           AUTO_SHA: ${{ env.AUTO_SHA }}
 
