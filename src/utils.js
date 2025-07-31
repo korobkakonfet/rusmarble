@@ -71,3 +71,31 @@ export function consoleError(...args) {((consoleError) => consoleError(...args))
  * @since 0.58.13
  */
 export function consoleWarn(...args) {((consoleWarn) => consoleWarn(...args))(console.warn);}
+
+/** Encodes a number into a custom encoded string.
+ * @param {number} number - The number to encode
+ * @param {string} encoding - The characters to use when encoding
+ * @since 0.65.2
+ * @returns {string} Encoded string
+ * @example
+ * const encode = '012abcABC'; // Base 9
+ * console.log(numberToEncoded(0, encode)); // 0
+ * console.log(numberToEncoded(5, encode)); // c
+ * console.log(numberToEncoded(15, encode)); // 1A
+ * console.log(numberToEncoded(12345, encode)); // 1BCaA
+ */
+export function numberToEncoded(number, encoding) {
+
+  if (number === 0) return encoding[0]; // End quickly if number equals 0. No special calculation needed
+
+  let result = ''; // The encoded string
+  const base = encoding.length; // The number of characters used, which determines the base
+
+  // Base conversion algorithm
+  while (number > 0) {
+    result = encoding[number % base] + result; // Find's the character's encoded value determined by the modulo of the base
+    number = Math.floor(number / base); // Divides the number by the base so the next iteration can find the next modulo character
+  }
+
+  return result; // The final encoded string
+}
