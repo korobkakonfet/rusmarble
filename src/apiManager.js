@@ -16,6 +16,7 @@ export default class ApiManager {
     this.templateManager = templateManager;
     this.disableAll = false; // Should the entire userscript be disabled?
     this.coordsTilePixel = []; // Contains the last detected tile/pixel coordinate pair requested
+    this.templateCoordsTilePixel = []; // Contains the last "enabled" template coords
   }
 
   /** Determines if the spontaneously recieved response is something we want.
@@ -107,7 +108,7 @@ export default class ApiManager {
         
         case 'tiles':
 
-          // Runs only if the tile has the a template
+          // Runs only if the tile has the template
           let tileCoordsTile = data['endpoint'].split('/');
           tileCoordsTile = [parseInt(tileCoordsTile[tileCoordsTile.length - 2]), parseInt(tileCoordsTile[tileCoordsTile.length - 1].replace('.png', ''))];
           
@@ -115,10 +116,14 @@ export default class ApiManager {
           const blobData = data['blobData'];
           let templateBlob = blobData; // By default, apply no template
 
-          if ((tileCoordsTile[0] == this.coordsTilePixel[0]) && (tileCoordsTile[1] == this.coordsTilePixel[1])) {
+          // Only run if all coordinates are there
+          if (this.templateCoordsTilePixel?.length >= 4) {
 
-            console.log(`templateState: ${this.templateManager.templateState || null}`);
-            templateBlob = !!this.templateManager.templateState ? await this.templateManager.drawTemplate(blobData, this.coordsTilePixel) : blobData;
+            if ((tileCoordsTile[0] == this.templateCoordsTilePixel[0]) && (tileCoordsTile[1] == this.templateCoordsTilePixel[1])) {
+
+              console.log(`templateState: ${this.templateManager.templateState || null}`);
+              templateBlob = !!this.templateManager.templateState ? await this.templateManager.drawTemplate(blobData, this.templateCoordsTilePixel) : blobData;
+            }
           }
 
           window.postMessage({

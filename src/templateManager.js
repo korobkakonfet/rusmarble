@@ -102,8 +102,9 @@ export default class TemplateManager {
     context.clip();
 
     context.clearRect(0, 0, drawSize, drawSize); // Draws transparent background
-    context.drawImage(templateBitmap, coordsTilePixel[2]*3, coordsTilePixel[3]*3);
     context.drawImage(tileBitmap, 0, 0, drawSize, drawSize);
+    //context.globalCompositeOperation = "destination-atop"; // If we the image we are drawing has transparent pixels, don't preserve them.
+    context.drawImage(templateBitmap, coordsTilePixel[2]*3, coordsTilePixel[3]*3);
 
     const final = await canvas.convertToBlob({ type: 'image/png' });
 

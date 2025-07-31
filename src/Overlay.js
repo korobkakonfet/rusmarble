@@ -3,17 +3,22 @@
  * @since 0.0.2
  * @example
  * const overlay = new Overlay();
- * overlay.addDiv('overlay')
- *   .addHeader(1, {'textContent': 'Your Overlay'}).buildElement()
- *   .addP({'textContent': 'This is your overlay. It is versatile.'}).buildElement()
+ * overlay.addDiv({ 'id': 'overlay' })
+ *   .addDiv({ 'id': 'header' })
+ *     .addHeader(1, {'textContent': 'Your Overlay'}).buildElement()
+ *     .addP({'textContent': 'This is your overlay. It is versatile.'}).buildElement()
+ *   .buildElement() // Marks the end of the header <div>
  *   .addHr().buildElement()
  * .buildOverlay(document.body);
  * // Output:
  * // (Assume <body> already exists in the webpage)
  * <body>
  *   <div id="overlay">
- *     <h1>Your Overlay</h1>
- *     <p>This is your overlay. It is versatile.</p>
+ *     <div id="header">
+ *       <h1>Your Overlay</h1>
+ *       <p>This is your overlay. It is versatile.</p>
+ *     </div>
+ *     <hr>
  *   </div>
  * </body>
 */

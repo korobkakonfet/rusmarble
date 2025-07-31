@@ -237,6 +237,9 @@ function buildOverlayMain() {
             // Kills itself if there is no file
             if (!input?.files[0]) {instance.handleDisplayError(`No file selected!`); return;}
 
+            console.log(`TCoords: ${apiManager.templateCoordsTilePixel}\nCoords: ${apiManager.coordsTilePixel}`);
+            apiManager.templateCoordsTilePixel = apiManager.coordsTilePixel; // Update template coords
+            console.log(`TCoords: ${apiManager.templateCoordsTilePixel}\nCoords: ${apiManager.coordsTilePixel}`);
             templateManager.setTemplateImage(input.files[0]);
 
             instance.handleDisplayStatus(`Drew to canvas!`);
