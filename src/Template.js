@@ -56,7 +56,6 @@ export default class Template {
     const context = canvas.getContext('2d');
 
     context.imageSmoothingEnabled = false; // Nearest neighbor scaleing
-    context.globalCompositeOperation = "destination-over"; // If we the image we are drawing has transparent pixels, don't preserve them.
 
     // Tells the canvas to ignore anything outside of this area
     context.beginPath();

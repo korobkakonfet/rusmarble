@@ -57,7 +57,7 @@ export default class ApiManager {
           if (dataJSON['status'] && dataJSON['status']?.toString()[0] != '2') {
             // The server is probably down (NOT a 2xx status)
             
-            overlay.handleDisplayError(`The game is down!\nCould not fetch userdata.`);
+            overlay.handleDisplayError(`You are not logged in!\nCould not fetch userdata.`);
             return; // Kills itself before attempting to display null userdata
           }
 

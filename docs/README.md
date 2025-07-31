@@ -31,7 +31,7 @@
 
 <h1>Blue Marble</h1>
 <a href="" target="_blank"><img alt="Latest Version" src="https://img.shields.io/badge/Latest_Version-0.65.0-lightblue?style=flat"></a>
-<a href="https://github.com/SwingTheVine/Wplace-BlueMarble/releases" target="_blank"><img alt="Latest Release" src="https://img.shields.io/github/v/release/SwingTheVine/Wplace-BlueMarble?sort=date&style=flat&label=Latest%20Release&color=blue"></a>
+<a href="https://github.com/SwingTheVine/Wplace-BlueMarble/releases" target="_blank"><img alt="Latest Release" src="https://img.shields.io/github/v/release/SwingTheVine/Wplace-BlueMarble?sort=semver&style=flat&label=Latest%20Release&color=blue"></a>
 <a href="https://github.com/SwingTheVine/Wplace-BlueMarble/blob/main/LICENSE.txt" target="_blank"><img alt="Software License: MPL-2.0" src="https://img.shields.io/badge/Software_License-MPL--2.0-brightgreen?style=flat"></a>
 <a href="https://discord.gg/tpeBPy46hf" target="_blank"><img alt="Contact Me" src="https://img.shields.io/badge/Contact_Me-gray?style=flat&logo=Discord&logoColor=white&logoSize=auto&labelColor=cornflowerblue"></a>
 <a href="" target="_blank"><img alt="WakaTime" src="https://img.shields.io/badge/Coding_Time-59hrs_0mins-blue?style=flat&logo=wakatime&logoColor=black&logoSize=auto&labelColor=white"></a>
@@ -45,6 +45,21 @@
 <h2>Overview</h2>
 <p>
   Welcome to Blue Marble! Blue Marble is a userscript for the website <a href="https://wplace.live/" target="_blank">wplace.live</a>.
+
+  <h3>Installation Instructions</h3>
+  <a href="" target="_blank"><img alt="Supported Browsers" src="https://img.shields.io/badge/Browsers-Chrome%20%7C%20Firefox%20%7C%20Safari%20%7C%20IE-orange?style=flat"></a>
+  <p>
+    Blue Marble has been verified to work on mobile devices. Blue Marble was designed on Chrome, but Blue Marble might work on "unsupported" browsers not listed above.
+    <br>
+    Here is how you install the Blue Marble userscript:
+    <ol>
+      <li>Install <a href="https://www.tampermonkey.net/index.php" target="_blank">TamperMonkey</a>.</li>
+      <li>Enable Developer Mode & Userscripts (on Chrome).</li>
+      <li>Download the <a href="https://github.com/SwingTheVine/Wplace-BlueMarble/releases" target="_blank">BlueMarble.user.js</a> file.</li>
+      <li>Put the <code>BlueMarble.user.js</code> file inside the dashboard of TamperMonkey.</li>
+      <li>Enable BlueMarble inside TamperMonkey</li>
+    </ol>
+  </p>
 
   <h3>Script Settings</h3>
   <p>

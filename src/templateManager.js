@@ -1,5 +1,15 @@
 /** Manages the template system.
+ * This class handles all external requests for modification to a Template.
  * @since 0.55.8
+ * @example
+ * // Example of JSON structure for a template
+{
+  "scriptVersion": "1.13.0",
+  "schemaVersion": "2.1.0",
+  "templates": {
+    ""
+  }
+}
  */
 export default class TemplateManager {
 
@@ -22,7 +32,7 @@ export default class TemplateManager {
    * @since 0.58.3
    * @deprecated Not in use since 0.63.25
    */
-  getCanvas() {
+  /* @__PURE__ */getCanvas() {
 
     // If the stored canvas is "fresh", return the stored canvas
     if (document.body.contains(this.canvasTemplate)) {return this.canvasTemplate;}
@@ -53,6 +63,18 @@ export default class TemplateManager {
     window.addEventListener('resize', this.onResize);
 
     return this.canvasTemplate; // Return the new canvas
+  }
+
+  createTemplate() {
+
+  }
+
+  deleteTemplate() {
+
+  }
+
+  drawTemplateOnTile() {
+
   }
 
   /** Sets the template to the image passed in.
@@ -103,7 +125,6 @@ export default class TemplateManager {
 
     context.clearRect(0, 0, drawSize, drawSize); // Draws transparent background
     context.drawImage(tileBitmap, 0, 0, drawSize, drawSize);
-    //context.globalCompositeOperation = "destination-atop"; // If we the image we are drawing has transparent pixels, don't preserve them.
     context.drawImage(templateBitmap, coordsTilePixel[2]*3, coordsTilePixel[3]*3);
 
     const final = await canvas.convertToBlob({ type: 'image/png' });
