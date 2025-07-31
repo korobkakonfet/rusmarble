@@ -39,7 +39,8 @@ jobs:
     needs: [update-auto] # Needs the update-auto job to finish first
 
     outputs:
-      msg: ${{ steps.get-commit-message.outputs.MSG }}
+      TITLE: ${{ steps.get-commit-message.outputs.TITLE }}
+      BODY: ${{ steps.get-commit-message.outputs.BODY }}
 
     steps:
       - name: Checkout code
@@ -89,7 +90,19 @@ jobs:
 
       - name: Get the previous commit message
         id: get-commit-message
-        run: echo "MSG=$(git log -1 --pretty=%B)" >> $GITHUB_OUTPUT
+        run: |
+          COMMIT_MSG="$(git log -1 --pretty=%B)"
+          TITLE="$(echo "$COMMIT_MSG" | head -n1)"
+          BODY="$(echo "$COMMIT_MSG" | tail -n +2)"
+
+          {
+            echo "TITLE<<EOF"
+            echo "$TITLE"
+            echo "EOF"
+            echo "BODY<<EOF"
+            echo "$BODY"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
 
         # This should happen on 'auto' branch
       - name: Commit and push built script
@@ -102,7 +115,7 @@ jobs:
           git add src/BlueMarble.meta.js
           git add package.json
           git add docs/README.md
-          git commit -m "Bumped version; ${{ steps.get-commit-message.outputs.MSG }}" || echo "No changes to commit"
+          git commit -m "Bumped version; ${{ steps.get-commit-message.outputs.TITLE }}" -m "${{ steps.get-commit-message.outputs.BODY }}" || echo "No changes to commit"
           git push --set-upstream origin auto
 
   # Updates the requirement link SHA
@@ -147,7 +160,7 @@ jobs:
           git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
           git add dist/BlueMarble.user.js
           git add src/BlueMarble.meta.js
-          git commit -m "Merge version; ${{ needs.build.outputs.MSG }}" || echo "No changes to commit"
+          git commit -m "Merge version; ${{ needs.build.outputs.TITLE }}" -m "${{ needs.build.outputs.BODY }}" || echo "No changes to commit"
           git push
 
       - name: Merge Auto -> Main
@@ -155,5 +168,5 @@ jobs:
           git fetch origin
           git checkout origin/main -B main
           git merge --squash origin/auto
-          git commit -m "Release version; ${{ needs.build.outputs.MSG }}" || echo "No changes to commit"
+          git commit -m "Release version; ${{ needs.build.outputs.TITLE }}" -m "${{ needs.build.outputs.BODY }}" || echo "No changes to commit"
           git push origin main
