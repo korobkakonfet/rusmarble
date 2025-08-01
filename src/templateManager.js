@@ -1,3 +1,4 @@
+import Template from "./Template";
 import { numberToEncoded } from "./utils";
 
 /** Manages the template system.
@@ -20,6 +21,7 @@ import { numberToEncoded } from "./utils";
  *     },
  *     "1 $Z": {
  *       "name": "My Template",
+ *       "URL": "https://github.com/SwingTheVine/Wplace-BlueMarble/blob/main/dist/assets/Favicon.png",
  *       "enabled": false,
  *       "tiles": {
  *         "375,1846,276,188": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA",
@@ -50,7 +52,8 @@ export default class TemplateManager {
     this.canvasMainID = 'div#map canvas.maplibregl-canvas'; // The selector for the main canvas
     this.template = null; // The template image.
     this.templateState = ''; // The state of the template ('blob', 'proccessing', 'template', etc.)
-    this.templates = null; // All templates currently loaded (JSON)
+    this.templatesArray = []; // All Template instnaces currently loaded (Template)
+    this.templatesJSON = null; // All templates currently loaded (JSON)
   }
 
   /** Retrieves the pixel art canvas.
@@ -114,124 +117,37 @@ export default class TemplateManager {
   async createTemplate(blob, name, coords) {
 
     // Creates the JSON object if it does not already exist
-    if (!this.templates) {this.templates = await this.createJSON();}
+    if (!this.templatesJSON) {this.templatesJSON = await this.createJSON(); console.log(`Creating JSON...`);}
 
     const tileSize = 1000; // The size of a tile in pixels
 
     console.log(`Awaiting creation...`);
+
+    // Creates a new template instance
+    const template = new Template({
+      displayName: name,
+      sortID: Object.keys(this.templatesJSON.templates).length || 0,
+      authorID: numberToEncoded(this.userID || 0, this.encodingBase),
+      file: blob,
+      coords: coords
+    });
+    template.chunked = await template.createTemplateTiles(tileSize); // Chunks the tiles
     
     // Appends a child into the templates object
     // The child's name is the number of templates already in the list (sort order) plus the encoded player ID
-    this.templates.templates[`${this.templates.templates.length || 0} ${numberToEncoded(this.userID || 0, this.encodingBase)}`] = {
-      "name": name, // Display name of template
-      "tiles": await this.#createTemplateTiles(blob, coords, tileSize)
+    this.templatesJSON.templates[`${template.sortID} ${template.authorID}`] = {
+      "name": template.displayName, // Display name of template
+      "tiles": template.chunked
     };
 
-    console.log(this.templates);
-  }
+    this.templatesArray.push(template); // Pushes the Template object instance to the Template Array
 
-  /** Creates chunks of the template for each tile.
-   * @param {File} blob - The File blob to process
-   * @param {Array<number, number, number, number>} coords - The coordinates of the top left corner of the template
-   * @param {number} tileSize - The size of a tile (assumes tiles are square)
-   * @returns {Object} Collection of template bitmaps in a Object
-   * @since 0.65.4
-   */
-  async #createTemplateTiles(blob, coords, tileSize) {
-
-    console.log(coords);
-
-    const shreadSize = 3; // Scale image factor. Must be odd
-    const bitmap = await createImageBitmap(blob); // Creates a bitmap image
-    const imageWidth = bitmap.width;
-    const imageHeight = bitmap.height;
-
-    const templateTiles = {}; // Holds the template tiles
-
-    const canvas = new OffscreenCanvas(tileSize, tileSize);
-    const context = canvas.getContext('2d', { willReadFrequently: true });
-
-    // For every tile...
-    for (let pixelY = coords[3]; pixelY < (imageHeight + coords[3]);) {
-
-      // Draws the partial tile first, if any
-      // This calculates the size based on which is smaller:
-      // A. The top left corner of the current tile to the bottom right corner of the current tile
-      // B. The top left corner of the current tile to the bottom right corner of the image
-      const drawSizeY = Math.min(tileSize - (pixelY % tileSize), imageHeight - ((pixelY - coords[3]) * (pixelY != coords[3])));
-      console.log(`Math.min(${tileSize} - (${pixelY} % ${tileSize}), ${imageHeight} - (${pixelY - coords[3]} * (${pixelY} != ${coords[3]})))`);
-
-      for (let pixelX = coords[2]; pixelX < (imageWidth + coords[2]);) {
-        console.log(`Pixel X: ${pixelX}\nPixel Y: ${pixelY}`);
-
-        // Draws the partial tile first, if any
-        // This calculates the size based on which is smaller:
-        // A. The top left corner of the current tile to the bottom right corner of the current tile
-        // B. The top left corner of the current tile to the bottom right corner of the image
-        const drawSizeX = Math.min(tileSize - (pixelX % tileSize), imageWidth - ((pixelX - coords[2]) * (pixelX != coords[2])));
-        console.log(`Math.min(${tileSize} - (${pixelX} % ${tileSize}), ${imageWidth} - (${pixelX} * (${pixelX} != ${coords[2]})))`);
-
-        console.log(`Draw Size X: ${drawSizeX}\nDraw Size Y: ${drawSizeY}`);
-
-        console.log(`Draw X: ${drawSizeX}\nDraw Y: ${drawSizeY}\nCanvas Width: ${drawSizeX * shreadSize}\nCanvas Height: ${drawSizeY * shreadSize}`);
-
-        // Change the canvas size and wipe the canvas
-        canvas.width = drawSizeX * shreadSize;
-        canvas.height = drawSizeY * shreadSize;
-
-        console.log(`Getting X ${pixelX}-${pixelX + drawSizeX}\nGetting Y ${pixelY}-${pixelY + drawSizeY}`);
-
-        // Draws the template segment on this tile segment
-        context.clearRect(0, 0, drawSizeX * shreadSize, drawSizeY * shreadSize); // Clear any previous drawing (only runs when canvas size does not change)
-        context.drawImage(bitmap, pixelX, pixelY, drawSizeX, drawSizeY, 0, 0, drawSizeX * shreadSize, drawSizeY * shreadSize); // Coordinates and size of draw area of source image, then canvas
-
-        const imageData = context.getImageData(0, 0, drawSizeX * shreadSize, drawSizeY * shreadSize); // Data of the image on the canvas
-
-        for (let y = 0; y < drawSizeY * shreadSize; y++) {
-          for (let x = 0; x < drawSizeX * shreadSize; x++) {
-            // For every pixel...
-
-            // ... Make it transparent unless it is the "center"
-            if ((x % shreadSize !== 1) || (y % shreadSize !== 1)) {
-              const pixelIndex = (y * drawSizeX + x) * 4; // Find the pixel index in an array where every 4 indexes are 1 pixel
-              imageData.data[pixelIndex + 3] = 0; // Make the pixel transparent on the alpha channel
-            }
-          }
-        }
-
-        console.log(`Shreaded pixels for ${pixelX}, ${pixelY}`, imageData);
-
-        context.putImageData(imageData, 0, 0);
-        templateTiles[`${(coords[0] + Math.floor(pixelX / 1000)).toString().padStart(4, '0')},${(coords[1] + Math.floor(pixelY / 1000)).toString().padStart(4, '0')},${(pixelX % 1000).toString().padStart(3, '0')},${(pixelY % 1000).toString().padStart(3, '0')}`] = await canvas.convertToBlob({ type: 'image/png' });
-        
-        console.log(templateTiles);
-
-        pixelX += drawSizeX;
-      }
-
-      pixelY += drawSizeY;
-    }
-
-    console.log('Template Tiles: ', templateTiles);
-    return templateTiles;
-  }
-
-  /** Creates an image from a blob File
-   * @param {File} blob - The blob to convert to an Image
-   * @returns {Image} The image of the blob as an Image
-   * @since 0.65.4
-   */
-  #loadImageFromBlob(blob) {
-    return new Promise((resolve, reject) => {
-      const image = new Image(); // Create a blank image
-      image.onload = () => resolve(image); // When the blank image loads, populate it with the blob
-      image.onerror = reject; // Return the error, if any
-      image.src = URL.createObjectURL(blob);
-    });
+    console.log(Object.keys(this.templatesJSON.templates).length);
+    console.log(this.templatesJSON);
+    console.log(this.templatesArray);
   }
 
   /** Generates a {@link Template} class instance from the JSON object template
-   * 
    */
   #loadTemplate() {
 
@@ -239,27 +155,31 @@ export default class TemplateManager {
 
   /** Deletes a template from the JSON object.
    * Also delete's the corrosponding {@link Template} class instance
-   * 
    */
   deleteTemplate() {
 
   }
 
   /** Draws all templates on that tile
-   * 
    */
   drawTemplateOnTile() {
 
   }
 
+  /** Imports the JSON object, and appends it to any JSON object already loaded
+   */
   importJSON() {
 
   }
 
+  /** Parses the Blue Marble JSON object
+   */
   #parseBlueMarble() {
 
   }
 
+  /** Parses the OSU! Place JSON object
+   */
   #parseOSU() {
 
   }
@@ -267,6 +187,7 @@ export default class TemplateManager {
   /** Sets the template to the image passed in.
    * @param {File} file - The file of the template image.
    * @since 0.55.8
+   * @deprecated Since 0.65.43
    */
   setTemplateImage(file) {
 
@@ -283,6 +204,7 @@ export default class TemplateManager {
    * @param {Array<number, number, number, number>} [coordsTilePixel=[0,0,0,0]] - A number array of the four coordinates
    * @returns {File|Blob} A image/png blob file
    * @since 0.63.59
+   * @deprecated Since 0.65.43
    */
   async drawTemplate(tileBlob, coordsTilePixel=[0, 0, 0, 0]) {
 
