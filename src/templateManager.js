@@ -22,6 +22,7 @@ import { numberToEncoded } from "./utils";
  *     "1 $Z": {
  *       "name": "My Template",
  *       "URL": "https://github.com/SwingTheVine/Wplace-BlueMarble/blob/main/dist/assets/Favicon.png",
+ *       "URLType": "template",
  *       "enabled": false,
  *       "tiles": {
  *         "375,1846,276,188": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA",
@@ -44,6 +45,8 @@ export default class TemplateManager {
     this.templatesVersion = '1.0.0'; // Version of JSON schema
     this.userID = null; // The ID of the current user
     this.encodingBase = '!#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~'; // Characters to use for encoding/decoding
+    this.tileSize = 1000; // The number of pixels in a tile. Assumes the tile is square
+    this.drawMult = 3; // The enlarged size for each pixel. E.g. when "3", a 1x1 pixel becomes a 1x1 pixel inside a 3x3 area. MUST BE ODD
     
     // Template
     this.canvasTemplate = null; // Our canvas
@@ -119,8 +122,6 @@ export default class TemplateManager {
     // Creates the JSON object if it does not already exist
     if (!this.templatesJSON) {this.templatesJSON = await this.createJSON(); console.log(`Creating JSON...`);}
 
-    const tileSize = 1000; // The size of a tile in pixels
-
     console.log(`Awaiting creation...`);
 
     // Creates a new template instance
@@ -131,12 +132,13 @@ export default class TemplateManager {
       file: blob,
       coords: coords
     });
-    template.chunked = await template.createTemplateTiles(tileSize); // Chunks the tiles
+    template.chunked = await template.createTemplateTiles(this.tileSize); // Chunks the tiles
     
     // Appends a child into the templates object
     // The child's name is the number of templates already in the list (sort order) plus the encoded player ID
     this.templatesJSON.templates[`${template.sortID} ${template.authorID}`] = {
       "name": template.displayName, // Display name of template
+      "enabled": true,
       "tiles": template.chunked
     };
 
@@ -161,9 +163,67 @@ export default class TemplateManager {
   }
 
   /** Draws all templates on that tile
+   * @param {File} tileBlob - The pixels that are placed on a tile
+   * @param {[number, number]} tileCoords - The tile coordinates [x, y]
    */
-  drawTemplateOnTile() {
+  async drawTemplateOnTile(tileBlob, tileCoords) {
 
+    const drawSize = this.tileSize * this.drawMult; // Draw multiplier
+
+    tileCoords = tileCoords[0].toString().padStart(4, '0') + ',' + tileCoords[1].toString().padStart(4, '0');
+
+    console.log(`Looking for "${tileCoords}"`);
+
+    const templateArray = this.templatesArray; // Stores a copy for sorting
+
+    // Sorts the array of Template class instances. 0 = first = lowest draw priority
+    templateArray.sort((a, b) => {
+      return a.sortID - b.sortID;
+    });
+
+    console.log(templateArray);
+
+    // Retrieves the relavent template tile blobs
+    const templateBlobs = templateArray
+      .map(template => {
+        const matchingTiles = Object.keys(template.chunked).filter(tile =>
+          tile.startsWith(tileCoords)
+        );
+
+        if (matchingTiles.length === 0) {return null;} // Return nothing when nothing is found
+
+        // Retrieves the blobs of the templates for this tile
+        const matchingTileBlobs = matchingTiles.map(tile => template.chunked[tile]);
+
+        return matchingTileBlobs?.[0];
+      })
+    .filter(Boolean);
+
+    console.log(templateBlobs);
+    
+    const tileBitmap = await createImageBitmap(tileBlob);
+
+    const canvas = new OffscreenCanvas(drawSize, drawSize);
+    const context = canvas.getContext('2d');
+
+    context.imageSmoothingEnabled = false; // Nearest neighbor
+
+    // Tells the canvas to ignore anything outside of this area
+    context.beginPath();
+    context.rect(0, 0, drawSize, drawSize);
+    context.clip();
+
+    context.clearRect(0, 0, drawSize, drawSize); // Draws transparent background
+    context.drawImage(tileBitmap, 0, 0, drawSize, drawSize);
+
+    // For each template in this tile, draw them.
+    for (const templateBitmap of templateBlobs) {
+      console.log(`Template Blob is ${typeof templateBitmap}`);
+      console.log(templateBitmap);
+      context.drawImage(templateBitmap, tileCoords[0]*this.drawMult, tileCoords[1]*this.drawMult);
+    }
+
+    return await canvas.convertToBlob({ type: 'image/png' });
   }
 
   /** Imports the JSON object, and appends it to any JSON object already loaded

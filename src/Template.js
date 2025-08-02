@@ -76,27 +76,31 @@ export default class Template {
 
         console.log(`Draw Size X: ${drawSizeX}\nDraw Size Y: ${drawSizeY}`);
 
-        console.log(`Draw X: ${drawSizeX}\nDraw Y: ${drawSizeY}\nCanvas Width: ${drawSizeX * shreadSize}\nCanvas Height: ${drawSizeY * shreadSize}`);
-
         // Change the canvas size and wipe the canvas
-        canvas.width = drawSizeX * shreadSize;
-        canvas.height = drawSizeY * shreadSize;
+        const canvasWidth = (drawSizeX * shreadSize) + (this.coords[2] * shreadSize);
+        const canvasHeight = (drawSizeY * shreadSize) + (this.coords[3] * shreadSize);
+        canvas.width = canvasWidth;
+        canvas.height = canvasHeight;
+
+        console.log(`Draw X: ${drawSizeX}\nDraw Y: ${drawSizeY}\nCanvas Width: ${canvasWidth}\nCanvas Height: ${canvasHeight}`);
+
+        context.imageSmoothingEnabled = false; // Nearest neighbor
 
         console.log(`Getting X ${pixelX}-${pixelX + drawSizeX}\nGetting Y ${pixelY}-${pixelY + drawSizeY}`);
 
         // Draws the template segment on this tile segment
-        context.clearRect(0, 0, drawSizeX * shreadSize, drawSizeY * shreadSize); // Clear any previous drawing (only runs when canvas size does not change)
-        context.drawImage(bitmap, pixelX, pixelY, drawSizeX, drawSizeY, 0, 0, drawSizeX * shreadSize, drawSizeY * shreadSize); // Coordinates and size of draw area of source image, then canvas
+        context.clearRect(0, 0, canvasWidth, canvasHeight); // Clear any previous drawing (only runs when canvas size does not change)
+        context.drawImage(bitmap, pixelX - this.coords[2], pixelY - this.coords[3], drawSizeX, drawSizeY, (pixelX % this.tileSize) * shreadSize, (pixelY % this.tileSize) * shreadSize, drawSizeX * shreadSize, drawSizeY * shreadSize); // Coordinates and size of draw area of source image, then canvas
 
-        const imageData = context.getImageData(0, 0, drawSizeX * shreadSize, drawSizeY * shreadSize); // Data of the image on the canvas
+        const imageData = context.getImageData(0, 0, canvasWidth, canvasHeight); // Data of the image on the canvas
 
-        for (let y = 0; y < drawSizeY * shreadSize; y++) {
-          for (let x = 0; x < drawSizeX * shreadSize; x++) {
+        for (let y = 0; y < canvasHeight; y++) {
+          for (let x = 0; x < canvasWidth; x++) {
             // For every pixel...
 
             // ... Make it transparent unless it is the "center"
             if ((x % shreadSize !== 1) || (y % shreadSize !== 1)) {
-              const pixelIndex = (y * drawSizeX + x) * 4; // Find the pixel index in an array where every 4 indexes are 1 pixel
+              const pixelIndex = (y * canvasWidth + x) * 4; // Find the pixel index in an array where every 4 indexes are 1 pixel
               imageData.data[pixelIndex + 3] = 0; // Make the pixel transparent on the alpha channel
             }
           }
@@ -105,9 +109,15 @@ export default class Template {
         console.log(`Shreaded pixels for ${pixelX}, ${pixelY}`, imageData);
 
         context.putImageData(imageData, 0, 0);
-        templateTiles[`${(this.coords[0] + Math.floor(pixelX / 1000)).toString().padStart(4, '0')},${(this.coords[1] + Math.floor(pixelY / 1000)).toString().padStart(4, '0')},${(pixelX % 1000).toString().padStart(3, '0')},${(pixelY % 1000).toString().padStart(3, '0')}`] = await canvas.convertToBlob({ type: 'image/png' });
-        
+        //templateTiles[`${(this.coords[0] + Math.floor(pixelX / 1000)).toString().padStart(4, '0')},${(this.coords[1] + Math.floor(pixelY / 1000)).toString().padStart(4, '0')},${(pixelX % 1000).toString().padStart(3, '0')},${(pixelY % 1000).toString().padStart(3, '0')}`] = await canvas.convertToBlob({ type: 'image/png' });
+        templateTiles[`${(this.coords[0] + Math.floor(pixelX / 1000)).toString().padStart(4, '0')},${(this.coords[1] + Math.floor(pixelY / 1000)).toString().padStart(4, '0')},${(pixelX % 1000).toString().padStart(3, '0')},${(pixelY % 1000).toString().padStart(3, '0')}`] = await createImageBitmap(canvas);
+
         console.log(templateTiles);
+
+        // const final = await canvas.convertToBlob({ type: 'image/png' });
+        // const url = URL.createObjectURL(final); // Creates a blob URL
+        // window.open(url, '_blank'); // Opens a new tab with blob
+        // setTimeout(() => URL.revokeObjectURL(url), 10000); // Destroys the blob 10 seconds later
 
         pixelX += drawSizeX;
       }

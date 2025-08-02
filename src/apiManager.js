@@ -123,17 +123,19 @@ export default class ApiManager {
           
           const blobUUID = data['blobID'];
           const blobData = data['blobData'];
-          let templateBlob = blobData; // By default, apply no template
+          // let templateBlob = blobData; // By default, apply no template
 
           // Only run if all coordinates are there
-          if (this.templateCoordsTilePixel?.length >= 4) {
+          // if (this.templateCoordsTilePixel?.length >= 4) {
 
-            if ((tileCoordsTile[0] == this.templateCoordsTilePixel[0]) && (tileCoordsTile[1] == this.templateCoordsTilePixel[1])) {
+          //   if ((tileCoordsTile[0] == this.templateCoordsTilePixel[0]) && (tileCoordsTile[1] == this.templateCoordsTilePixel[1])) {
 
-              console.log(`templateState: ${this.templateManager.templateState || null}`);
-              templateBlob = !!this.templateManager.templateState ? await this.templateManager.drawTemplate(blobData, this.templateCoordsTilePixel) : blobData;
-            }
-          }
+          //     console.log(`templateState: ${this.templateManager.templateState || null}`);
+          //     templateBlob = !!this.templateManager.templateState ? await this.templateManager.drawTemplate(blobData, this.templateCoordsTilePixel) : blobData;
+              
+          //   }
+          // }
+          const templateBlob = await this.templateManager.drawTemplateOnTile(blobData, tileCoordsTile);
 
           window.postMessage({
             source: 'blue-marble',
