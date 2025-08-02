@@ -3,7 +3,6 @@
  * @since 0.65.2
  */
 export default class Template {
-
   /** The constructor for the {@link Template} class.
    * @param {Object} [params={}] - Object containing all optional params
    * @param {string} [params.displayName='My template'] - The display name of the template
@@ -24,7 +23,7 @@ export default class Template {
     file = null,
     coords = null,
     chunked = null,
-    tileSize = 1000
+    tileSize = 1000,
   } = {}) {
     this.displayName = displayName;
     this.sortID = sortID;
@@ -41,7 +40,6 @@ export default class Template {
    * @since 0.65.4
    */
   async createTemplateTiles() {
-
     console.log(this.coords);
 
     const shreadSize = 3; // Scale image factor. Must be odd
@@ -55,42 +53,77 @@ export default class Template {
     const context = canvas.getContext('2d', { willReadFrequently: true });
 
     // For every tile...
-    for (let pixelY = this.coords[3]; pixelY < (imageHeight + this.coords[3]);) {
-
+    for (let pixelY = this.coords[3]; pixelY < imageHeight + this.coords[3]; ) {
       // Draws the partial tile first, if any
       // This calculates the size based on which is smaller:
       // A. The top left corner of the current tile to the bottom right corner of the current tile
       // B. The top left corner of the current tile to the bottom right corner of the image
-      const drawSizeY = Math.min(this.tileSize - (pixelY % this.tileSize), imageHeight - ((pixelY - this.coords[3]) * (pixelY != this.coords[3])));
-      console.log(`Math.min(${this.tileSize} - (${pixelY} % ${this.tileSize}), ${imageHeight} - (${pixelY - this.coords[3]} * (${pixelY} != ${this.coords[3]})))`);
+      const drawSizeY = Math.min(
+        this.tileSize - (pixelY % this.tileSize),
+        imageHeight - (pixelY - this.coords[3])
+      );
+      console.log(
+        `Math.min(${this.tileSize} - (${pixelY} % ${
+          this.tileSize
+        }), ${imageHeight} - (${pixelY - this.coords[3]}))`
+      );
 
-      for (let pixelX = this.coords[2]; pixelX < (imageWidth + this.coords[2]);) {
+      for (
+        let pixelX = this.coords[2];
+        pixelX < imageWidth + this.coords[2];
+
+      ) {
         console.log(`Pixel X: ${pixelX}\nPixel Y: ${pixelY}`);
 
         // Draws the partial tile first, if any
         // This calculates the size based on which is smaller:
         // A. The top left corner of the current tile to the bottom right corner of the current tile
         // B. The top left corner of the current tile to the bottom right corner of the image
-        const drawSizeX = Math.min(this.tileSize - (pixelX % this.tileSize), imageWidth - ((pixelX - this.coords[2]) * (pixelX != this.coords[2])));
-        console.log(`Math.min(${this.tileSize} - (${pixelX} % ${this.tileSize}), ${imageWidth} - (${pixelX} * (${pixelX} != ${this.coords[2]})))`);
+        const drawSizeX = Math.min(
+          this.tileSize - (pixelX % this.tileSize),
+          imageWidth - (pixelX - this.coords[2])
+        );
+        console.log(
+          `Math.min(${this.tileSize} - (${pixelX} % ${
+            this.tileSize
+          }), ${imageWidth} - (${pixelX - this.coords[2]}))`
+        );
 
         console.log(`Draw Size X: ${drawSizeX}\nDraw Size Y: ${drawSizeY}`);
 
         // Change the canvas size and wipe the canvas
-        const canvasWidth = (drawSizeX * shreadSize) + ((pixelX % this.tileSize) * shreadSize);
-        const canvasHeight = (drawSizeY * shreadSize) + ((pixelY % this.tileSize) * shreadSize);
+        const canvasWidth =
+          drawSizeX * shreadSize + (pixelX % this.tileSize) * shreadSize;
+        const canvasHeight =
+          drawSizeY * shreadSize + (pixelY % this.tileSize) * shreadSize;
         canvas.width = canvasWidth;
         canvas.height = canvasHeight;
 
-        console.log(`Draw X: ${drawSizeX}\nDraw Y: ${drawSizeY}\nCanvas Width: ${canvasWidth}\nCanvas Height: ${canvasHeight}`);
+        console.log(
+          `Draw X: ${drawSizeX}\nDraw Y: ${drawSizeY}\nCanvas Width: ${canvasWidth}\nCanvas Height: ${canvasHeight}`
+        );
 
         context.imageSmoothingEnabled = false; // Nearest neighbor
 
-        console.log(`Getting X ${pixelX}-${pixelX + drawSizeX}\nGetting Y ${pixelY}-${pixelY + drawSizeY}`);
+        console.log(
+          `Getting X ${pixelX}-${pixelX + drawSizeX}\nGetting Y ${pixelY}-${
+            pixelY + drawSizeY
+          }`
+        );
 
         // Draws the template segment on this tile segment
         context.clearRect(0, 0, canvasWidth, canvasHeight); // Clear any previous drawing (only runs when canvas size does not change)
-        context.drawImage(bitmap, pixelX - this.coords[2], pixelY - this.coords[3], drawSizeX, drawSizeY, (pixelX % this.tileSize) * shreadSize, (pixelY % this.tileSize) * shreadSize, drawSizeX * shreadSize, drawSizeY * shreadSize); // Coordinates and size of draw area of source image, then canvas
+        context.drawImage(
+          bitmap,
+          pixelX - this.coords[2],
+          pixelY - this.coords[3],
+          drawSizeX,
+          drawSizeY,
+          (pixelX % this.tileSize) * shreadSize,
+          (pixelY % this.tileSize) * shreadSize,
+          drawSizeX * shreadSize,
+          drawSizeY * shreadSize
+        ); // Coordinates and size of draw area of source image, then canvas
 
         // const final = await canvas.convertToBlob({ type: 'image/png' });
         // const url = URL.createObjectURL(final); // Creates a blob URL
@@ -104,7 +137,7 @@ export default class Template {
             // For every pixel...
 
             // ... Make it transparent unless it is the "center"
-            if ((x % shreadSize !== 1) || (y % shreadSize !== 1)) {
+            if (x % shreadSize !== 1 || y % shreadSize !== 1) {
               const pixelIndex = (y * canvasWidth + x) * 4; // Find the pixel index in an array where every 4 indexes are 1 pixel
               imageData.data[pixelIndex + 3] = 0; // Make the pixel transparent on the alpha channel
             }
@@ -115,7 +148,15 @@ export default class Template {
 
         context.putImageData(imageData, 0, 0);
         //templateTiles[`${(this.coords[0] + Math.floor(pixelX / 1000)).toString().padStart(4, '0')},${(this.coords[1] + Math.floor(pixelY / 1000)).toString().padStart(4, '0')},${(pixelX % 1000).toString().padStart(3, '0')},${(pixelY % 1000).toString().padStart(3, '0')}`] = await canvas.convertToBlob({ type: 'image/png' });
-        templateTiles[`${(this.coords[0] + Math.floor(pixelX / 1000)).toString().padStart(4, '0')},${(this.coords[1] + Math.floor(pixelY / 1000)).toString().padStart(4, '0')},${(pixelX % 1000).toString().padStart(3, '0')},${(pixelY % 1000).toString().padStart(3, '0')}`] = await createImageBitmap(canvas);
+        templateTiles[
+          `${(this.coords[0] + Math.floor(pixelX / 1000))
+            .toString()
+            .padStart(4, '0')},${(this.coords[1] + Math.floor(pixelY / 1000))
+            .toString()
+            .padStart(4, '0')},${(pixelX % 1000)
+            .toString()
+            .padStart(3, '0')},${(pixelY % 1000).toString().padStart(3, '0')}`
+        ] = await createImageBitmap(canvas);
 
         console.log(templateTiles);
 
