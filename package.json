@@ -1,6 +1,6 @@
 {
   "name": "wplace-bluemarble",
-  "version": "0.65.80",
+  "version": "0.66.0",
   "type": "module",
   "scripts": {
     "build": "node build/build.js",
