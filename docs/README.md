@@ -32,10 +32,10 @@
 <h1>Blue Marble</h1>
 <a href="" target="_blank"><img alt="Latest Version" src="https://img.shields.io/badge/Latest_Version-0.66.0-lightblue?style=flat"></a>
 <a href="https://github.com/SwingTheVine/Wplace-BlueMarble/releases" target="_blank"><img alt="Latest Release" src="https://img.shields.io/github/v/release/SwingTheVine/Wplace-BlueMarble?sort=semver&style=flat&label=Latest%20Release&color=blue"></a>
-<a href="https://github.com/SwingTheVine/Wplace-BlueMarble/blob/main/LICENSE.txt" target="_blank"><img alt="Software License: MPL-2.0" src="https://img.shields.io/badge/Software_License-MPL--2.0-brightgreen?style=flat"></a>
+<a href="https://github.com/SwingTheVine/Wplace-BlueMarble/blob/main/LICENSE.txt" target="_blank"><img alt="Software License: MPL-2.0" src="https://img.shields.io/badge/Software_License-MPL--2.0-slateblue?style=flat"></a>
 <a href="https://discord.gg/tpeBPy46hf" target="_blank"><img alt="Contact Me" src="https://img.shields.io/badge/Contact_Me-gray?style=flat&logo=Discord&logoColor=white&logoSize=auto&labelColor=cornflowerblue"></a>
-<a href="" target="_blank"><img alt="WakaTime" src="https://img.shields.io/badge/Coding_Time-59hrs_0mins-blue?style=flat&logo=wakatime&logoColor=black&logoSize=auto&labelColor=white"></a>
-<a href="" target="_blank"><img alt="Total Patches" src="https://img.shields.io/badge/Total_Patches-434-black?style=flat"></a>
+<a href="" target="_blank"><img alt="WakaTime" src="https://img.shields.io/badge/Coding_Time-87hrs_0mins-blue?style=flat&logo=wakatime&logoColor=black&logoSize=auto&labelColor=white"></a>
+<a href="" target="_blank"><img alt="Total Patches" src="https://img.shields.io/badge/Total_Patches-436-black?style=flat"></a>
 <a href="" target="_blank"><img alt="Total Lines of Code" src="https://tokei.rs/b1/github/SwingTheVine/Wplace-BlueMarble?category=code"></a>
 <a href="" target="_blank"><img alt="Total Comments" src="https://tokei.rs/b1/github/SwingTheVine/Wplace-BlueMarble?category=comments"></a>
 <a href="" target="_blank"><img alt="Compression" src="https://img.shields.io/badge/Compression-73.47%25-blue"></a>
@@ -47,7 +47,8 @@
   Welcome to Blue Marble! Blue Marble is a userscript for the website <a href="https://wplace.live/" target="_blank">wplace.live</a>. If you like this userscript, please ⭐ the repository!
 
   <h3>Installation Instructions</h3>
-  <a href="" target="_blank"><img alt="Supported Browsers" src="https://img.shields.io/badge/Browsers-Chrome%20%7C%20Firefox%20%7C%20Safari%20%7C%20IE-orange?style=flat"></a>
+  <a href="" target="_blank"><img alt="Supported Browsers" src="https://img.shields.io/badge/Supported%20Browsers-Chrome%20%7C%20Some%20Firefox%20%7C%20Safari%20%7C%20Edge-orange?style=flat"></a>
+  <a href="" target="_blank"><img alt="Unupported Browsers" src="https://img.shields.io/badge/Unsupported%20Browsers-Brave%20%7C%20Some%20FireFox%20%7C%20Kiwi-red?style=flat"></a>
   <p>
     Blue Marble has been verified to work on mobile devices. Blue Marble was designed on Chrome, but Blue Marble might work on "unsupported" browsers not listed above.
     <br>

@@ -6,7 +6,7 @@ import Overlay from './Overlay.js';
 import Observers from './observers.js';
 import ApiManager from './apiManager.js';
 import TemplateManager from './templateManager.js';
-import { consoleLog } from './utils.js';
+import { consoleLog, consoleWarn } from './utils.js';
 
 const name = GM_info.script.name.toString(); // Name of userscript
 const version = GM_info.script.version.toString(); // Version of userscript
@@ -50,7 +50,20 @@ inject(() => {
 
     // The modified blob won't have an endpoint, so we ignore any message without one.
     if ((source == 'blue-marble') && !!blobID && !!blobData && !endpoint) {
-      fetchedBlobQueue.get(blobID)(blobData);
+
+      const callback = fetchedBlobQueue.get(blobID); // Retrieves the blob based on the UUID
+
+      // If the blobID is a valid function...
+      if (typeof callback === 'function') {
+
+        callback(blobData); // ...Retrieve the blob data from the blobID function
+      } else {
+        // ...else the blobID is unexpected. We don't know what it is, but we know for sure it is not a blob. This means we ignore it.
+
+        consoleWarn(`%c${name}%c: Attempted to retrieve a blob (%s) from queue, but the blobID was not a function! Skipping...`, consoleStyle, '', blobID);
+      }
+      
+      fetchedBlobQueue.delete(blobID); // Delete the blob from the queue, because we don't need to process it again
     }
   });
 
@@ -110,9 +123,6 @@ inject(() => {
             status: cloned.status,
             statusText: cloned.statusText
           }));
-
-          // Removes the processed blob from the queue
-          fetchedBlobQueue.delete(blobUUID);
 
           // Since this code does not run in the userscript, we can't use consoleLog().
           console.log(`%c${name}%c: ${fetchedBlobQueue.size} Processed blob "${blobUUID}"`, consoleStyle, '');
