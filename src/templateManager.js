@@ -240,7 +240,7 @@ export default class TemplateManager {
     for (const templateBitmap of templateBlobs) {
       console.log(`Template Blob is ${typeof templateBitmap}`);
       console.log(templateBitmap);
-      context.drawImage(templateBitmap, tileCoords[0]*this.drawMult, tileCoords[1]*this.drawMult);
+      context.drawImage(templateBitmap, 0, 0);
     }
 
     return await canvas.convertToBlob({ type: 'image/png' });

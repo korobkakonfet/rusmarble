@@ -92,6 +92,11 @@ export default class Template {
         context.clearRect(0, 0, canvasWidth, canvasHeight); // Clear any previous drawing (only runs when canvas size does not change)
         context.drawImage(bitmap, pixelX - this.coords[2], pixelY - this.coords[3], drawSizeX, drawSizeY, (pixelX % this.tileSize) * shreadSize, (pixelY % this.tileSize) * shreadSize, drawSizeX * shreadSize, drawSizeY * shreadSize); // Coordinates and size of draw area of source image, then canvas
 
+        // const final = await canvas.convertToBlob({ type: 'image/png' });
+        // const url = URL.createObjectURL(final); // Creates a blob URL
+        // window.open(url, '_blank'); // Opens a new tab with blob
+        // setTimeout(() => URL.revokeObjectURL(url), 60000); // Destroys the blob 1 minute later
+
         const imageData = context.getImageData(0, 0, canvasWidth, canvasHeight); // Data of the image on the canvas
 
         for (let y = 0; y < canvasHeight; y++) {
