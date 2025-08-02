@@ -165,7 +165,7 @@ document.head.appendChild(stylesheetLink);
 // CONSTRUCTORS
 const observers = new Observers(); // Constructs a new Observers object
 const overlay = new Overlay(name, version); // Constructs a new Overlay object
-const templateManager = new TemplateManager(name, version); // Constructs a new TemplateManager object
+const templateManager = new TemplateManager(name, version, overlay); // Constructs a new TemplateManager object
 const apiManager = new ApiManager(templateManager); // Constructs a new ApiManager object
 
 overlay.setApiManager(apiManager); // Sets the API manager
@@ -201,12 +201,12 @@ function buildOverlayMain() {
     .addHr().buildElement()
 
     .addDiv({'id': 'bm-contain-automation'})
-      .addCheckbox({'id': 'bm-input-stealth', 'textContent': 'Stealth', 'checked': true}).buildElement()
-      .addButtonHelp({'title': 'Waits for the website to make requests, instead of sending requests.'}).buildElement()
-      .addBr().buildElement()
-      .addCheckbox({'id': 'bm-input-possessed', 'textContent': 'Possessed', 'checked': true}).buildElement()
-      .addButtonHelp({'title': 'Controls the website as if it were possessed.'}).buildElement()
-      .addBr().buildElement()
+      // .addCheckbox({'id': 'bm-input-stealth', 'textContent': 'Stealth', 'checked': true}).buildElement()
+      // .addButtonHelp({'title': 'Waits for the website to make requests, instead of sending requests.'}).buildElement()
+      // .addBr().buildElement()
+      // .addCheckbox({'id': 'bm-input-possessed', 'textContent': 'Possessed', 'checked': true}).buildElement()
+      // .addButtonHelp({'title': 'Controls the website as if it were possessed.'}).buildElement()
+      // .addBr().buildElement()
       .addDiv({'id': 'bm-contain-coords'})
         .addButton({'id': 'bm-button-coords', 'className': 'bm-help', 'style': 'margin-top: 0;', 'innerHTML': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 6"><circle cx="2" cy="2" r="2"></circle><path d="M2 6 L3.7 3 L0.3 3 Z"></path><circle cx="2" cy="2" r="0.7" fill="white"></circle></svg></svg>'},
           (instance, button) => {
@@ -256,15 +256,15 @@ function buildOverlayMain() {
             instance.handleDisplayStatus(`Drew to canvas!`);
           }
         }).buildElement()
-        .addButton({'id': 'bm-button-disable', 'textContent': 'Disable'}).buildElement()
+        // .addButton({'id': 'bm-button-disable', 'textContent': 'Disable'}).buildElement()
       .buildElement()
       .addTextarea({'id': overlay.outputStatusId, 'placeholder': `Status: Sleeping...\nVersion: ${version}`, 'readOnly': true}).buildElement()
       .addDiv({'id': 'bm-contain-buttons-action'})
         .addDiv()
-          .addButton({'id': 'bm-button-teleport', 'className': 'bm-help', 'textContent': '✈'}).buildElement()
-          .addButton({'id': 'bm-button-favorite', 'className': 'bm-help', 'innerHTML': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><polygon points="10,2 12,7.5 18,7.5 13.5,11.5 15.5,18 10,14 4.5,18 6.5,11.5 2,7.5 8,7.5" fill="white"></polygon></svg>'}).buildElement()
-          .addButton({'id': 'bm-button-templates', 'className': 'bm-help', 'innerHTML': '🖌'}).buildElement()
-          .addButton({'id': 'bm-button-convert', 'className': 'bm-help', 'innerHTML': '🎨'}, 
+          // .addButton({'id': 'bm-button-teleport', 'className': 'bm-help', 'textContent': '✈'}).buildElement()
+          // .addButton({'id': 'bm-button-favorite', 'className': 'bm-help', 'innerHTML': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><polygon points="10,2 12,7.5 18,7.5 13.5,11.5 15.5,18 10,14 4.5,18 6.5,11.5 2,7.5 8,7.5" fill="white"></polygon></svg>'}).buildElement()
+          // .addButton({'id': 'bm-button-templates', 'className': 'bm-help', 'innerHTML': '🖌'}).buildElement()
+          .addButton({'id': 'bm-button-convert', 'className': 'bm-help', 'innerHTML': '🎨', 'title': 'Template Color Converter'}, 
             (instance, button) => {
             button.addEventListener('click', () => {
               window.open('https://pepoafonso.github.io/color_converter_wplace/', '_blank', 'noopener noreferrer');

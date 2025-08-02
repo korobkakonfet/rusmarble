@@ -37,11 +37,12 @@ export default class TemplateManager {
   /** The constructor for the {@link TemplateManager} class.
    * @since 0.55.8
    */
-  constructor(name, version) {
+  constructor(name, version, overlay) {
 
     // Meta
     this.name = name; // Name of userscript
     this.version = version; // Version of userscript
+    this.overlay = overlay; // The main instance of the Overlay class
     this.templatesVersion = '1.0.0'; // Version of JSON schema
     this.userID = null; // The ID of the current user
     this.encodingBase = '!#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~'; // Characters to use for encoding/decoding
@@ -116,18 +117,19 @@ export default class TemplateManager {
    * @param {File} blob - The file blob to create a template from
    * @param {string} name - The display name of the template
    * @param {Array<number, number, number, number>} coords - The coordinates of the top left corner of the template
+   * @since 0.65.77
    */
   async createTemplate(blob, name, coords) {
 
     // Creates the JSON object if it does not already exist
     if (!this.templatesJSON) {this.templatesJSON = await this.createJSON(); console.log(`Creating JSON...`);}
 
-    console.log(`Awaiting creation...`);
+    this.overlay.handleDisplayStatus(`Creating template at ${coords.join(', ')}...`);
 
     // Creates a new template instance
     const template = new Template({
       displayName: name,
-      sortID: Object.keys(this.templatesJSON.templates).length || 0,
+      sortID: 0, // Object.keys(this.templatesJSON.templates).length || 0, // Uncomment this to enable multiple templates (1/2)
       authorID: numberToEncoded(this.userID || 0, this.encodingBase),
       file: blob,
       coords: coords
@@ -142,7 +144,10 @@ export default class TemplateManager {
       "tiles": template.chunked
     };
 
+    this.templatesArray = []; // Remove this to enable multiple templates (2/2)
     this.templatesArray.push(template); // Pushes the Template object instance to the Template Array
+
+    this.overlay.handleDisplayStatus(`Template created at ${coords.join(', ')}!`);
 
     console.log(Object.keys(this.templatesJSON.templates).length);
     console.log(this.templatesJSON);
@@ -162,9 +167,20 @@ export default class TemplateManager {
 
   }
 
+  /** Disables the template from view
+   */
+  async disableTemplate() {
+
+    // Creates the JSON object if it does not already exist
+    if (!this.templatesJSON) {this.templatesJSON = await this.createJSON(); console.log(`Creating JSON...`);}
+
+
+  }
+
   /** Draws all templates on that tile
    * @param {File} tileBlob - The pixels that are placed on a tile
    * @param {[number, number]} tileCoords - The tile coordinates [x, y]
+   * @since 0.65.77
    */
   async drawTemplateOnTile(tileBlob, tileCoords) {
 
@@ -200,6 +216,10 @@ export default class TemplateManager {
     .filter(Boolean);
 
     console.log(templateBlobs);
+
+    if (templateBlobs.length > 0) {
+      this.overlay.handleDisplayStatus(`Displaying ${templateBlobs.length} template${templateBlobs.length == 1 ? '' : 's'}.`);
+    }
     
     const tileBitmap = await createImageBitmap(tileBlob);
 
@@ -242,115 +262,5 @@ export default class TemplateManager {
    */
   #parseOSU() {
 
-  }
-
-  /** Sets the template to the image passed in.
-   * @param {File} file - The file of the template image.
-   * @since 0.55.8
-   * @deprecated Since 0.65.43
-   */
-  setTemplateImage(file) {
-
-    this.template = file;
-    this.templateState = 'file';
-
-    // const url = URL.createObjectURL(file); // Creates a blob URL
-    // window.open(url, '_blank'); // Opens a new tab with blob
-    // setTimeout(() => URL.revokeObjectURL(url), 10000); // Destroys the blob 10 seconds later
-  }
-
-  /** Draws the template on the tile.
-   * @param {File|Blob} tileBlob - The blob of the tile
-   * @param {Array<number, number, number, number>} [coordsTilePixel=[0,0,0,0]] - A number array of the four coordinates
-   * @returns {File|Blob} A image/png blob file
-   * @since 0.63.59
-   * @deprecated Since 0.65.43
-   */
-  async drawTemplate(tileBlob, coordsTilePixel=[0, 0, 0, 0]) {
-
-    // Only continue if template state is NOT 'file' NOR 'template'
-    if (!((this.templateState == 'file') || (this.templateState == 'template'))) {return;}
-
-    const tileSize = 1000; // Pixels in a tile
-    const drawMult = 3; // Multiplier of draw size
-    const drawSize = tileSize * drawMult; // Draw multiplier
-
-    coordsTilePixel = !!coordsTilePixel?.length ? coordsTilePixel : [0, 0, 0, 0]; // Set to default if [] passed in
-    
-    console.log(this.template);
-    // If the template has already been drawn, don't draw it again
-    const templateBitmap = this.templateState == 'template' ? this.template : await createImageBitmap(await this.shreadBlob(this.template));
-    const tileBitmap = await createImageBitmap(tileBlob);
-
-    const canvas = new OffscreenCanvas(drawSize, drawSize);
-    const context = canvas.getContext('2d');
-
-    context.imageSmoothingEnabled = false; // Nearest neighbor
-
-    // Tells the canvas to ignore anything outside of this area
-    context.beginPath();
-    context.rect(0, 0, drawSize, drawSize);
-    context.clip();
-
-    context.clearRect(0, 0, drawSize, drawSize); // Draws transparent background
-    context.drawImage(tileBitmap, 0, 0, drawSize, drawSize);
-    context.drawImage(templateBitmap, coordsTilePixel[2]*3, coordsTilePixel[3]*3);
-
-    const final = await canvas.convertToBlob({ type: 'image/png' });
-
-    // If the template is not drawn yet...
-    if (this.templateState != 'template') {
-      // (99% chance templateState is 'file')
-      this.template = templateBitmap; // Store the drawn template
-      this.templateState = 'template'; // Indicate that the template has been drawn
-
-      // const url = URL.createObjectURL(final); // Creates a blob URL
-      // window.open(url, '_blank'); // Opens a new tab with blob
-      // setTimeout(() => URL.revokeObjectURL(url), 10000); // Destroys the blob 10 seconds later
-    }
-
-    return final;
-  }
-
-  /** Shreads the blob so that every pixel is surrounded by adjacent transparent pixels
-   * @param {Blob|File} blob - The blob to manipulate
-   * @param {number} [shrinkFactor=3] - An odd number that will place each pixel in the center. Even numbers will be increased by 1
-   * @param {string} [fileType='image/png'] - The File type to output as. PNG is one of the few transparent types.
-   * @returns {Promise<File>} - A Promise that resolved to a image/png file blob
-   * @since 0.63.37
-   */
-  async shreadBlob(blob, shreadSize = 3, fileType = 'image/png') {
-    
-    const bitmap = await createImageBitmap(blob); // Creates a bitmap image
-
-    shreadSize |= 1; // Converts shreadSize to always be odd by forcing the right-most bit to be 1.
-
-    const width = bitmap.width * Math.round(shreadSize); // Width of the canvas based on shread size times blob
-    const height = bitmap.height * Math.round(shreadSize); // Height of the canvas based on shread size times blob
-
-    const canvas = document.createElement('canvas'); // Creates a canvas
-    canvas.width = width;
-    canvas.height = height;
-    const context = canvas.getContext('2d'); // Gets the context of the canvas
-    context.imageSmoothingEnabled = false; // Nearest Neighbor scaling
-
-    context.drawImage(bitmap, 0, 0, width, height); // Fills the canvas with the blob
-    
-    const imageData = context.getImageData(0, 0, width, height); // Data of the image on the canvas
-
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        // For every pixel...
-
-        // ... Make it transparent unless it is the "center"
-        if ((x % shreadSize !== 1) || (y % shreadSize !== 1)) {
-          const pixelIndex = (y * width + x) * 4; // Find the pixel index in an array where every 4 indexes are 1 pixel
-          imageData.data[pixelIndex + 3] = 0; // Make the pixel transparent on the alpha channel
-        }
-      }
-    }
-
-    context.putImageData(imageData, 0, 0);
-    return new Promise((resolve) => {canvas.toBlob(resolve, fileType);});
   }
 }

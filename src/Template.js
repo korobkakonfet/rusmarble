@@ -77,8 +77,8 @@ export default class Template {
         console.log(`Draw Size X: ${drawSizeX}\nDraw Size Y: ${drawSizeY}`);
 
         // Change the canvas size and wipe the canvas
-        const canvasWidth = (drawSizeX * shreadSize) + (this.coords[2] * shreadSize);
-        const canvasHeight = (drawSizeY * shreadSize) + (this.coords[3] * shreadSize);
+        const canvasWidth = (drawSizeX * shreadSize) + ((pixelX % this.tileSize) * shreadSize);
+        const canvasHeight = (drawSizeY * shreadSize) + ((pixelY % this.tileSize) * shreadSize);
         canvas.width = canvasWidth;
         canvas.height = canvasHeight;
 
