@@ -62,7 +62,7 @@ inject(() => {
 
         consoleWarn(`%c${name}%c: Attempted to retrieve a blob (%s) from queue, but the blobID was not a function! Skipping...`, consoleStyle, '', blobID);
       }
-      
+
       fetchedBlobQueue.delete(blobID); // Delete the blob from the queue, because we don't need to process it again
     }
   });
@@ -186,7 +186,48 @@ overlay.handleDrag('#bm-overlay', '#bm-bar-drag'); // Creates dragging capabilit
 
 apiManager.spontaneousResponseListener(overlay); // Reads spontaneous fetch responces
 
+observeBlack(); // Observes the black palette color
+
 consoleLog(`%c${name}%c (${version}) userscript has loaded!`, 'color: cornflowerblue;', '');
+
+/** Observe the black color, and add the "Move" button.
+ * @since 0.66.3
+ */
+function observeBlack() {
+  const observer = new MutationObserver((mutations, observer) => {
+
+    const black = document.querySelector('#color-1'); // Attempt to retrieve the black color element for anchoring
+
+    if (!black) {return;} // Black color does not exist yet. Kills iteself
+
+    let move = document.querySelector('#bm-button-move'); // Tries to find the move button
+
+    // If the move button does not exist, we make a new one
+    if (!move) {
+      move = document.createElement('button');
+      move.id = 'bm-button-move';
+      move.textContent = 'Move ↑';
+      move.className = 'btn btn-soft';
+      move.onclick = function() {
+        const roundedBox = this.parentNode.parentNode.parentNode.parentNode; // Obtains the rounded box
+        const shouldMoveUp = (this.textContent == 'Move ↑');
+        roundedBox.parentNode.className = roundedBox.parentNode.className.replace(shouldMoveUp ? 'bottom' : 'top', shouldMoveUp ? 'top' : 'bottom'); // Moves the rounded box to the top
+        roundedBox.style.borderTopLeftRadius = shouldMoveUp ? '0px' : 'var(--radius-box)';
+        roundedBox.style.borderTopRightRadius = shouldMoveUp ? '0px' : 'var(--radius-box)';
+        roundedBox.style.borderBottomLeftRadius = shouldMoveUp ? 'var(--radius-box)' : '0px';
+        roundedBox.style.borderBottomRightRadius = shouldMoveUp ? 'var(--radius-box)' : '0px';
+        this.textContent = shouldMoveUp ? 'Move ↓' : 'Move ↑';
+      }
+
+      // Attempts to find the "Paint Pixel" element for anchoring
+      const paintPixel = black.parentNode.parentNode.parentNode.parentNode.querySelector('h2');
+
+      paintPixel.parentNode.appendChild(move); // Adds the move button
+    }
+  });
+
+  observer.observe(document.body, { childList: true, subtree: true });
+}
 
 /** Deploys the overlay to the page.
  * Parent/child relationships in the DOM structure below are indicated by indentation.
