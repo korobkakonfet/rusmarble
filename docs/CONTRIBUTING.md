@@ -52,7 +52,7 @@
 <h2>What Can I Contribute?</h2>
 <h3>Programming</h3>
   <p>
-    Most of the work to be done in this userscript is related to programming. It is helpful to have a background in programming, but not required. If you are looking to learn JavaScript and its syntax, check out this <a href="https://roadmap.sh/javascript" target="_blank">roadmap for learning Java</a>. We strongly recommend that you understand functions, methods, classes, and Object-Oriented-Programming if you plan to implement a brand new feature. More technical knowledge like method chaining and lambda expressions are useful but not required.
+    Most of the work to be done in this userscript is related to programming. It is helpful to have a background in programming, but not required. If you are looking to learn JavaScript and its syntax, check out this <a href="https://roadmap.sh/javascript" target="_blank">roadmap for learning JavaScript</a>. We strongly recommend that you understand functions, methods, classes, and Object-Oriented-Programming if you plan to implement a brand new feature. More technical knowledge like method chaining and lambda expressions are useful but not required.
   </p>
 <h3>Translation</h3>
 <p>
@@ -65,7 +65,7 @@
 
 <h2>What Can I Not Do?</h2>
 <p>
-  Please do not use <a href="https://github.com/SwingTheVine/QSAND-Minecraft/issues target="_blank"">GitHub Issues</a> for asking support questions. We use the GitHub issue tracker for bug reports and feature requests. If you are having trouble and need help, ask on our <a href="https://discord.gg/tpeBPy46hf" target="_blank">Discord</a>. <b>However, you <i>should</i> make a feature request on our issue tracker before starting work on your contribution.</b> Nothing sucks more than working hard on a high-quality contribution just for it to be rejected because it does not align with the mission of the mod. Ask first!
+  Please do not use <a href="https://github.com/SwingTheVine/Wplace-BlueMarble/issues" target="_blank">GitHub Issues</a> for asking support questions (e.g. "How do I install this?" or "What does cssMangler do?"). We use the GitHub issue tracker for bug reports and feature requests. If you are having trouble and need help, ask on our <a href="https://discord.gg/tpeBPy46hf" target="_blank">Discord</a>. <b>However, you <i>should</i> make a feature request on our issue tracker before starting work on your contribution.</b> Nothing sucks more than working hard on a high-quality contribution just for it to be rejected because it does not align with the mission of the mod. Ask first!
 </p>
 <p>
   Please contribute in good faith. We will reject pull requests with bad code, comments, or pull requests that damage the mod. 
@@ -73,13 +73,12 @@
 
 <h2>Guidelines</h2>
 <ul>
-  <li><b>We will not accept pull requests that update to a later version of Minecraft</b>. We know the mod is outdated and are working as fast as possible to update it. If you would like to contribute to updating the mod to a later version of Minecraft, providing us with any "before and after" code for what changed between Minecraft versions helps a ton.</li>
   <li>Always submit a <a href="https://github.com/SwingTheVine/QSAND-Minecraft/issues/new/choose" target="_blank">feature request</a> and receive authorization to work on your contribution <i>before</i> you start working on your contribution. This will save you time if we end up rejecting the contribution. Small contributions (like fixing spelling errors) don't need a feature request.</li>
   <li>Follow the <a href="https://github.com/SwingTheVine/QSAND-Minecraft/blob/1.8.9/docs/CODE_OF_CONDUCT.md" target="_blank">Code of Conduct</a>. This includes both your contributions and the way you interact with this community.</li>
   <li>Always write a clear message that explains the changes. "Added some things" does <i>not</i> explain what was changed.</li>
-  <li>Different feature, different pull request. If you submit a pull request for blocks and localization together, and we want to reject the localization, your blocks are rejected along with the localization since they are the same pull request. They should be separate pull requests since they are separate features.</li>
-  <li>The file structure must be maintained (unless you were authorized to change it). It is based on the file structure Minecraft uses with some minor modifications. For example, blocks go in the blocks folder, and fluid blocks go in the fluid folder.</li>
-  <li>The naming structure must be maintained (unless you were authorized to change it). For example, a candy slime should be called "EntitySlimeCandy." Most things are named to be grouped based on what they share in common first. In the previous example, the slime class is first an "entity," then a "slime" of the type "candy."</li>
+  <li>Different feature, different pull request. If you submit a pull request for templates and localization (i18n) together, and we want to reject the localization, your template code is rejected along with the localization since they are the same pull request. They should be separate pull requests since they are separate features.</li>
+  <li>The file structure must be maintained (unless you were authorized to change it). For example, all code should go in `src/` and all code affecting the overlay should go in the Overlay class file.</li>
+  <li>The naming structure must be maintained (unless you were authorized to change it). For example, the template image variable could be called "templateDataImage." Most things are named to be grouped based on what they share in common first. In the previous example, the variable is first related to a "template," then "data" which is an "image." This is because the variable stores an image that comes from the data of a template. The main reason for naming things this way is to aid you when you try to find the name of something. "I need the image of a template, so the variable probably starts with 'template'".</li>
   <li>Your code must be commented, explaining what everything does. We may reject the pull request if we can't understand what the code does.</li>
 </ul>
 
