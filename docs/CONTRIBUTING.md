@@ -33,15 +33,9 @@
 </table>
 
 <h1>Contributing</h1>
-<a href="https://github.com/SwingTheVine/QSAND-Minecraft/blob/1.8.9/docs/LICENSE.txt"><img alt="Software License: GPL-3.0" src="https://img.shields.io/badge/Software_License-GPL--3.0-brightgreen?style=flat"></a>
-<a href="https://github.com/SwingTheVine/QSAND-Minecraft/blob/1.8.9/docs/LICENSE-MEDIA.txt"><img alt="Media License: CC-BY-SA-4.0" src="https://img.shields.io/badge/Media_License-CC--BY--SA--4.0-orange?style=flat"></a>
+<a href="https://github.com/SwingTheVine/Wplace-BlueMarble/blob/main/LICENSE.txt" target="_blank"><img alt="Software License: MPL-2.0" src="https://img.shields.io/badge/Software_License-MPL--2.0-slateblue?style=flat"></a>
 <p>
-  Thank you for wanting to contribute to the Minecraft mod "QuickSand And Numerous Dungeons"! It means a lot to me that someone likes my project enough to want to help it grow. If you haven't already done so, consider joining our Discord. You can ask questions about the mod there and receive feedback.
-</p>
-
-<h2>Resources</h2>
-<p>
-  Need help getting started? Check out the list of resources in <a href="https://github.com/SwingTheVine/QSAND-Minecraft/blob/1.8.9/docs/README.md#resources" target="_blank">README.md</a> for guides on how the Minecraft code works. This list contains guides for creating (usually from scratch) significant aspects related to this mod. Unfortunately, most archived guides only give you clues on how to get the feature operational and don't produce a functioning feature by themselves. The best complete guide is the code in this mod. The code is commented (<img alt="Lines of comments" src="https://tokei.rs/b1/github/SwingTheVine/QSAND-Minecraft?category=comments">) and verified to function correctly.
+  Thank you for wanting to contribute to the userscript "Blue Marble"! It means a lot to me that someone likes my project enough to want to help it grow. If you haven't already done so, consider joining our Discord. You can ask questions about the mod there and receive feedback.
 </p>
 
 <h2>Why Follow Guidelines?</h2>
@@ -58,11 +52,15 @@
 <h2>What Can I Contribute?</h2>
 <h3>Programming</h3>
   <p>
-    Most of the work to be done in this Minecraft mod is related to programming. It is helpful to have a background in programming, but not required. If you are looking to learn Java and its syntax, check out this <a href="https://roadmap.sh/java" target="_blank">roadmap for learning Java</a>. We strongly recommend that you understand functions, methods, classes, and Object-Oriented-Programming if you plan to implement a brand new feature. More technical knowledge (like a lambda expression) is useful but not required.
+    Most of the work to be done in this userscript is related to programming. It is helpful to have a background in programming, but not required. If you are looking to learn JavaScript and its syntax, check out this <a href="https://roadmap.sh/javascript" target="_blank">roadmap for learning Java</a>. We strongly recommend that you understand functions, methods, classes, and Object-Oriented-Programming if you plan to implement a brand new feature. More technical knowledge like method chaining and lambda expressions are useful but not required.
   </p>
+<h3>Translation</h3>
+<p>
+  While typically overlooked, translating is a powerful way to contribute to a project. If you can write, there is something you can contribute! From minor grammar mistakes, to translating an entire language, all help is appreciated.
+</p>
 <h3>Everything Else</h3>
   <p>
-    Although Minecraft mods are oriented around coding, there are many ways to contribute! From improving the Wiki to making tutorials, you can contribute in many ways that don't require programming skills. For example, if you have an idea for a feature, submit it! Someone might see it, think it is cool, and implement it.
+    Although userscripts are oriented around coding, there are many ways to contribute! From improving the Wiki to making tutorials, you can contribute in many ways that don't require programming skills. For example, if you have an idea for a feature, submit it! Someone might see it, think it is cool, and implement it.
   </p>
 
 <h2>What Can I Not Do?</h2>
