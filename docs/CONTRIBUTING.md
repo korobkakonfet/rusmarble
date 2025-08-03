@@ -38,6 +38,15 @@
   Thank you for wanting to contribute to the userscript "Blue Marble"! It means a lot to me that someone likes my project enough to want to help it grow. If you haven't already done so, consider joining our Discord. You can ask questions about the mod there and receive feedback.
 </p>
 
+<h2>Summary</h2>
+<p>
+  <ul>
+    <li>I don't want to waste your time, so double check with me before starting a big change like adding a new feature. For example, imagine you spend 50 hours making a bot that automatically places pixels, then your pull request was rejected because a bot that automatically places pixles does not align with the "Mission" of Blue Marble. That would be sad :(</li>
+    <li>Follow the style of the project. E.g., if all overlays are made by calling `Overlay()`, and you want to make a new overlay, you should probably call `Overlay()` as well.</li>
+    <li>Low quality code will be rejected.</li>
+  </ul>
+</p>
+
 <h2>Why Follow Guidelines?</h2>
 <p>
   Following the guidelines on this page helps everyone. Writing code that follows the guidelines:
