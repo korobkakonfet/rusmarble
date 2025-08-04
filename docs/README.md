@@ -7,6 +7,9 @@
     <td>&emsp;<a href="#overview">Overview</a></td>
   </tr>
   <tr>
+    <td>&emsp;&emsp;<a href="#installation-instructions">Installation Instructions</a></td>
+  </tr>
+  <tr>
     <td>&emsp;&emsp;<a href="#script-settings">Script Settings</a></td>
   </tr>
   <tr>
@@ -20,6 +23,12 @@
   </tr>
   <tr>
     <td>&emsp;<a href="#faq">FAQ</a></td>
+  </tr>
+  <tr>
+    <td>&emsp;&emsp;<a href="#is-blue-marble-malware">Is Blue Marble malware?</a></td>
+  </tr>
+  <tr>
+    <td>&emsp;&emsp;<a href="#how-can-blue-marble-place-pixels-for-me">How can Blue Marble place pixels for me?</a></td>
   </tr>
   <tr>
     <td>&emsp;&emsp;<a href="#how-do-i-hide-the-overlay">How do I hide the overlay?</a></td>
