@@ -234,10 +234,130 @@ function observeBlack() {
  * @since 0.58.3
  */
 function buildOverlayMain() {
+  let isMinimized = false; // Estado do overlay (false = maximizado, true = minimizado)
+  
   overlay.addDiv({'id': 'bm-overlay', 'style': 'top: 10px; right: 75px;'})
     .addDiv({'id': 'bm-contain-header'})
       .addDiv({'id': 'bm-bar-drag'}).buildElement()
-      .addImg({'alt': 'Blue Marble Icon', 'src': 'https://raw.githubusercontent.com/SwingTheVine/Wplace-BlueMarble/main/dist/assets/Favicon.png'}).buildElement()
+      .addImg({'alt': 'Blue Marble Icon - Click to minimize/maximize', 'src': 'https://raw.githubusercontent.com/SwingTheVine/Wplace-BlueMarble/main/dist/assets/Favicon.png', 'style': 'cursor: pointer;'}, 
+        (instance, img) => {
+          img.addEventListener('click', () => {
+            isMinimized = !isMinimized;
+
+            const overlay = document.querySelector('#bm-overlay');
+            const header = document.querySelector('#bm-contain-header');
+            const dragBar = document.querySelector('#bm-bar-drag');
+            const coordsContainer = document.querySelector('#bm-contain-coords');
+            const coordsButton = document.querySelector('#bm-button-coords');
+            const enableButton = document.querySelector('#bm-button-enable');
+            const coordInputs = document.querySelectorAll('#bm-contain-coords input');
+            
+            // Restaura o tamanho original ao maximizar
+            if (!isMinimized) {
+              overlay.style.width = "auto";
+              overlay.style.maxWidth = "300px";
+              overlay.style.minWidth = "200px";
+              overlay.style.padding = "10px";
+            }
+            const elementsToToggle = [
+              '#bm-overlay h1',                    // Título "Blue Marble"
+              '#bm-contain-userinfo',              // Informações do usuário
+              '#bm-overlay hr',                    // Linhas separadoras
+              '#bm-contain-automation > *:not(#bm-contain-coords)', // Seção de automação exceto coordenadas
+              '#bm-input-file-template',           // Upload de arquivo
+              '#bm-contain-buttons-action',        // Botões de ação
+              `#${instance.outputStatusId}`        // Log de status (textarea)
+            ];
+            elementsToToggle.forEach(selector => {
+              const elements = document.querySelectorAll(selector);
+              elements.forEach(element => {
+                element.style.display = isMinimized ? 'none' : '';
+              });
+            });
+            // Controla especificamente o container de coordenadas e botões
+            if (isMinimized) {
+              // Configura o container de coords para mostrar apenas o botão (esconde inputs)
+              if (coordsContainer) {
+                coordsContainer.style.display = 'flex';
+                coordsContainer.style.flexDirection = 'row';
+                coordsContainer.style.justifyContent = 'center';
+                coordsContainer.style.alignItems = 'center';
+                coordsContainer.style.gap = '0.5em';
+                coordsContainer.style.margin = '0.5em 0';
+              }
+              if (coordsButton) {
+                coordsButton.style.display = '';
+              }
+              
+              // Move o botão Enable para o container de coordenadas para ficar na mesma linha
+              if (enableButton && coordsContainer) {
+                coordsContainer.appendChild(enableButton);
+                enableButton.style.display = '';
+                enableButton.style.marginTop = '0';
+              }
+              
+              coordInputs.forEach(input => {
+                input.style.display = 'none';
+              });
+              overlay.style.padding = '5px';
+              header.style.textAlign = 'center';
+              header.style.margin = '0';
+              header.style.marginBottom = '0';
+              if (dragBar) {
+                dragBar.style.display = '';
+                dragBar.style.marginBottom = '0.25em';
+              }
+            } else {
+              // Restaura o layout normal
+              if (coordsContainer) {
+                coordsContainer.style.display = '';
+                coordsContainer.style.flexDirection = '';
+                coordsContainer.style.justifyContent = '';
+                coordsContainer.style.alignItems = '';
+                coordsContainer.style.gap = '';
+                coordsContainer.style.textAlign = '';
+                coordsContainer.style.margin = '';
+              }
+              if (coordsButton) {
+                coordsButton.style.display = '';
+              }
+              
+              // Move o botão Enable de volta para seu container original
+              if (enableButton) {
+                const enableContainer = document.querySelector('#bm-contain-buttons-template');
+                if (enableContainer) {
+                  enableContainer.appendChild(enableButton);
+                }
+                enableButton.style.display = '';
+                enableButton.style.marginTop = '';
+              }
+              
+              coordInputs.forEach(input => {
+                input.style.display = '';
+              });
+              overlay.style.padding = '10px';
+              header.style.textAlign = '';
+              header.style.margin = '';
+              header.style.marginBottom = '';
+              if (dragBar) {
+                dragBar.style.marginBottom = '0.5em';
+              }
+              // Remove dimensões fixas para permitir redimensionamento automático
+              overlay.style.width = '';
+              overlay.style.height = '';
+            }
+            // Atualiza o alt text do ícone para refletir o estado atual
+            img.alt = isMinimized ? 
+              'Blue Marble Icon - Minimized (Click to maximize)' : 
+              'Blue Marble Icon - Maximized (Click to minimize)';
+            // Atualiza a mensagem de status apenas quando maximizado (para não aparecer quando minimizado)
+            if (!isMinimized) {
+              const statusMessage = 'Overlay maximizado';
+              instance.handleDisplayStatus(statusMessage);
+            }
+          });
+        }
+      ).buildElement()
       .addHeader(1, {'textContent': name}).buildElement()
     .buildElement()
 
