@@ -156,6 +156,12 @@
 
 <h2>FAQ</h2>
 <p>
+  <h3>Is Blue Marble malware?</h3>
+  <p><b>A:</b> Blue Marble does not contain malicious code. The Blue Marble code can be found in the <code>src/</code> folder. If you worry about Blue Marble being malware, you can read the code, then bundle it yourself using the tools in <code>build/</code>.
+
+  <h3>How can Blue Marble place pixels for me?</h3>
+  <p><b>A:</b> Unfortunatly, Blue Marble will not support the automatic placement of pixels without user interaction.
+
   <h3>How do I hide the overlay?</h3>
   <p><b>A:</b> Turn the userscript off and refresh the page.</p>
 
