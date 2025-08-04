@@ -67,8 +67,39 @@
         <li>Left-click "Manage Extension."</li>
         <li>Enable "Developer Mode."
         <br>
-        <img alt="Enable 'Developer Mode' and 'Allow user scripts'" src="https://github.com/SwingTheVine/Wplace-BlueMarble/blob/main/docs/assets/ComputerChromeInstall3.png"></li>
+        <img alt="Enable 'Developer Mode' and 'Allow user scripts'" src="https://github.com/SwingTheVine/Wplace-BlueMarble/blob/main/docs/assets/ComputerEdgeInstall3.png"></li>
         <li>Enable "Allow user scripts."</li>
+        <li>Download the <a href="https://github.com/SwingTheVine/Wplace-BlueMarble/releases" target="_blank" rel="noopener noreferrer">BlueMarble.user.js</a> file.</li>
+        <li>Open the TamperMonkey Dashboard.
+        <br>
+        <img alt="Enter the TamperMonkey 'Dashboard'" src="https://github.com/SwingTheVine/Wplace-BlueMarble/blob/main/docs/assets/ComputerEdgeInstall4.png"></li>
+        <li>Drag the <code>BlueMarble.user.js</code> file inside the dashboard of TamperMonkey.
+        <br>
+        <img alt="Drag the userscript into the dashboard" src="https://github.com/SwingTheVine/Wplace-BlueMarble/blob/main/docs/assets/ComputerEdgeInstall5.png"></li>
+        <li>Click the "Install" button to install Blue Marble.
+        <br>
+        <img alt="Click the 'Install' button" src="https://github.com/SwingTheVine/Wplace-BlueMarble/blob/main/docs/assets/ComputerChromeInstall6.png"></li>
+        <li>Enable Blue Marble inside the TamperMonkey dashboard.
+        <br>
+        <img alt="Enable Blue Marble" src="https://github.com/SwingTheVine/Wplace-BlueMarble/blob/main/docs/assets/ComputerChromeInstall7.png"></li>
+        <li>Refresh the <a href="https://wplace.live/" target="_blank" rel="noopener noreferrer">wplace.live</a> webpage.</li>
+      </ol>
+    </details>
+    <details>
+      <summary>
+        <b>Computer - Edge</b> <sup>(Click to Expand)</sup>
+      </summary>
+      <ol>
+        <li>Install the <a href="https://microsoftedge.microsoft.com/addons/detail/iikmkjmpaadaobahmlepeloendndfphd" target="_blank" rel="noopener noreferrer">TamperMonkey</a> plugin for Microsoft Edge.
+        <br>
+        <img alt="Click the 'Get' button" src="https://github.com/SwingTheVine/Wplace-BlueMarble/blob/main/docs/assets/ComputerEdgeInstall1.png"></li>
+        <li>Right-click the extention.
+        <br>
+        <img alt="Enter the 'Manage Extention' menu" src="https://github.com/SwingTheVine/Wplace-BlueMarble/blob/main/docs/assets/ComputerEdgeInstall2.png"></li>
+        <li>Left-click "Manage Extension."</li>
+        <li>Enable "Developer Mode."
+        <br>
+        <img alt="Enable 'Developer Mode'" src="https://github.com/SwingTheVine/Wplace-BlueMarble/blob/main/docs/assets/ComputerChromeInstall3.png"></li>
         <li>Download the <a href="https://github.com/SwingTheVine/Wplace-BlueMarble/releases" target="_blank" rel="noopener noreferrer">BlueMarble.user.js</a> file.</li>
         <li>Open the TamperMonkey Dashboard.
         <br>
