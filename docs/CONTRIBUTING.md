@@ -4,7 +4,7 @@
     <td valign="top" rowspan="99"><a href="https://discord.gg/tpeBPy46hf"><img alt="Discord Banner" src="https://discord.com/api/guilds/796124137042608188/widget.png?style=banner4"></a></td>
   </tr>
   <tr>
-    <td>&emsp;<a href="#resources">Resources</a></td>
+    <td>&emsp;<a href="#summary">Summary</a></td>
   </tr>
   <tr>
     <td>&emsp;<a href="#why-follow-guidelines">Why Follow Guidelines?</a></td>
@@ -14,6 +14,9 @@
   </tr>
   <tr>
     <td>&emsp;&emsp;<a href="#programming">Programming</a></td>
+  </tr>
+  <tr>
+    <td>&emsp;&emsp;<a href="#translation">Translation</a></td>
   </tr>
   <tr>
     <td>&emsp;&emsp;<a href="#everything-else">Everything Else</a></td>
@@ -26,6 +29,9 @@
   </tr>
   <tr>
     <td>&emsp;<a href="#our-mission">Our Mission</a></td>
+  </tr>
+  <tr>
+    <td>&emsp;<a href="#how-to-contribute">How to Contribute</a></td>
   </tr>
   <tr>
     <td>&emsp;<a href="#development-environment">Development Environment</a></td>
@@ -83,7 +89,7 @@
 <h2>Guidelines</h2>
 <ul>
   <li>Always submit a <a href="https://github.com/SwingTheVine/Wplace-BlueMarble/issues/new/choose" target="_blank" rel="noopener noreferrer">feature request</a> and receive authorization to work on your contribution <i>before</i> you start working on your contribution. This will save you time if we end up rejecting the contribution. Small contributions (like fixing spelling errors) don't need a feature request.</li>
-  <li>Follow the <a href="https://github.com/SwingTheVine/Wplace-BlueMarble/blob/main/docs/CODE_OF_CONDUCT.md" target="_blank" rel="noopener noreferrer">Code of Conduct</a>. This includes both your contributions and the way you interact with this community.</li>
+  <li>Follow the <a href="https://github.com/SwingTheVine/.github/blob/main/CODE_OF_CONDUCT.md" target="_blank" rel="noopener noreferrer">Code of Conduct</a>. This includes both your contributions and the way you interact with this community.</li>
   <li>Always write a clear message that explains the changes. "Added some things" does <i>not</i> explain what was changed.</li>
   <li>Different feature, different pull request. If you submit a pull request for templates and localization (i18n) together, and we want to reject the localization, your template code is rejected along with the localization since they are the same pull request. They should be separate pull requests since they are separate features.</li>
   <li>The file structure must be maintained (unless you were authorized to change it). For example, all code should go in `src/` and all code affecting the overlay should go in the Overlay class file.</li>
