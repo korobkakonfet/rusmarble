@@ -140,7 +140,7 @@
 
 <h2>How Versioning Works</h2>
 <p>
-  The versioning system for this userscript follows the <a href="https://semver.org/" target="_blank">Semantic Versioning rules</a>. As such, it is formatted in an <code>X.Y.Z</code> format where:
+  The versioning system for this userscript follows the <a href="https://semver.org/" target="_blank" rel="noopener noreferrer">Semantic Versioning rules</a>. As such, it is formatted in an <code>X.Y.Z</code> format where:
   <ul>
     <li>X is the major version. This is incremented when a non-backward compatible update is pushed. This is for new features that break previous versions of the userscript. Additionally, if wplace.live breaks the userscript, this will be incremented.</li>
     <li>Y is the minor version. This is incremented whenever I push to GitHub. This is for stable bug-fixes and new (non-breaking) features.</li>
