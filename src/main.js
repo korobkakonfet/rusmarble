@@ -2,6 +2,12 @@
  * @since 0.0.0
  * 
  * VERSION HISTORY:
+ * 0.72.0 - Performance and UI improvements
+ *   - Smooth drag performance with requestAnimationFrame and GPU acceleration
+ *   - Fixed file upload button text bug during UI state changes
+ *   - Added minimize/maximize animations with CSS transitions
+ *   - Hardware-accelerated transformations and smart DOM updates
+ * 
  * 0.71.0 - Added minimize/maximize functionality and pixel counting system
  *   Features added:
  *   - Interactive minimize/maximize overlay with click-to-toggle functionality
