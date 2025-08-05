@@ -140,6 +140,13 @@ export default class Template {
             if (x % shreadSize !== 1 || y % shreadSize !== 1) {
               const pixelIndex = (y * canvasWidth + x) * 4; // Find the pixel index in an array where every 4 indexes are 1 pixel
               imageData.data[pixelIndex + 3] = 0; // Make the pixel transparent on the alpha channel
+
+              // if (!!imageData.data[pixelIndex + 3]) {
+              //   imageData.data[pixelIndex + 3] = 50; // Alpha
+              //   imageData.data[pixelIndex] = 30; // Red
+              //   imageData.data[pixelIndex + 1] = 30; // Green
+              //   imageData.data[pixelIndex + 2] = 30; // Blue
+              // }
             }
           }
         }
