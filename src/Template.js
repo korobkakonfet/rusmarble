@@ -15,7 +15,6 @@
  * - Provides formatted pixel count information to user interface
  * 
  * @since 0.65.2
- * @version 1.1.0 - Added comprehensive pixel counting and statistical analysis system
  */
 export default class Template {
   /** The constructor for the {@link Template} class with enhanced pixel tracking.
@@ -44,7 +43,6 @@ export default class Template {
    * @param {number} [params.tileSize=1000] - The size of a tile in pixels (assumes square tiles)
    * @param {number} [params.pixelCount=0] - Total number of pixels in the template (calculated automatically during processing)
    * @since 0.65.2
-   * @version 1.1.0 - Added pixelCount property for comprehensive template statistics and analysis
    */
   constructor({
     displayName = 'My template',
@@ -99,7 +97,6 @@ export default class Template {
    * 
    * @returns {Object} Collection of template bitmaps organized by tile coordinates
    * @since 0.65.4
-   * @version 1.1.0 - Added comprehensive pixel counting functionality with detailed logging and statistics
    */
   async createTemplateTiles() {
     console.log('Template coordinates:', this.coords);

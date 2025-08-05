@@ -7,7 +7,7 @@ import { numberToEncoded } from "./utils";
  * It serves as the central coordinator between template instances and the user interface, providing
  * real-time feedback on template statistics including pixel counts and rendering status.
  * 
- * ENHANCED FEATURES (v1.1.0):
+ * ENHANCED FEATURES:
  * - Real-time pixel counting and statistics display
  * - Intelligent template filtering based on active tiles
  * - Internationalized number formatting for large pixel counts
@@ -28,7 +28,6 @@ import { numberToEncoded } from "./utils";
  * 4. User Interface: Provides formatted statistics for status messages
  * 
  * @since 0.55.8
- * @version 1.1.0 - Added comprehensive pixel counting system and enhanced statistical reporting
  * @example
  * // JSON structure for a template
  * {
@@ -234,7 +233,6 @@ export default class TemplateManager {
    * @param {File} tileBlob - The pixels that are placed on a tile
    * @param {[number, number]} tileCoords - The tile coordinates [x, y]
    * @since 0.65.77
-   * @version 1.1.0 - Added intelligent pixel counting and enhanced status reporting
    */
   async drawTemplateOnTile(tileBlob, tileCoords) {
 

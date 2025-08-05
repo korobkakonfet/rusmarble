@@ -2,7 +2,7 @@
  * @since 0.0.0
  * 
  * VERSION HISTORY:
- * v1.1.0 - Added minimize/maximize functionality and pixel counting system
+ * 0.71.0 - Added minimize/maximize functionality and pixel counting system
  *   Features added:
  *   - Interactive minimize/maximize overlay with click-to-toggle functionality
  *   - Fixed overlay dimensions: 60px width × 76px height in minimized state
@@ -261,7 +261,6 @@ function observeBlack() {
  * - Status message integration
  * 
  * @since 0.58.3
- * @version 1.1.0 - Added comprehensive minimize/maximize feature with fixed dimensions and enhanced UX
  */
 function buildOverlayMain() {
   let isMinimized = false; // Overlay state tracker (false = maximized, true = minimized)
@@ -293,7 +292,6 @@ function buildOverlayMain() {
            * - Provides user feedback through status messages
            * - Ensures proper cleanup of all style overrides when switching states
            * 
-           * @since 1.1.0 - Complete minimize/maximize implementation
            * @param {Event} event - The click event object (implicit)
            */
           img.addEventListener('click', () => {
