@@ -438,19 +438,14 @@ function buildOverlayMain() {
             }
             
             // ==================== ACCESSIBILITY AND USER FEEDBACK ====================
-            // Update accessibility information and provide user feedback
+            // Update accessibility information for screen readers and tooltips
             
             // Update alt text to reflect current state for screen readers and tooltips
             img.alt = isMinimized ? 
               'Blue Marble Icon - Minimized (Click to maximize)' : 
               'Blue Marble Icon - Maximized (Click to minimize)';
             
-            // Provide status feedback only when maximizing (avoid clutter in minimized state)
-            // This gives users confirmation that the action was successful
-            if (!isMinimized) {
-              const statusMessage = 'Overlay maximized - All controls restored';
-              instance.handleDisplayStatus(statusMessage);
-            }
+            // No status message needed - state change is visually obvious to users
           });
         }
       ).buildElement()
