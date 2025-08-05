@@ -41,6 +41,7 @@ jobs:
     outputs:
       TITLE: ${{ steps.get-commit-message.outputs.TITLE }}
       BODY: ${{ steps.get-commit-message.outputs.BODY }}
+      CURRENT_VERSION: ${{ steps.get_version.outputs.current_version }}
 
     steps:
       - name: Checkout code
@@ -168,5 +169,5 @@ jobs:
           git fetch origin
           git checkout origin/main -B main
           git merge --squash origin/auto
-          git commit -m "Release version; ${{ needs.build.outputs.TITLE }}" -m "${{ needs.build.outputs.BODY }}" || echo "No changes to commit"
+          git commit -m "v${{ needs.build.outputs.CURRENT_VERSION }}; ${{ needs.build.outputs.TITLE }}" -m "${{ needs.build.outputs.BODY }}" || echo "No changes to commit"
           git push origin main
