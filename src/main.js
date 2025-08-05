@@ -2,7 +2,7 @@
  * @since 0.0.0
  * 
  * VERSION HISTORY:
- * 0.72.0 - Performance and UI improvements
+ * 0.71.0 - Performance and UI improvements
  *   - Smooth drag performance with requestAnimationFrame and GPU acceleration
  *   - Fixed file upload button text bug during UI state changes
  *   - Added minimize/maximize animations with CSS transitions
