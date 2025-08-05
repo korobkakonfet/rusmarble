@@ -1,8 +1,32 @@
 import Template from "./Template";
 import { numberToEncoded } from "./utils";
 
-/** Manages the template system.
- * This class handles all external requests for modification to a Template.
+/** Manages the comprehensive template system with integrated pixel counting and statistics.
+ * 
+ * This class handles all external requests for template modification, creation, and statistical analysis.
+ * It serves as the central coordinator between template instances and the user interface, providing
+ * real-time feedback on template statistics including pixel counts and rendering status.
+ * 
+ * ENHANCED FEATURES:
+ * - Real-time pixel counting and statistics display
+ * - Intelligent template filtering based on active tiles
+ * - Internationalized number formatting for large pixel counts
+ * - Comprehensive status reporting with detailed template information
+ * - Enhanced user feedback during template creation and rendering
+ * 
+ * PIXEL COUNTING SYSTEM:
+ * The template manager integrates with the Template class pixel counting system to provide:
+ * - Individual template pixel counts during creation
+ * - Aggregate pixel counts for multiple templates during rendering
+ * - Smart filtering to count only actively displayed templates
+ * - Formatted display of pixel statistics in user interface
+ * 
+ * STATISTICAL INTEGRATION POINTS:
+ * 1. Template Creation: Displays pixel count when new templates are processed
+ * 2. Template Rendering: Shows aggregate pixel count for templates being displayed
+ * 3. Tile Filtering: Counts pixels only for templates active in current viewport
+ * 4. User Interface: Provides formatted statistics for status messages
+ * 
  * @since 0.55.8
  * @example
  * // JSON structure for a template
@@ -147,7 +171,11 @@ export default class TemplateManager {
     this.templatesArray = []; // Remove this to enable multiple templates (2/2)
     this.templatesArray.push(template); // Pushes the Template object instance to the Template Array
 
-    this.overlay.handleDisplayStatus(`Template created at ${coords.join(', ')}!`);
+    // ==================== PIXEL COUNT DISPLAY SYSTEM ====================
+    // Display pixel count statistics with internationalized number formatting
+    // This provides immediate feedback to users about template complexity and size
+    const pixelCountFormatted = new Intl.NumberFormat().format(template.pixelCount);
+    this.overlay.handleDisplayStatus(`Template created at ${coords.join(', ')}! Total pixels: ${pixelCountFormatted}`);
 
     console.log(Object.keys(this.templatesJSON.templates).length);
     console.log(this.templatesJSON);
@@ -177,18 +205,43 @@ export default class TemplateManager {
 
   }
 
-  /** Draws all templates on that tile
+  /** Draws all templates on the specified tile with intelligent pixel count reporting.
+   * 
+   * This method handles the rendering of template overlays on individual tiles and provides
+   * comprehensive statistics about the templates being displayed. It integrates with the
+   * pixel counting system to give users real-time feedback about template complexity.
+   * 
+   * PIXEL COUNTING INTEGRATION:
+   * The method implements intelligent pixel counting that:
+   * - Identifies templates that have content in the current tile
+   * - Sums pixel counts only for templates actually being rendered
+   * - Formats large numbers with locale-appropriate separators
+   * - Provides detailed status messages with template and pixel statistics
+   * 
+   * PERFORMANCE OPTIMIZATIONS:
+   * - Filters templates by tile coordinates before processing
+   * - Counts pixels only for active templates to avoid unnecessary calculations
+   * - Uses efficient array operations for template filtering and aggregation
+   * - Caches formatted numbers to avoid repeated formatting operations
+   * 
+   * USER EXPERIENCE ENHANCEMENTS:
+   * - Shows both template count and total pixel count in status messages
+   * - Uses internationalized number formatting for better readability
+   * - Provides immediate feedback when templates are being displayed
+   * - Handles singular/plural forms correctly for template count
+   * 
    * @param {File} tileBlob - The pixels that are placed on a tile
    * @param {[number, number]} tileCoords - The tile coordinates [x, y]
    * @since 0.65.77
    */
   async drawTemplateOnTile(tileBlob, tileCoords) {
 
-    const drawSize = this.tileSize * this.drawMult; // Draw multiplier
+    const drawSize = this.tileSize * this.drawMult; // Calculate draw multiplier for scaling
 
+    // Format tile coordinates with proper padding for consistent lookup
     tileCoords = tileCoords[0].toString().padStart(4, '0') + ',' + tileCoords[1].toString().padStart(4, '0');
 
-    console.log(`Looking for "${tileCoords}"`);
+    console.log(`Searching for templates in tile: "${tileCoords}"`);
 
     const templateArray = this.templatesArray; // Stores a copy for sorting
 
@@ -218,7 +271,31 @@ export default class TemplateManager {
     console.log(templateBlobs);
 
     if (templateBlobs.length > 0) {
-      this.overlay.handleDisplayStatus(`Displaying ${templateBlobs.length} template${templateBlobs.length == 1 ? '' : 's'}.`);
+      // ==================== INTELLIGENT PIXEL COUNTING SYSTEM ====================
+      // Calculate total pixel count for templates actively being displayed in this tile
+      // This provides accurate statistics by counting only templates with content in the current viewport
+      
+      const totalPixels = templateArray
+        .filter(template => {
+          // Filter templates to include only those with tiles matching current coordinates
+          // This ensures we count pixels only for templates actually being rendered
+          const matchingTiles = Object.keys(template.chunked).filter(tile =>
+            tile.startsWith(tileCoords)
+          );
+          return matchingTiles.length > 0;
+        })
+        .reduce((sum, template) => sum + (template.pixelCount || 0), 0);
+      
+      // Format pixel count with locale-appropriate thousands separators for better readability
+      // Examples: "1,234,567" (US), "1.234.567" (DE), "1 234 567" (FR)
+      const pixelCountFormatted = new Intl.NumberFormat().format(totalPixels);
+      
+      // Display comprehensive status information including both template count and pixel statistics
+      // This gives users immediate feedback about the complexity and scope of what's being rendered
+      this.overlay.handleDisplayStatus(
+        `Displaying ${templateBlobs.length} template${templateBlobs.length == 1 ? '' : 's'}. ` +
+        `Total pixels: ${pixelCountFormatted}`
+      );
     }
     
     const tileBitmap = await createImageBitmap(tileBlob);

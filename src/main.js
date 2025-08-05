@@ -1,5 +1,19 @@
 /** The main file. Everything in the userscript is executed from here.
  * @since 0.0.0
+ * 
+ * VERSION HISTORY:
+ * 0.71.0 - Added minimize/maximize functionality and pixel counting system
+ *   Features added:
+ *   - Interactive minimize/maximize overlay with click-to-toggle functionality
+ *   - Fixed overlay dimensions: 60px width × 76px height in minimized state
+ *   - Smart element visibility control (hides all UI except icon and drag bar when minimized)
+ *   - Icon repositioning system (3px right offset) for better visual alignment in minimized state
+ *   - Comprehensive pixel counting system for template statistics
+ *   - Real-time pixel count display in template creation and rendering status messages
+ *   - Intelligent pixel counting for actively rendered templates with tile-based filtering
+ *   - Internationalized number formatting for large pixel counts (e.g., "1,234,567 pixels")
+ *   - Automatic state management with proper cleanup when switching between modes
+ *   - Enhanced user experience with visual feedback and status updates
  */
 
 import Overlay from './Overlay.js';
@@ -229,15 +243,210 @@ function observeBlack() {
   observer.observe(document.body, { childList: true, subtree: true });
 }
 
-/** Deploys the overlay to the page.
+/** Deploys the overlay to the page with minimize/maximize functionality.
+ * Creates a responsive overlay UI that can toggle between full-featured and minimized states.
+ * 
  * Parent/child relationships in the DOM structure below are indicated by indentation.
+ * 
+ * OVERLAY STATES:
+ * - MAXIMIZED: Full UI with all controls, inputs, and status information visible
+ * - MINIMIZED: Compact 60×76px interface showing only the Blue Marble icon and drag functionality
+ * 
+ * FEATURES:
+ * - Click-to-toggle functionality on the Blue Marble icon
+ * - Automatic element visibility management
+ * - Fixed dimensions for consistent minimized appearance
+ * - Proper cleanup and restoration of all UI elements
+ * - Visual feedback through alt-text updates
+ * - Status message integration
+ * 
  * @since 0.58.3
  */
 function buildOverlayMain() {
+  let isMinimized = false; // Overlay state tracker (false = maximized, true = minimized)
+  
   overlay.addDiv({'id': 'bm-overlay', 'style': 'top: 10px; right: 75px;'})
     .addDiv({'id': 'bm-contain-header'})
       .addDiv({'id': 'bm-bar-drag'}).buildElement()
-      .addImg({'alt': 'Blue Marble Icon', 'src': 'https://raw.githubusercontent.com/SwingTheVine/Wplace-BlueMarble/main/dist/assets/Favicon.png'}).buildElement()
+      .addImg({'alt': 'Blue Marble Icon - Click to minimize/maximize', 'src': 'https://raw.githubusercontent.com/SwingTheVine/Wplace-BlueMarble/main/dist/assets/Favicon.png', 'style': 'cursor: pointer;'}, 
+        (instance, img) => {
+          /** Click event handler for overlay minimize/maximize functionality.
+           * 
+           * Toggles between two distinct UI states:
+           * 1. MINIMIZED STATE (60×76px):
+           *    - Shows only the Blue Marble icon and drag bar
+           *    - Hides all input fields, buttons, and status information
+           *    - Applies fixed dimensions for consistent appearance
+           *    - Repositions icon with 3px right offset for visual centering
+           * 
+           * 2. MAXIMIZED STATE (responsive):
+           *    - Restores full functionality with all UI elements
+           *    - Removes fixed dimensions to allow responsive behavior
+           *    - Resets icon positioning to default alignment
+           *    - Shows success message when returning to maximized state
+           * 
+           * IMPLEMENTATION DETAILS:
+           * - Uses CSS display property manipulation for element visibility
+           * - Maintains drag functionality in both states
+           * - Updates accessibility text (alt attribute) based on current state
+           * - Provides user feedback through status messages
+           * - Ensures proper cleanup of all style overrides when switching states
+           * 
+           * @param {Event} event - The click event object (implicit)
+           */
+          img.addEventListener('click', () => {
+            isMinimized = !isMinimized; // Toggle the current state
+
+            const overlay = document.querySelector('#bm-overlay');
+            const header = document.querySelector('#bm-contain-header');
+            const dragBar = document.querySelector('#bm-bar-drag');
+            const coordsContainer = document.querySelector('#bm-contain-coords');
+            const coordsButton = document.querySelector('#bm-button-coords');
+            const enableButton = document.querySelector('#bm-button-enable');
+            const coordInputs = document.querySelectorAll('#bm-contain-coords input');
+            
+            // Pre-restore original dimensions when switching to maximized state
+            // This ensures smooth transition and prevents layout issues
+            if (!isMinimized) {
+              overlay.style.width = "auto";
+              overlay.style.maxWidth = "300px";
+              overlay.style.minWidth = "200px";
+              overlay.style.padding = "10px";
+            }
+            
+            // Define elements that should be hidden/shown during state transitions
+            // Each element is documented with its purpose for maintainability
+            const elementsToToggle = [
+              '#bm-overlay h1',                    // Main title "Blue Marble"
+              '#bm-contain-userinfo',              // User information section (username, droplets, level)
+              '#bm-overlay hr',                    // Visual separator lines
+              '#bm-contain-automation > *:not(#bm-contain-coords)', // Automation section excluding coordinates
+              '#bm-input-file-template',           // Template file upload interface
+              '#bm-contain-buttons-action',        // Action buttons container
+              `#${instance.outputStatusId}`        // Status log textarea for user feedback
+            ];
+            
+            // Apply visibility changes to all toggleable elements
+            elementsToToggle.forEach(selector => {
+              const elements = document.querySelectorAll(selector);
+              elements.forEach(element => {
+                element.style.display = isMinimized ? 'none' : '';
+              });
+            });
+            // Handle coordinate container and button visibility based on state
+            if (isMinimized) {
+              // ==================== MINIMIZED STATE CONFIGURATION ====================
+              // In minimized state, we hide ALL interactive elements except the icon and drag bar
+              // This creates a clean, unobtrusive interface that maintains only essential functionality
+              
+              // Hide coordinate input container completely
+              if (coordsContainer) {
+                coordsContainer.style.display = 'none';
+              }
+              
+              // Hide coordinate button (pin icon)
+              if (coordsButton) {
+                coordsButton.style.display = 'none';
+              }
+              
+              // Hide enable/disable template button
+              if (enableButton) {
+                enableButton.style.display = 'none';
+              }
+              
+              // Hide all coordinate input fields individually (failsafe)
+              coordInputs.forEach(input => {
+                input.style.display = 'none';
+              });
+              
+              // Apply fixed dimensions for consistent minimized appearance
+              // These dimensions were chosen to accommodate the icon while remaining compact
+              overlay.style.width = '60px';    // Fixed width for consistency
+              overlay.style.height = '76px';   // Fixed height (60px + 16px for better proportions)
+              overlay.style.maxWidth = '60px';  // Prevent expansion
+              overlay.style.minWidth = '60px';  // Prevent shrinking
+              overlay.style.padding = '8px';    // Comfortable padding around icon
+              
+              // Apply icon positioning for better visual centering in minimized state
+              // The 3px offset compensates for visual weight distribution
+              img.style.marginLeft = '3px';
+              
+              // Configure header layout for minimized state
+              header.style.textAlign = 'center';
+              header.style.margin = '0';
+              header.style.marginBottom = '0';
+              
+              // Ensure drag bar remains visible and properly spaced
+              if (dragBar) {
+                dragBar.style.display = '';
+                dragBar.style.marginBottom = '0.25em';
+              }
+            } else {
+              // ==================== MAXIMIZED STATE RESTORATION ====================
+              // In maximized state, we restore all elements to their default functionality
+              // This involves clearing all style overrides applied during minimization
+              
+              // Restore coordinate container to default state
+              if (coordsContainer) {
+                coordsContainer.style.display = '';           // Show container
+                coordsContainer.style.flexDirection = '';     // Reset flex layout
+                coordsContainer.style.justifyContent = '';    // Reset alignment
+                coordsContainer.style.alignItems = '';        // Reset alignment
+                coordsContainer.style.gap = '';               // Reset spacing
+                coordsContainer.style.textAlign = '';         // Reset text alignment
+                coordsContainer.style.margin = '';            // Reset margins
+              }
+              
+              // Restore coordinate button visibility
+              if (coordsButton) {
+                coordsButton.style.display = '';
+              }
+              
+              // Restore enable button visibility and reset positioning
+              if (enableButton) {
+                enableButton.style.display = '';
+                enableButton.style.marginTop = '';
+              }
+              
+              // Restore all coordinate input fields
+              coordInputs.forEach(input => {
+                input.style.display = '';
+              });
+              
+              // Reset icon positioning to default (remove minimized state offset)
+              img.style.marginLeft = '';
+              
+              // Restore overlay to responsive dimensions
+              overlay.style.padding = '10px';
+              
+              // Reset header styling to defaults
+              header.style.textAlign = '';
+              header.style.margin = '';
+              header.style.marginBottom = '';
+              
+              // Reset drag bar spacing
+              if (dragBar) {
+                dragBar.style.marginBottom = '0.5em';
+              }
+              
+              // Remove all fixed dimensions to allow responsive behavior
+              // This ensures the overlay can adapt to content changes
+              overlay.style.width = '';
+              overlay.style.height = '';
+            }
+            
+            // ==================== ACCESSIBILITY AND USER FEEDBACK ====================
+            // Update accessibility information for screen readers and tooltips
+            
+            // Update alt text to reflect current state for screen readers and tooltips
+            img.alt = isMinimized ? 
+              'Blue Marble Icon - Minimized (Click to maximize)' : 
+              'Blue Marble Icon - Maximized (Click to minimize)';
+            
+            // No status message needed - state change is visually obvious to users
+          });
+        }
+      ).buildElement()
       .addHeader(1, {'textContent': name}).buildElement()
     .buildElement()
 

@@ -8,6 +8,17 @@
   padding: 10px;
   border-radius: 8px;
   z-index: 9000;
+  transition: all 0.3s ease;
+  max-width: 300px;
+  width: auto;
+}
+
+/* Smooth transitions for minimize/maximize functionality */
+#bm-contain-userinfo,
+#bm-overlay hr,
+#bm-contain-automation,
+#bm-contain-buttons-action {
+  transition: opacity 0.2s ease, height 0.2s ease;
 }
 
 /* The entire overlay BUT it is cascading */
@@ -43,12 +54,41 @@ div#bm-overlay {
   margin-bottom: 0.5em;
 }
 
+/* When minimized, adjust header container */
+#bm-contain-header[style*="text-align: center"] {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Ensure overlay maintains consistent width when minimized */
+#bm-overlay[style*="padding: 5px"] {
+  width: auto !important;
+  max-width: 300px;
+  min-width: 200px;
+}
+
 /* The Blue Marble image */
 #bm-overlay img {
   display: inline-block;
   height: 2.5em;
   margin-right: 1ch;
   vertical-align: middle;
+  transition: opacity 0.2s ease;
+}
+
+/* When overlay is minimized, adjust image styling */
+#bm-contain-header[style*="text-align: center"] img {
+  margin-right: 0;
+  margin-left: 0;
+  display: block;
+  margin: 0 auto;
+}
+
+/* Ensure drag bar remains functional when minimized */
+#bm-bar-drag {
+  transition: margin-bottom 0.2s ease;
 }
 
 /* The Blue Marble header */

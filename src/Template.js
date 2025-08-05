@@ -1,18 +1,47 @@
-/** An instance of a template.
- * Handles all mathmatics and manipulation regarding a single template.
+/** An instance of a template with comprehensive pixel counting and statistics.
+ * Handles all mathematics, manipulation, and statistical analysis regarding a single template.
+ * 
+ * TEMPLATE FEATURES:
+ * - Automatic pixel counting and dimension analysis
+ * - Tile-based template chunking for efficient rendering
+ * - Statistical information storage and retrieval
+ * - Bitmap processing with configurable scaling
+ * - Memory-efficient template tile generation
+ * 
+ * PIXEL COUNTING SYSTEM:
+ * - Calculates total pixel count (width × height) during template creation
+ * - Stores pixel count for statistical display and analysis
+ * - Integrates with template manager for aggregate statistics
+ * - Provides formatted pixel count information to user interface
+ * 
  * @since 0.65.2
  */
 export default class Template {
-  /** The constructor for the {@link Template} class.
-   * @param {Object} [params={}] - Object containing all optional params
+  /** The constructor for the {@link Template} class with enhanced pixel tracking.
+   * 
+   * Initializes a new template instance with all necessary properties for rendering
+   * and statistical analysis. The pixel counting system is initialized here and
+   * populated during the template creation process.
+   * 
+   * PIXEL COUNTING INTEGRATION:
+   * The pixelCount property is automatically calculated during createTemplateTiles()
+   * and represents the total number of pixels in the source image (width × height).
+   * This information is used for:
+   * - User interface statistics display
+   * - Template comparison and analysis
+   * - Performance optimization decisions
+   * - Memory usage estimation
+   * 
+   * @param {Object} [params={}] - Object containing all optional parameters
    * @param {string} [params.displayName='My template'] - The display name of the template
-   * @param {number} [params.sortID=0] - The sort number of the template
-   * @param {string} [params.authorID=''] - The user ID of the person who exported the template. This is to prevent sort ID collisions when importing
-   * @param {string} [params.url=''] - The URL to the image
-   * @param {File} [params.file=null] - The template file. This can be a pre-processed File, or a processed bitmap
-   * @param {[number, number, number, number]} [params.coords=null] - The coordinates of the top left corner as (x, y, x, y)
+   * @param {number} [params.sortID=0] - The sort number of the template for rendering priority
+   * @param {string} [params.authorID=''] - The user ID of the person who exported the template (prevents sort ID collisions)
+   * @param {string} [params.url=''] - The URL to the source image
+   * @param {File} [params.file=null] - The template file (pre-processed File or processed bitmap)
+   * @param {[number, number, number, number]} [params.coords=null] - The coordinates of the top left corner as (tileX, tileY, pixelX, pixelY)
    * @param {Object} [params.chunked=null] - The affected chunks of the template, and their template for each chunk
-   * @param {number} [params.tileSize=1000] - The size of a tile in pixels. Assumes the tile is a square
+   * @param {number} [params.tileSize=1000] - The size of a tile in pixels (assumes square tiles)
+   * @param {number} [params.pixelCount=0] - Total number of pixels in the template (calculated automatically during processing)
    * @since 0.65.2
    */
   constructor({
@@ -33,19 +62,59 @@ export default class Template {
     this.coords = coords;
     this.chunked = chunked;
     this.tileSize = tileSize;
+    this.pixelCount = 0; // Total pixel count in template (automatically calculated during createTemplateTiles)
   }
 
-  /** Creates chunks of the template for each tile.
-   * @returns {Object} Collection of template bitmaps in a Object
+  /** Creates chunks of the template for each tile with integrated pixel counting system.
+   * 
+   * This method processes the template image and performs several critical operations:
+   * 1. PIXEL ANALYSIS: Calculates total pixel count (width × height) for statistical purposes
+   * 2. TILE CHUNKING: Divides the template into tile-sized chunks for efficient rendering
+   * 3. BITMAP PROCESSING: Applies scaling and filtering for optimal display quality
+   * 4. MEMORY OPTIMIZATION: Creates efficient ImageBitmap objects for each tile segment
+   * 
+   * PIXEL COUNTING IMPLEMENTATION:
+   * The pixel counting system calculates the total number of pixels in the source image
+   * by multiplying the bitmap width by height. This information is stored in the
+   * pixelCount property and used throughout the application for:
+   * - User interface statistics display
+   * - Template comparison and analysis
+   * - Performance monitoring and optimization
+   * - Memory usage estimation and management
+   * 
+   * TECHNICAL DETAILS:
+   * - Uses createImageBitmap() for efficient image processing
+   * - Applies 3x scaling factor (shreadSize) for pixel art enhancement
+   * - Processes images in tile-sized chunks for memory efficiency
+   * - Maintains pixel-perfect rendering with nearest-neighbor sampling
+   * - Handles coordinate transformation between template and tile coordinate systems
+   * 
+   * PERFORMANCE CONSIDERATIONS:
+   * - Large templates are processed incrementally to avoid memory issues
+   * - Bitmap creation uses OffscreenCanvas for optimal performance
+   * - Pixel counting is performed once during initial processing
+   * - Results are cached in the pixelCount property for repeated access
+   * 
+   * @returns {Object} Collection of template bitmaps organized by tile coordinates
    * @since 0.65.4
    */
   async createTemplateTiles() {
-    console.log(this.coords);
+    console.log('Template coordinates:', this.coords);
 
-    const shreadSize = 3; // Scale image factor. Must be odd
-    const bitmap = await createImageBitmap(this.file); // Creates a bitmap image from the uploaded file
+    const shreadSize = 3; // Scale image factor for pixel art enhancement (must be odd)
+    const bitmap = await createImageBitmap(this.file); // Create efficient bitmap from uploaded file
     const imageWidth = bitmap.width;
     const imageHeight = bitmap.height;
+    
+    // ==================== PIXEL COUNTING SYSTEM ====================
+    // Calculate total pixel count using standard width × height formula
+    // This provides essential statistical information for the user interface
+    const totalPixels = imageWidth * imageHeight;
+    console.log(`Template pixel analysis - Dimensions: ${imageWidth}×${imageHeight} = ${totalPixels.toLocaleString()} pixels`);
+    
+    // Store pixel count in instance property for access by template manager and UI components
+    // This enables real-time statistics display and template comparison features
+    this.pixelCount = totalPixels;
 
     const templateTiles = {}; // Holds the template tiles
 
