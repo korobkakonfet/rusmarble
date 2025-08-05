@@ -433,6 +433,7 @@ export default class Overlay {
   /** Adds a file input to the overlay with enhanced visibility controls.
    * This input element will have properties shared between all file input elements in the overlay.
    * Uses multiple hiding methods to prevent browser native text from appearing during minimize/maximize.
+   * You can override the shared properties by using a callback.
    * @param {Object.<string, any>} [additionalProperties={}] - The DOM properties of the file input that are NOT shared between all overlay file input elements. These should be camelCase.
    * @param {function(Overlay, HTMLDivElement, HTMLInputElement, HTMLButtonElement):void} [callback=()=>{}] - Additional JS modification to the file input.
    * @returns {Overlay} Overlay class instance (this)
@@ -466,7 +467,7 @@ export default class Overlay {
     this.buildElement(); // Signifies that we are done adding children to the button
     this.buildElement(); // Signifies that we are done adding children to the container
 
-    // Prevent file input from being accessible or visible in any way
+    // Prevent file input from being accessible or visible by screen-readers and tabbing
     input.setAttribute('tabindex', '-1');
     input.setAttribute('aria-hidden', 'true');
     
@@ -540,7 +541,7 @@ export default class Overlay {
     }
   }
 
-  /** Handles dragging of the overlay with performance optimizations.
+  /** Handles dragging of the overlay.
    * Uses requestAnimationFrame for smooth animations and GPU-accelerated transforms.
    * @param {string} moveMe - The ID of the element to be moved
    * @param {string} iMoveThings - The ID of the drag handle element
