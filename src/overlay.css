@@ -11,12 +11,18 @@
   transition: all 0.3s ease;
   max-width: 300px;
   width: auto;
+  /* Performance optimizations for smooth dragging */
+  will-change: transform;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transform-style: preserve-3d;
+  -webkit-transform-style: preserve-3d;
 }
 
 /* Smooth transitions for minimize/maximize functionality */
 #bm-contain-userinfo,
 #bm-overlay hr,
-#bm-contain-automation,
+#bm-contain-automation, 
 #bm-contain-buttons-action {
   transition: opacity 0.2s ease, height 0.2s ease;
 }
@@ -47,6 +53,20 @@ div#bm-overlay {
 /* When the overlay is being dragged */
 #bm-bar-drag.dragging {
   cursor: grabbing;
+}
+
+/* Disable interactions during drag for better performance */
+#bm-overlay:has(#bm-bar-drag.dragging) {
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+}
+
+/* Keep drag bar interactive when dragging */
+#bm-bar-drag.dragging {
+  pointer-events: auto;
 }
 
 /* The container for the overlay header */
@@ -186,6 +206,21 @@ div:has(> #bm-input-file-template) > button {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Force complete invisibility of file input to prevent native browser text */
+#bm-input-file-template,
+input[type="file"][id*="template"] {
+  display: none !important;
+  visibility: hidden !important;
+  position: absolute !important;
+  left: -9999px !important;
+  top: -9999px !important;
+  width: 0 !important;
+  height: 0 !important;
+  opacity: 0 !important;
+  z-index: -9999 !important;
+  pointer-events: none !important;
 }
 
 /* Output status area */

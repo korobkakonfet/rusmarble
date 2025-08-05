@@ -1,19 +1,5 @@
 /** The main file. Everything in the userscript is executed from here.
  * @since 0.0.0
- * 
- * VERSION HISTORY:
- * 0.71.0 - Added minimize/maximize functionality and pixel counting system
- *   Features added:
- *   - Interactive minimize/maximize overlay with click-to-toggle functionality
- *   - Fixed overlay dimensions: 60px width × 76px height in minimized state
- *   - Smart element visibility control (hides all UI except icon and drag bar when minimized)
- *   - Icon repositioning system (3px right offset) for better visual alignment in minimized state
- *   - Comprehensive pixel counting system for template statistics
- *   - Real-time pixel count display in template creation and rendering status messages
- *   - Intelligent pixel counting for actively rendered templates with tile-based filtering
- *   - Internationalized number formatting for large pixel counts (e.g., "1,234,567 pixels")
- *   - Automatic state management with proper cleanup when switching between modes
- *   - Enhanced user experience with visual feedback and status updates
  */
 
 import Overlay from './Overlay.js';
@@ -247,19 +233,6 @@ function observeBlack() {
  * Creates a responsive overlay UI that can toggle between full-featured and minimized states.
  * 
  * Parent/child relationships in the DOM structure below are indicated by indentation.
- * 
- * OVERLAY STATES:
- * - MAXIMIZED: Full UI with all controls, inputs, and status information visible
- * - MINIMIZED: Compact 60×76px interface showing only the Blue Marble icon and drag functionality
- * 
- * FEATURES:
- * - Click-to-toggle functionality on the Blue Marble icon
- * - Automatic element visibility management
- * - Fixed dimensions for consistent minimized appearance
- * - Proper cleanup and restoration of all UI elements
- * - Visual feedback through alt-text updates
- * - Status message integration
- * 
  * @since 0.58.3
  */
 function buildOverlayMain() {
@@ -284,13 +257,6 @@ function buildOverlayMain() {
            *    - Removes fixed dimensions to allow responsive behavior
            *    - Resets icon positioning to default alignment
            *    - Shows success message when returning to maximized state
-           * 
-           * IMPLEMENTATION DETAILS:
-           * - Uses CSS display property manipulation for element visibility
-           * - Maintains drag functionality in both states
-           * - Updates accessibility text (alt attribute) based on current state
-           * - Provides user feedback through status messages
-           * - Ensures proper cleanup of all style overrides when switching states
            * 
            * @param {Event} event - The click event object (implicit)
            */

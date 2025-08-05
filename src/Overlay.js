@@ -430,8 +430,9 @@ export default class Overlay {
     return this;
   }
 
-  /** Adds a file input to the overlay. This includes a container and a button.
+  /** Adds a file input to the overlay with enhanced visibility controls.
    * This input element will have properties shared between all file input elements in the overlay.
+   * Uses multiple hiding methods to prevent browser native text from appearing during minimize/maximize.
    * You can override the shared properties by using a callback.
    * @param {Object.<string, any>} [additionalProperties={}] - The DOM properties of the file input that are NOT shared between all overlay file input elements. These should be camelCase.
    * @param {function(Overlay, HTMLDivElement, HTMLInputElement, HTMLButtonElement):void} [callback=()=>{}] - Additional JS modification to the file input.
@@ -451,7 +452,10 @@ export default class Overlay {
    */
   addInputFile(additionalProperties = {}, callback = () => {}) {
     
-    const properties = {'type': 'file', 'style': 'display: none;'}; // Shared file input DOM properties
+    const properties = {
+      'type': 'file', 
+      'style': 'display: none !important; visibility: hidden !important; position: absolute !important; left: -9999px !important; width: 0 !important; height: 0 !important; opacity: 0 !important;'
+    }; // Complete file input hiding to prevent native browser text interference
     const text = additionalProperties['textContent'] ?? ''; // Retrieves the text content
 
     delete additionalProperties['textContent']; // Deletes the text content before applying the additional properties to the file input
@@ -463,11 +467,15 @@ export default class Overlay {
     this.buildElement(); // Signifies that we are done adding children to the button
     this.buildElement(); // Signifies that we are done adding children to the container
 
+    // Prevent file input from being accessible or visible by screen-readers and tabbing
+    input.setAttribute('tabindex', '-1');
+    input.setAttribute('aria-hidden', 'true');
+    
     button.addEventListener('click', () => {
       input.click(); // Clicks the file input
     });
 
-    // Changes the button text content (and trims the file name)
+    // Update button text when file is selected
     input.addEventListener('change', () => {
       button.style.maxWidth = `${button.offsetWidth}px`;
       if (input.files.length > 0) {
@@ -534,13 +542,19 @@ export default class Overlay {
   }
 
   /** Handles dragging of the overlay.
+   * Uses requestAnimationFrame for smooth animations and GPU-accelerated transforms.
    * @param {string} moveMe - The ID of the element to be moved
-   * @param {string} iMoveThings - The ID of the element to be moved
+   * @param {string} iMoveThings - The ID of the drag handle element
    * @since 0.8.2
   */
   handleDrag(moveMe, iMoveThings) {
     let isDragging = false;
     let offsetX, offsetY = 0;
+    let animationFrame = null;
+    let currentX = 0;
+    let currentY = 0;
+    let targetX = 0;
+    let targetY = 0;
 
     // Retrieves the elements (allows either '#id' or 'id' to be passed in)
     moveMe = document.querySelector(moveMe?.[0] == '#' ? moveMe : '#' + moveMe);
@@ -552,67 +566,110 @@ export default class Overlay {
       return; // Kills itself
     }
 
-    // What to do when the mouse is pressed down on the element that moves things
-    iMoveThings.addEventListener('mousedown', function(event) {
+    // Smooth animation loop using requestAnimationFrame for optimal performance
+    const updatePosition = () => {
+      if (isDragging) {
+        // Only update DOM if position changed significantly (reduce repaints)
+        const deltaX = Math.abs(currentX - targetX);
+        const deltaY = Math.abs(currentY - targetY);
+        
+        if (deltaX > 0.5 || deltaY > 0.5) {
+          currentX = targetX;
+          currentY = targetY;
+          
+          // Use CSS transform for GPU acceleration instead of left/top
+          moveMe.style.transform = `translate(${currentX}px, ${currentY}px)`;
+          moveMe.style.left = '0px';
+          moveMe.style.top = '0px';
+          moveMe.style.right = '';
+        }
+        
+        animationFrame = requestAnimationFrame(updatePosition);
+      }
+    };
+
+    // Cache initial position to avoid expensive getBoundingClientRect calls during drag
+    let initialRect = null;
+    
+    const startDrag = (clientX, clientY) => {
       isDragging = true;
-      offsetX = event.clientX - moveMe.getBoundingClientRect().left;
-      offsetY = event.clientY - moveMe.getBoundingClientRect().top;
-      document.body.style.userSelect = 'none'; // Prevents text selection while dragging
-      iMoveThings.classList.add('dragging'); // Adds a class to indicate a dragging state
+      initialRect = moveMe.getBoundingClientRect();
+      offsetX = clientX - initialRect.left;
+      offsetY = clientY - initialRect.top;
+      
+      // Get current position from transform or use element position
+      const computedStyle = window.getComputedStyle(moveMe);
+      const transform = computedStyle.transform;
+      
+      if (transform && transform !== 'none') {
+        const matrix = new DOMMatrix(transform);
+        currentX = matrix.m41;
+        currentY = matrix.m42;
+      } else {
+        currentX = initialRect.left;
+        currentY = initialRect.top;
+      }
+      
+      targetX = currentX;
+      targetY = currentY;
+      
+      document.body.style.userSelect = 'none';
+      iMoveThings.classList.add('dragging');
+      
+      // Start animation loop
+      if (animationFrame) {
+        cancelAnimationFrame(animationFrame);
+      }
+      updatePosition();
+    };
+
+    const endDrag = () => {
+      isDragging = false;
+      if (animationFrame) {
+        cancelAnimationFrame(animationFrame);
+        animationFrame = null;
+      }
+      document.body.style.userSelect = '';
+      iMoveThings.classList.remove('dragging');
+    };
+
+    // Mouse down - start dragging
+    iMoveThings.addEventListener('mousedown', function(event) {
+      event.preventDefault();
+      startDrag(event.clientX, event.clientY);
     });
 
-    // What to do when the touch starts on the element that moves things
+    // Touch start - start dragging
     iMoveThings.addEventListener('touchstart', function(event) {
-      isDragging = true;
       const touch = event?.touches?.[0];
       if (!touch) {return;}
-      offsetX = touch.clientX - moveMe.getBoundingClientRect().left; // Distance between the left edge of the overlay, and the cursor
-      offsetY = touch.clientY - moveMe.getBoundingClientRect().top; // Distance between the top edge of the overlay, and the cursor
-      document.body.style.userSelect = 'none'; // Prevents text selection while dragging
-      iMoveThings.classList.add('dragging'); // Adds a class to indicate a dragging state
-    }, { passive: false }); // Prevents scrolling from being captured
+      startDrag(touch.clientX, touch.clientY);
+      event.preventDefault();
+    }, { passive: false });
 
-    // What to do when the mouse is moved while dragging
+    // Mouse move - update target position
     document.addEventListener('mousemove', function(event) {
-      if (isDragging) {
-        moveMe.style.left = (event.clientX - offsetX) + 'px'; // Binds the overlay to the left side of the screen, and sets it's position to the cursor
-        moveMe.style.top = (event.clientY - offsetY) + 'px'; // Binds the overlay to the top of the screen, and sets it's position to the cursor
-        moveMe.style.right = ''; // Destroys the right property to unbind the overlay from the right side of the screen
+      if (isDragging && initialRect) {
+        targetX = event.clientX - offsetX;
+        targetY = event.clientY - offsetY;
       }
-    });
+    }, { passive: true });
 
-    // What to do when the touch moves while dragging
+    // Touch move - update target position
     document.addEventListener('touchmove', function(event) {
-      if (isDragging) {
+      if (isDragging && initialRect) {
         const touch = event?.touches?.[0];
         if (!touch) {return;}
-        moveMe.style.left = (touch.clientX - offsetX) + 'px'; // Binds the overlay to the left side of the screen, and sets it's position to the cursor
-        moveMe.style.top = (touch.clientY - offsetY) + 'px'; // Binds the overlay to the top of the screen, and sets it's position to the cursor
-        moveMe.style.right = ''; // Destroys the right property to unbind the overlay from the right side of the screen
-        event.preventDefault(); // prevent scrolling while dragging
+        targetX = touch.clientX - offsetX;
+        targetY = touch.clientY - offsetY;
+        event.preventDefault();
       }
-    }, { passive: false }); // Prevents scrolling from being captured
+    }, { passive: false });
 
-    // What to do when the mouse is released
-    document.addEventListener('mouseup', function() {
-      isDragging = false;
-      document.body.style.userSelect = ''; // Restores text selection capability after dragging
-      iMoveThings.classList.remove('dragging'); // Removes the dragging class
-    });
-
-    // What to do when the touch ends
-    document.addEventListener('touchend', function() {
-      isDragging = false;
-      document.body.style.userSelect = ''; // Restores text selection capability after dragging
-      iMoveThings.classList.remove('dragging'); // Removes the dragging class
-    });
-
-    // What to do when the touch is cancelled
-    document.addEventListener('touchcancel', function() {
-      isDragging = false;
-      document.body.style.userSelect = ''; // Restores text selection capability after dragging
-      iMoveThings.classList.remove('dragging'); // Removes the dragging class
-    });
+    // End drag events
+    document.addEventListener('mouseup', endDrag);
+    document.addEventListener('touchend', endDrag);
+    document.addEventListener('touchcancel', endDrag);
   }
 
   /** Handles status display.
