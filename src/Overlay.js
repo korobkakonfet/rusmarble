@@ -586,8 +586,9 @@ export default class Overlay {
       if (isDragging) {
         const touch = event?.touches?.[0];
         if (!touch) {return;}
-        moveMe.style.left = (touch.clientX - offsetX) + 'px';
-        moveMe.style.top = (touch.clientY - offsetY) + 'px';
+        moveMe.style.left = (touch.clientX - offsetX) + 'px'; // Binds the overlay to the left side of the screen, and sets it's position to the cursor
+        moveMe.style.top = (touch.clientY - offsetY) + 'px'; // Binds the overlay to the top of the screen, and sets it's position to the cursor
+        moveMe.style.right = ''; // Destroys the right property to unbind the overlay from the right side of the screen
         event.preventDefault(); // prevent scrolling while dragging
       }
     }, { passive: false }); // Prevents scrolling from being captured
