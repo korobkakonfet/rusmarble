@@ -1,32 +1,9 @@
 import Template from "./Template";
 import { numberToEncoded } from "./utils";
 
-/** Manages the comprehensive template system with integrated pixel counting and statistics.
- * 
- * This class handles all external requests for template modification, creation, and statistical analysis.
- * It serves as the central coordinator between template instances and the user interface, providing
- * real-time feedback on template statistics including pixel counts and rendering status.
- * 
- * ENHANCED FEATURES:
- * - Real-time pixel counting and statistics display
- * - Intelligent template filtering based on active tiles
- * - Internationalized number formatting for large pixel counts
- * - Comprehensive status reporting with detailed template information
- * - Enhanced user feedback during template creation and rendering
- * 
- * PIXEL COUNTING SYSTEM:
- * The template manager integrates with the Template class pixel counting system to provide:
- * - Individual template pixel counts during creation
- * - Aggregate pixel counts for multiple templates during rendering
- * - Smart filtering to count only actively displayed templates
- * - Formatted display of pixel statistics in user interface
- * 
- * STATISTICAL INTEGRATION POINTS:
- * 1. Template Creation: Displays pixel count when new templates are processed
- * 2. Template Rendering: Shows aggregate pixel count for templates being displayed
- * 3. Tile Filtering: Counts pixels only for templates active in current viewport
- * 4. User Interface: Provides formatted statistics for status messages
- * 
+/** Manages the template system.
+ * This class handles all external requests for template modification, creation, and analysis.
+ * It serves as the central coordinator between template instances and the user interface.
  * @since 0.55.8
  * @example
  * // JSON structure for a template
@@ -205,31 +182,8 @@ export default class TemplateManager {
 
   }
 
-  /** Draws all templates on the specified tile with intelligent pixel count reporting.
-   * 
-   * This method handles the rendering of template overlays on individual tiles and provides
-   * comprehensive statistics about the templates being displayed. It integrates with the
-   * pixel counting system to give users real-time feedback about template complexity.
-   * 
-   * PIXEL COUNTING INTEGRATION:
-   * The method implements intelligent pixel counting that:
-   * - Identifies templates that have content in the current tile
-   * - Sums pixel counts only for templates actually being rendered
-   * - Formats large numbers with locale-appropriate separators
-   * - Provides detailed status messages with template and pixel statistics
-   * 
-   * PERFORMANCE OPTIMIZATIONS:
-   * - Filters templates by tile coordinates before processing
-   * - Counts pixels only for active templates to avoid unnecessary calculations
-   * - Uses efficient array operations for template filtering and aggregation
-   * - Caches formatted numbers to avoid repeated formatting operations
-   * 
-   * USER EXPERIENCE ENHANCEMENTS:
-   * - Shows both template count and total pixel count in status messages
-   * - Uses internationalized number formatting for better readability
-   * - Provides immediate feedback when templates are being displayed
-   * - Handles singular/plural forms correctly for template count
-   * 
+  /** Draws all templates on the specified tile.
+   * This method handles the rendering of template overlays on individual tiles.
    * @param {File} tileBlob - The pixels that are placed on a tile
    * @param {[number, number]} tileCoords - The tile coordinates [x, y]
    * @since 0.65.77
@@ -246,35 +200,41 @@ export default class TemplateManager {
     const templateArray = this.templatesArray; // Stores a copy for sorting
 
     // Sorts the array of Template class instances. 0 = first = lowest draw priority
-    templateArray.sort((a, b) => {
-      return a.sortID - b.sortID;
-    });
+    templateArray.sort((a, b) => {return a.sortID - b.sortID;});
 
     console.log(templateArray);
 
     // Retrieves the relavent template tile blobs
-    const templateBlobs = templateArray
+    const templatesToDraw = templateArray
       .map(template => {
         const matchingTiles = Object.keys(template.chunked).filter(tile =>
           tile.startsWith(tileCoords)
         );
 
-        if (matchingTiles.length === 0) {return null;} // Return nothing when nothing is found
+        if (matchingTiles.length === 0) {return null;} // Return null when nothing is found
 
         // Retrieves the blobs of the templates for this tile
-        const matchingTileBlobs = matchingTiles.map(tile => template.chunked[tile]);
+        const matchingTileBlobs = matchingTiles.map(tile => {
+
+          const coords = tile.split(','); // [x, y, x, y] Tile/pixel coordinates
+          
+          return {
+            bitmap: template.chunked[tile],
+            tileCoords: [coords[0], coords[1]],
+            pixelCoords: [coords[2], coords[3]]
+          }
+        });
 
         return matchingTileBlobs?.[0];
       })
     .filter(Boolean);
 
-    console.log(templateBlobs);
+    console.log(templatesToDraw);
 
-    if (templateBlobs.length > 0) {
-      // ==================== INTELLIGENT PIXEL COUNTING SYSTEM ====================
+    if (templatesToDraw?.bitmap?.length > 0) {
+      
       // Calculate total pixel count for templates actively being displayed in this tile
       // This provides accurate statistics by counting only templates with content in the current viewport
-      
       const totalPixels = templateArray
         .filter(template => {
           // Filter templates to include only those with tiles matching current coordinates
@@ -293,7 +253,7 @@ export default class TemplateManager {
       // Display comprehensive status information including both template count and pixel statistics
       // This gives users immediate feedback about the complexity and scope of what's being rendered
       this.overlay.handleDisplayStatus(
-        `Displaying ${templateBlobs.length} template${templateBlobs.length == 1 ? '' : 's'}. ` +
+        `Displaying ${templatesToDraw.bitmap.length} template${templatesToDraw.bitmap.length == 1 ? '' : 's'}. ` +
         `Total pixels: ${pixelCountFormatted}`
       );
     }
@@ -314,10 +274,12 @@ export default class TemplateManager {
     context.drawImage(tileBitmap, 0, 0, drawSize, drawSize);
 
     // For each template in this tile, draw them.
-    for (const templateBitmap of templateBlobs) {
-      console.log(`Template Blob is ${typeof templateBitmap}`);
-      console.log(templateBitmap);
-      context.drawImage(templateBitmap, 0, 0);
+    for (const template of templatesToDraw) {
+      console.log(`Template:`);
+      console.log(template);
+
+      // Draws the each template on the tile based on it's relative position
+      context.drawImage(template.bitmap, Number(template.pixelCoords[0]) * this.drawMult, Number(template.pixelCoords[1]) * this.drawMult);
     }
 
     return await canvas.convertToBlob({ type: 'image/png' });
