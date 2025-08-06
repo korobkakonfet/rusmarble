@@ -1,5 +1,5 @@
 import Template from "./Template";
-import { numberToEncoded } from "./utils";
+import { base64ToUint8, numberToEncoded } from "./utils";
 
 /** Manages the template system.
  * This class handles all external requests for template modification, creation, and analysis.
@@ -135,14 +135,17 @@ export default class TemplateManager {
       file: blob,
       coords: coords
     });
-    template.chunked = await template.createTemplateTiles(this.tileSize); // Chunks the tiles
-    
+    //template.chunked = await template.createTemplateTiles(this.tileSize); // Chunks the tiles
+    const { templateTiles, templateTilesBuffers } = await template.createTemplateTiles(this.tileSize); // Chunks the tiles
+    template.chunked = templateTiles; // Stores the chunked tile bitmaps
+
     // Appends a child into the templates object
     // The child's name is the number of templates already in the list (sort order) plus the encoded player ID
     this.templatesJSON.templates[`${template.sortID} ${template.authorID}`] = {
       "name": template.displayName, // Display name of template
+      "coords": coords.join(', '), // The coords of the template
       "enabled": true,
-      "tiles": template.chunked
+      "tiles": templateTilesBuffers // Stores the chunked tile buffers
     };
 
     this.templatesArray = []; // Remove this to enable multiple templates (2/2)
@@ -157,12 +160,22 @@ export default class TemplateManager {
     console.log(Object.keys(this.templatesJSON.templates).length);
     console.log(this.templatesJSON);
     console.log(this.templatesArray);
+    console.log(JSON.stringify(this.templatesJSON));
+
+    await this.#storeTemplates();
   }
 
   /** Generates a {@link Template} class instance from the JSON object template
    */
   #loadTemplate() {
 
+  }
+
+  /** Stores the JSON object of the loaded templates into TamperMonkey (GreaseMonkey) storage.
+   * @since 0.72.7
+   */
+  async #storeTemplates() {
+    GM.setValue('bmTemplates', JSON.stringify(this.templatesJSON));
   }
 
   /** Deletes a template from the JSON object.
@@ -198,6 +211,7 @@ export default class TemplateManager {
     console.log(`Searching for templates in tile: "${tileCoords}"`);
 
     const templateArray = this.templatesArray; // Stores a copy for sorting
+    console.log(templateArray);
 
     // Sorts the array of Template class instances. 0 = first = lowest draw priority
     templateArray.sort((a, b) => {return a.sortID - b.sortID;});
@@ -234,7 +248,6 @@ export default class TemplateManager {
     if (templatesToDraw?.bitmap?.length > 0) {
       
       // Calculate total pixel count for templates actively being displayed in this tile
-      // This provides accurate statistics by counting only templates with content in the current viewport
       const totalPixels = templateArray
         .filter(template => {
           // Filter templates to include only those with tiles matching current coordinates
@@ -250,8 +263,7 @@ export default class TemplateManager {
       // Examples: "1,234,567" (US), "1.234.567" (DE), "1 234 567" (FR)
       const pixelCountFormatted = new Intl.NumberFormat().format(totalPixels);
       
-      // Display comprehensive status information including both template count and pixel statistics
-      // This gives users immediate feedback about the complexity and scope of what's being rendered
+      // Display status information about the templates being rendered
       this.overlay.handleDisplayStatus(
         `Displaying ${templatesToDraw.bitmap.length} template${templatesToDraw.bitmap.length == 1 ? '' : 's'}. ` +
         `Total pixels: ${pixelCountFormatted}`
@@ -286,15 +298,75 @@ export default class TemplateManager {
   }
 
   /** Imports the JSON object, and appends it to any JSON object already loaded
+   * @param {string} json - The JSON string to parse
    */
-  importJSON() {
+  importJSON(json) {
 
+    console.log(`Importing JSON...`);
+    console.log(json);
+
+    // If the passed in JSON is a Blue Marble template object...
+    if (json?.whoami == 'BlueMarble') {
+      this.#parseBlueMarble(json); // ...parse the template object as Blue Marble
+    }
   }
 
   /** Parses the Blue Marble JSON object
+   * @param {string} json - The JSON string to parse
+   * @since 0.72.13
    */
-  #parseBlueMarble() {
+  async #parseBlueMarble(json) {
 
+    console.log(`Parsing BlueMarble...`);
+
+    const templates = json.templates;
+
+    console.log(`BlueMarble length: ${Object.keys(templates).length}`);
+
+    if (Object.keys(templates).length > 0) {
+
+      for (const template in templates) {
+
+        const templateKey = template;
+        const templateValue = templates[template];
+        console.log(templateKey);
+
+        if (templates.hasOwnProperty(template)) {
+
+          const templateKeyArray = templateKey.split(' '); // E.g., "0 $Z" -> ["0", "$Z"]
+          const sortID = Number(templateKeyArray?.[0]); // Sort ID of the template
+          const authorID = templateKeyArray?.[1] || '0'; // User ID of the person who exported the template
+          const displayName = templateValue.name || `Template ${sortID || ''}`; // Display name of the template
+          //const coords = templateValue?.coords?.split(',').map(Number); // "1,2,3,4" -> [1, 2, 3, 4]
+          const tilesbase64 = templateValue.tiles;
+          const templateTiles = {}; // Stores the template bitmap tiles for each tile.
+
+          for (const tile in tilesbase64) {
+            console.log(tile);
+            if (tilesbase64.hasOwnProperty(tile)) {
+              const encodedTemplateBase64 = tilesbase64[tile];
+              const templateUint8Array = base64ToUint8(encodedTemplateBase64); // Base 64 -> Uint8Array
+
+              const templateBlob = new Blob([templateUint8Array], { type: "image/png" }); // Uint8Array -> Blob
+              const templateBitmap = await createImageBitmap(templateBlob) // Blob -> Bitmap
+              templateTiles[tile] = templateBitmap;
+            }
+          }
+
+          // Creates a new Template class instance
+          const template = new Template({
+            displayName: displayName,
+            sortID: sortID || this.templatesArray?.length || 0,
+            authorID: authorID || '',
+            //coords: coords
+          });
+          template.chunked = templateTiles;
+          this.templatesArray.push(template);
+          console.log(this.templatesArray);
+          console.log(`^^^ This ^^^`);
+        }
+      }
+    }
   }
 
   /** Parses the OSU! Place JSON object

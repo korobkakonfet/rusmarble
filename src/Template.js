@@ -1,3 +1,5 @@
+import { uint8ToBase64 } from "./utils";
+
 /** An instance of a template.
  * Handles all mathematics, manipulation, and analysis regarding a single template.
  * @since 0.65.2
@@ -40,7 +42,7 @@ export default class Template {
 
   /** Creates chunks of the template for each tile.
    * 
-   * @returns {Object} Collection of template bitmaps organized by tile coordinates
+   * @returns {Object} Collection of template bitmaps & buffers organized by tile coordinates
    * @since 0.65.4
    */
   async createTemplateTiles() {
@@ -52,15 +54,15 @@ export default class Template {
     const imageHeight = bitmap.height;
     
     // Calculate total pixel count using standard width × height formula
-    // This provides essential statistical information for the user interface
+    // TODO: Use non-transparent pixels instead of basic width times height
     const totalPixels = imageWidth * imageHeight;
     console.log(`Template pixel analysis - Dimensions: ${imageWidth}×${imageHeight} = ${totalPixels.toLocaleString()} pixels`);
     
     // Store pixel count in instance property for access by template manager and UI components
-    // This enables real-time statistics display and template comparison features
     this.pixelCount = totalPixels;
 
     const templateTiles = {}; // Holds the template tiles
+    const templateTilesBuffers = {}; // Holds the buffers of the template tiles
 
     const canvas = new OffscreenCanvas(this.tileSize, this.tileSize);
     const context = canvas.getContext('2d', { willReadFrequently: true });
@@ -145,15 +147,22 @@ export default class Template {
         console.log(`Shreaded pixels for ${pixelX}, ${pixelY}`, imageData);
 
         context.putImageData(imageData, 0, 0);
-        templateTiles[
-          `${(this.coords[0] + Math.floor(pixelX / 1000))
-            .toString()
-            .padStart(4, '0')},${(this.coords[1] + Math.floor(pixelY / 1000))
-            .toString()
-            .padStart(4, '0')},${(pixelX % 1000)
-            .toString()
-            .padStart(3, '0')},${(pixelY % 1000).toString().padStart(3, '0')}`
-        ] = await createImageBitmap(canvas);
+
+        // Creates the "0000,0000,000,000" key name
+        const templateTileName = `${(this.coords[0] + Math.floor(pixelX / 1000))
+          .toString()
+          .padStart(4, '0')},${(this.coords[1] + Math.floor(pixelY / 1000))
+          .toString()
+          .padStart(4, '0')},${(pixelX % 1000)
+          .toString()
+          .padStart(3, '0')},${(pixelY % 1000).toString().padStart(3, '0')}`;
+
+        templateTiles[templateTileName] = await createImageBitmap(canvas); // Creates the bitmap
+        
+        const canvasBlob = await canvas.convertToBlob();
+        const canvasBuffer = await canvasBlob.arrayBuffer();
+        const canvasBufferBytes = Array.from(new Uint8Array(canvasBuffer));
+        templateTilesBuffers[templateTileName] = uint8ToBase64(canvasBufferBytes); // Stores the buffer
 
         console.log(templateTiles);
 
@@ -164,6 +173,7 @@ export default class Template {
     }
 
     console.log('Template Tiles: ', templateTiles);
-    return templateTiles;
+    console.log('Template Tiles Buffers: ', templateTilesBuffers);
+    return { templateTiles, templateTilesBuffers };
   }
 }

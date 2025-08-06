@@ -99,3 +99,30 @@ export function numberToEncoded(number, encoding) {
 
   return result; // The final encoded string
 }
+
+/** Converts a Uint8 array to base64 using the browser's built-in binary to ASCII function
+ * @param {Uint8Array} uint8 - The Uint8Array to convert
+ * @returns {Uint8Array} The base64 encoded Uint8Array
+ * @since 0.72.9
+ */
+export function uint8ToBase64(uint8) {
+  let binary = '';
+  for (let i = 0; i < uint8.length; i++) {
+    binary += String.fromCharCode(uint8[i]);
+  }
+  return btoa(binary); // Binary to ASCII
+}
+
+/** Decodes a base 64 encoded Uint8 array using the browser's built-in ASCII to binary function
+ * @param {Uint8Array} base64 - The base 64 encoded Uint8Array to convert
+ * @returns {Uint8Array} The decoded Uint8Array
+ * @since 0.72.9
+ */
+export function base64ToUint8(base64) {
+  const binary = atob(base64); // ASCII to Binary
+  const array = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    array[i] = binary.charCodeAt(i);
+  }
+  return array;
+}

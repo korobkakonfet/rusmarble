@@ -180,6 +180,10 @@ const apiManager = new ApiManager(templateManager); // Constructs a new ApiManag
 
 overlay.setApiManager(apiManager); // Sets the API manager
 
+const storageTemplates = JSON.parse(GM_getValue('bmTemplates', '{}'));
+console.log(storageTemplates);
+templateManager.importJSON(storageTemplates); // Loads the templates
+
 buildOverlayMain(); // Builds the main overlay
 
 overlay.handleDrag('#bm-overlay', '#bm-bar-drag'); // Creates dragging capability on the drag bar for dragging the overlay
