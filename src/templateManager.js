@@ -249,7 +249,10 @@ export default class TemplateManager {
 
     console.log(templatesToDraw);
 
-    if (templatesToDraw?.bitmap?.length > 0) {
+    const templateCount = templatesToDraw?.length || 0; // Number of templates to draw on this tile
+    console.log(`templateCount = ${templateCount}`);
+
+    if (templateCount > 0) {
       
       // Calculate total pixel count for templates actively being displayed in this tile
       const totalPixels = templateArray
@@ -269,9 +272,10 @@ export default class TemplateManager {
       
       // Display status information about the templates being rendered
       this.overlay.handleDisplayStatus(
-        `Displaying ${templatesToDraw.bitmap.length} template${templatesToDraw.bitmap.length == 1 ? '' : 's'}. ` +
-        `Total pixels: ${pixelCountFormatted}`
+        `Displaying ${templateCount} template${templateCount == 1 ? '' : 's'}.\nTotal pixels: ${pixelCountFormatted}`
       );
+    } else {
+      this.overlay.handleDisplayStatus(`Displaying ${templateCount} templates.`);
     }
     
     const tileBitmap = await createImageBitmap(tileBlob);

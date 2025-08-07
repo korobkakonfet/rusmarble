@@ -273,6 +273,8 @@ function buildOverlayMain() {
             const coordsContainer = document.querySelector('#bm-contain-coords');
             const coordsButton = document.querySelector('#bm-button-coords');
             const createButton = document.querySelector('#bm-button-create');
+            const enableButton = document.querySelector('#bm-button-enable');
+            const disableButton = document.querySelector('#bm-button-disable');
             const coordInputs = document.querySelectorAll('#bm-contain-coords input');
             
             // Pre-restore original dimensions when switching to maximized state
@@ -322,6 +324,16 @@ function buildOverlayMain() {
               // Hide create template button
               if (createButton) {
                 createButton.style.display = 'none';
+              }
+
+              // Hide enable templates button
+              if (enableButton) {
+                enableButton.style.display = 'none';
+              }
+
+              // Hide disable templates button
+              if (disableButton) {
+                disableButton.style.display = 'none';
               }
               
               // Hide all coordinate input fields individually (failsafe)
@@ -376,6 +388,18 @@ function buildOverlayMain() {
               if (createButton) {
                 createButton.style.display = '';
                 createButton.style.marginTop = '';
+              }
+
+              // Restore enable button visibility and reset positioning
+              if (enableButton) {
+                enableButton.style.display = '';
+                enableButton.style.marginTop = '';
+              }
+
+              // Restore disable button visibility and reset positioning
+              if (disableButton) {
+                disableButton.style.display = '';
+                disableButton.style.marginTop = '';
               }
               
               // Restore all coordinate input fields
