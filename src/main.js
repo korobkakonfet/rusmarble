@@ -272,7 +272,7 @@ function buildOverlayMain() {
             const dragBar = document.querySelector('#bm-bar-drag');
             const coordsContainer = document.querySelector('#bm-contain-coords');
             const coordsButton = document.querySelector('#bm-button-coords');
-            const enableButton = document.querySelector('#bm-button-enable');
+            const createButton = document.querySelector('#bm-button-create');
             const coordInputs = document.querySelectorAll('#bm-contain-coords input');
             
             // Pre-restore original dimensions when switching to maximized state
@@ -319,9 +319,9 @@ function buildOverlayMain() {
                 coordsButton.style.display = 'none';
               }
               
-              // Hide enable/disable template button
-              if (enableButton) {
-                enableButton.style.display = 'none';
+              // Hide create template button
+              if (createButton) {
+                createButton.style.display = 'none';
               }
               
               // Hide all coordinate input fields individually (failsafe)
@@ -372,10 +372,10 @@ function buildOverlayMain() {
                 coordsButton.style.display = '';
               }
               
-              // Restore enable button visibility and reset positioning
-              if (enableButton) {
-                enableButton.style.display = '';
-                enableButton.style.marginTop = '';
+              // Restore create button visibility and reset positioning
+              if (createButton) {
+                createButton.style.display = '';
+                createButton.style.marginTop = '';
               }
               
               // Restore all coordinate input fields
@@ -460,7 +460,7 @@ function buildOverlayMain() {
       .buildElement()
       .addInputFile({'id': 'bm-input-file-template', 'textContent': 'Upload Template', 'accept': 'image/png, image/jpeg, image/webp, image/bmp, image/gif'}).buildElement()
       .addDiv({'id': 'bm-contain-buttons-template'})
-        .addButton({'id': 'bm-button-enable', 'textContent': 'Enable'}, (instance, button) => {
+        .addButton({'id': 'bm-button-create', 'textContent': 'Create'}, (instance, button) => {
           button.onclick = () => {
             const input = document.querySelector('#bm-input-file-template');
 
