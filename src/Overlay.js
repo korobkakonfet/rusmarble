@@ -65,7 +65,7 @@ export default class Overlay {
       this.overlay = element; // Declare it the highest overlay element
       this.currentParent = element;
     } else {
-      this.currentParent.appendChild(element); // ...else delcare it the child of the last element
+      this.currentParent?.appendChild(element); // ...else delcare it the child of the last element
       this.parentStack.push(this.currentParent);
       this.currentParent = element;
     }
@@ -117,7 +117,7 @@ export default class Overlay {
    * // <div><p></p></div>
    */
   buildOverlay(parent) {
-    parent.appendChild(this.overlay);
+    parent?.appendChild(this.overlay);
 
     // Resets the class-bound variables of this class instance back to default so overlay can be build again later
     this.overlay = null;

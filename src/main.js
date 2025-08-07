@@ -22,7 +22,7 @@ function inject(callback) {
     script.setAttribute('bm-name', name); // Passes in the name value
     script.setAttribute('bm-cStyle', consoleStyle); // Passes in the console style value
     script.textContent = `(${callback})();`;
-    document.documentElement.appendChild(script);
+    document.documentElement?.appendChild(script);
     script.remove();
 }
 
@@ -170,7 +170,7 @@ stylesheetLink.onload = function () {
   this.onload = null;
   this.rel = 'stylesheet';
 };
-document.head.appendChild(stylesheetLink);
+document.head?.appendChild(stylesheetLink);
 
 // CONSTRUCTORS
 const observers = new Observers(); // Constructs a new Observers object
@@ -226,7 +226,7 @@ function observeBlack() {
       // Attempts to find the "Paint Pixel" element for anchoring
       const paintPixel = black.parentNode.parentNode.parentNode.parentNode.querySelector('h2');
 
-      paintPixel.parentNode.appendChild(move); // Adds the move button
+      paintPixel.parentNode?.appendChild(move); // Adds the move button
     }
   });
 
