@@ -186,6 +186,7 @@ classDiagram
   }
   class templateManager {
     userID : number
+    templatesShouldBeDrawn : boolean
     +createJSON()
     +createTemplate()
     -storeTemplates()
@@ -193,6 +194,7 @@ classDiagram
     +drawTemplateOnTile()
     +importJSON()
     +parseBlueMarble()
+    +setTemplatesShouldBeDrawn()
   }
   class Template {
     +createTemplateTiles()
@@ -216,6 +218,7 @@ classDiagram
   apiManager ..> templateManager : calls drawTemplateOnTiles(), sets userID
   apiManager ..> utils : calls escapeHTML(), numberToEncoded(), serverTPtoDisplayTP()
   Overlay ..> apiManager : uses coordsTilePixel
+  Overlay ..> templateManager : calls setTemplatesShouldBeDrawn()
   templateManager *-- Template : manages
   templateManager ..> utils : calls base64ToUint8(), numberToEncoded()
   Template ..> utils : calls uint8ToBase64()

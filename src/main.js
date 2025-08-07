@@ -460,6 +460,12 @@ function buildOverlayMain() {
       .buildElement()
       .addInputFile({'id': 'bm-input-file-template', 'textContent': 'Upload Template', 'accept': 'image/png, image/jpeg, image/webp, image/bmp, image/gif'}).buildElement()
       .addDiv({'id': 'bm-contain-buttons-template'})
+        .addButton({'id': 'bm-button-enable', 'textContent': 'Enable'}, (instance, button) => {
+          button.onclick = () => {
+            instance.apiManager?.templateManager?.setTemplatesShouldBeDrawn(true);
+            instance.handleDisplayStatus(`Enabled templates!`);
+          }
+        }).buildElement()
         .addButton({'id': 'bm-button-create', 'textContent': 'Create'}, (instance, button) => {
           button.onclick = () => {
             const input = document.querySelector('#bm-input-file-template');
@@ -486,7 +492,12 @@ function buildOverlayMain() {
             instance.handleDisplayStatus(`Drew to canvas!`);
           }
         }).buildElement()
-        // .addButton({'id': 'bm-button-disable', 'textContent': 'Disable'}).buildElement()
+        .addButton({'id': 'bm-button-disable', 'textContent': 'Disable'}, (instance, button) => {
+          button.onclick = () => {
+            instance.apiManager?.templateManager?.setTemplatesShouldBeDrawn(false);
+            instance.handleDisplayStatus(`Disabled templates!`);
+          }
+        }).buildElement()
       .buildElement()
       .addTextarea({'id': overlay.outputStatusId, 'placeholder': `Status: Sleeping...\nVersion: ${version}`, 'readOnly': true}).buildElement()
       .addDiv({'id': 'bm-contain-buttons-action'})

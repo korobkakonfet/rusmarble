@@ -59,6 +59,7 @@ export default class TemplateManager {
     this.templateState = ''; // The state of the template ('blob', 'proccessing', 'template', etc.)
     this.templatesArray = []; // All Template instnaces currently loaded (Template)
     this.templatesJSON = null; // All templates currently loaded (JSON)
+    this.templatesShouldBeDrawn = true; // Should ALL templates be drawn to the canvas?
   }
 
   /** Retrieves the pixel art canvas.
@@ -202,6 +203,9 @@ export default class TemplateManager {
    * @since 0.65.77
    */
   async drawTemplateOnTile(tileBlob, tileCoords) {
+
+    // Returns early if no templates should be drawn
+    if (!this.templatesShouldBeDrawn) {return tileBlob;}
 
     const drawSize = this.tileSize * this.drawMult; // Calculate draw multiplier for scaling
 
@@ -373,5 +377,13 @@ export default class TemplateManager {
    */
   #parseOSU() {
 
+  }
+
+  /** Sets the `templatesShouldBeDrawn` boolean to a value.
+   * @param {boolean} value - The value to set the boolean to
+   * @since 0.73.7
+   */
+  setTemplatesShouldBeDrawn(value) {
+    this.templatesShouldBeDrawn = value;
   }
 }
