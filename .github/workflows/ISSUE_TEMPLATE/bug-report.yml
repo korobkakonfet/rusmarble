@@ -78,7 +78,7 @@ body:
     id: system-information
     attributes:
       label: System Information
-      description: "Please fill out these details about your OS, Blue Marble version, and what website browser you use."
+      description: "Please fill out these details about your OS, Blue Marble version, and what website browser you use. Please fill this out!"
       placeholder: |
         OS: (E.g. Windows)
         Blue Marble Version: 3.346.0
