@@ -28,7 +28,7 @@ console.log(`${consoleStyle.BLUE}Starting build...${consoleStyle.RESET}`);
 if (isGitHub) {
   try {
     console.log(`Generating JSDoc...`);
-    execSync(`npx jsdoc src/ -r -d wiki`, { stdio: "inherit" });
+    execSync(`npx jsdoc src/ -r -d docs`, { stdio: "inherit" });
     console.log(`JSDoc built ${consoleStyle.GREEN}successfully${consoleStyle.RESET}`);
   } catch (error) {
     console.error(`${consoleStyle.RED + consoleStyle.BOLD}Failed to generate JSDoc${consoleStyle.RESET}:`, error);
