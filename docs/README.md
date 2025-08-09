@@ -1,13 +1,10 @@
 <table>
   <tr>
     <td><a href="#blue-marble">Blue Marble</a></td>
-    <td valign="top" rowspan="99"><a href="https://discord.gg/tpeBPy46hf"><img alt="Discord Banner" src="https://discord.com/api/guilds/796124137042608188/widget.png?style=banner4"></a></td>
+    <td valign="top" span="99"><a href="https://discord.gg/tpeBPy46hf"><img alt="Discord Banner" src="https://discord.com/api/guilds/796124137042608188/widget.png?style=banner4"></a></td>
   </tr>
   <tr>
     <td>&emsp;<a href="#overview">Overview</a></td>
-  </tr>
-  <tr>
-    <td>&emsp;&emsp;<a href="#installation-instructions">Installation Instructions</a></td>
   </tr>
   <tr>
     <td>&emsp;&emsp;<a href="#script-settings">Script Settings</a></td>
@@ -23,12 +20,6 @@
   </tr>
   <tr>
     <td>&emsp;<a href="#faq">FAQ</a></td>
-  </tr>
-  <tr>
-    <td>&emsp;&emsp;<a href="#is-blue-marble-malware">Is Blue Marble malware?</a></td>
-  </tr>
-  <tr>
-    <td>&emsp;&emsp;<a href="#how-can-blue-marble-place-pixels-for-me">How can Blue Marble place pixels for me?</a></td>
   </tr>
   <tr>
     <td>&emsp;&emsp;<a href="#how-do-i-hide-the-overlay">How do I hide the overlay?</a></td>
@@ -64,7 +55,7 @@
     Installation instructions for Blue Marble are below. Click the arrows to expand the instructions you want to see. Blue text is a link.
     <details>
       <summary>
-        <b>Computer - Chrome</b> <sup>(Click to Expand)</sup>
+        <b>Install Chrome</b> <sup>(Click to Expand)</sup>
       </summary>
       <ol>
         <li>Install the <a href="https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo" target="_blank" rel="noopener noreferrer">TamperMonkey</a> plugin for Chrome.
@@ -78,15 +69,15 @@
         <br>
         <img alt="Enable 'Developer Mode' and 'Allow user scripts'" src="https://github.com/SwingTheVine/Wplace-BlueMarble/blob/main/docs/assets/ComputerEdgeInstall3.png"></li>
         <li>Enable "Allow user scripts."</li>
-        <li><strong>One-click install:</strong> Click this link to install Blue Marble directly: <a href="https://github.com/SwingTheVine/Wplace-BlueMarble/releases/download/v0.76.0/BlueMarble.user.js" target="_blank" rel="noopener noreferrer"><strong>Install Blue Marble</strong></a>
+        <li><strong>One-click install:</strong> Click this link to Install Blue Marble directly: <a href="https://github.com/SwingTheVine/Wplace-BlueMarble/releases/download/v0.76.0/BlueMarble.user.js" target="_blank" rel="noopener noreferrer"><strong>Install Blue Marble</strong></a>
         <br>
-        TamperMonkey will automatically detect the userscript and prompt you to install it.</li>
+        TamperMonkey will automatically detect the userscript and prompt you to Install it.</li>
         <li>Refresh the <a href="https://wplace.live/" target="_blank" rel="noopener noreferrer">wplace.live</a> webpage.</li>
       </ol>
     </details>
     <details>
       <summary>
-        <b>Computer - Edge</b> <sup>(Click to Expand)</sup>
+        <b>Install Edge</b> <sup>(Click to Expand)</sup>
       </summary>
       <ol>
         <li>Install the <a href="https://microsoftedge.microsoft.com/addons/detail/iikmkjmpaadaobahmlepeloendndfphd" target="_blank" rel="noopener noreferrer">TamperMonkey</a> plugin for Microsoft Edge.
@@ -106,7 +97,7 @@
         <li>Drag the <code>BlueMarble.user.js</code> file inside the dashboard of TamperMonkey.
         <br>
         <img alt="Drag the userscript into the dashboard" src="https://github.com/SwingTheVine/Wplace-BlueMarble/blob/main/docs/assets/ComputerChromeInstall5.png"></li>
-        <li>Click the "Install" button to install Blue Marble.
+        <li>Click the "Install" button to Install Blue Marble.
         <br>
         <img alt="Click the 'Install' button" src="https://github.com/SwingTheVine/Wplace-BlueMarble/blob/main/docs/assets/ComputerChromeInstall6.png"></li>
         <li>Enable Blue Marble inside the TamperMonkey dashboard.
@@ -117,15 +108,15 @@
     </details>
     <details>
       <summary>
-        <b>Computer - FireFox</b> <sup>(Click to Expand)</sup>
+        <b>Install FireFox</b> <sup>(Click to Expand)</sup>
       </summary>
       <ol>
         <li>Install the <a href="https://addons.mozilla.org/en-US/firefox/addon/tampermonkey/" target="_blank" rel="noopener noreferrer">TamperMonkey</a> plugin for FireFox.
         <br>
         <img alt="Click the 'Add to FireFox' button" src="https://github.com/SwingTheVine/Wplace-BlueMarble/blob/main/docs/assets/ComputerFireFoxInstall1.png"></li>
-        <li><strong>One-click install:</strong> Click this link to install Blue Marble directly: <a href="https://github.com/SwingTheVine/Wplace-BlueMarble/releases/download/v0.76.0/BlueMarble.user.js" target="_blank" rel="noopener noreferrer"><strong>Install Blue Marble</strong></a>
+        <li><strong>One-click install:</strong> Click this link to Install Blue Marble directly: <a href="https://github.com/SwingTheVine/Wplace-BlueMarble/releases/download/v0.76.0/BlueMarble.user.js" target="_blank" rel="noopener noreferrer"><strong>Install Blue Marble</strong></a>
         <br>
-        TamperMonkey will automatically detect the userscript and prompt you to install it.</li>
+        TamperMonkey will automatically detect the userscript and prompt you to Install it.</li>
         <li>Refresh the <a href="https://wplace.live/" target="_blank" rel="noopener noreferrer">wplace.live</a> webpage.</li>
       </ol>
     </details>
