@@ -1,10 +1,13 @@
 <table>
   <tr>
     <td><a href="#blue-marble">Blue Marble</a></td>
-    <td valign="top" span="99"><a href="https://discord.gg/tpeBPy46hf"><img alt="Discord Banner" src="https://discord.com/api/guilds/796124137042608188/widget.png?style=banner4"></a></td>
+    <td valign="top" rowspan="99"><a href="https://discord.gg/tpeBPy46hf"><img alt="Discord Banner" src="https://discord.com/api/guilds/796124137042608188/widget.png?style=banner4"></a></td>
   </tr>
   <tr>
     <td>&emsp;<a href="#overview">Overview</a></td>
+  </tr>
+  <tr>
+    <td>&emsp;&emsp;<a href="#installation-instructions">Installation Instructions</a></td>
   </tr>
   <tr>
     <td>&emsp;&emsp;<a href="#script-settings">Script Settings</a></td>
@@ -20,6 +23,12 @@
   </tr>
   <tr>
     <td>&emsp;<a href="#faq">FAQ</a></td>
+  </tr>
+  <tr>
+    <td>&emsp;&emsp;<a href="#is-blue-marble-malware">Is Blue Marble malware?</a></td>
+  </tr>
+  <tr>
+    <td>&emsp;&emsp;<a href="#how-can-blue-marble-place-pixels-for-me">How can Blue Marble place pixels for me?</a></td>
   </tr>
   <tr>
     <td>&emsp;&emsp;<a href="#how-do-i-hide-the-overlay">How do I hide the overlay?</a></td>
