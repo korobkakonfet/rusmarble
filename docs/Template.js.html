@@ -1,4 +1,32 @@
-import { uint8ToBase64 } from "./utils";
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: Template.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: Template.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>import { uint8ToBase64 } from "./utils";
 
 /** An instance of a template.
  * Handles all mathematics, manipulation, and analysis regarding a single template.
@@ -13,7 +41,7 @@ export default class Template {
    * @param {string} [params.authorID=''] - The user ID of the person who exported the template (prevents sort ID collisions)
    * @param {string} [params.url=''] - The URL to the source image
    * @param {File} [params.file=null] - The template file (pre-processed File or processed bitmap)
-   * @param {Array<number>} [params.coords=null] - The coordinates of the top left corner as (tileX, tileY, pixelX, pixelY)
+   * @param {Array&lt;number>} [params.coords=null] - The coordinates of the top left corner as (tileX, tileY, pixelX, pixelY)
    * @param {Object} [params.chunked=null] - The affected chunks of the template, and their template for each chunk
    * @param {number} [params.tileSize=1000] - The size of a tile in pixels (assumes square tiles)
    * @param {number} [params.pixelCount=0] - Total number of pixels in the template (calculated automatically during processing)
@@ -42,7 +70,7 @@ export default class Template {
 
   /** Creates chunks of the template for each tile.
    * 
-   * @returns {Object} Collection of template bitmaps & buffers organized by tile coordinates
+   * @returns {Object} Collection of template bitmaps &amp; buffers organized by tile coordinates
    * @since 0.65.4
    */
   async createTemplateTiles() {
@@ -68,7 +96,7 @@ export default class Template {
     const context = canvas.getContext('2d', { willReadFrequently: true });
 
     // For every tile...
-    for (let pixelY = this.coords[3]; pixelY < imageHeight + this.coords[3]; ) {
+    for (let pixelY = this.coords[3]; pixelY &lt; imageHeight + this.coords[3]; ) {
 
       // Draws the partial tile first, if any
       // This calculates the size based on which is smaller:
@@ -78,7 +106,7 @@ export default class Template {
 
       console.log(`Math.min(${this.tileSize} - (${pixelY} % ${this.tileSize}), ${imageHeight} - (${pixelY - this.coords[3]}))`);
 
-      for (let pixelX = this.coords[2]; pixelX < imageWidth + this.coords[2];) {
+      for (let pixelX = this.coords[2]; pixelX &lt; imageWidth + this.coords[2];) {
 
         console.log(`Pixel X: ${pixelX}\nPixel Y: ${pixelY}`);
 
@@ -125,8 +153,8 @@ export default class Template {
 
         const imageData = context.getImageData(0, 0, canvasWidth, canvasHeight); // Data of the image on the canvas
 
-        for (let y = 0; y < canvasHeight; y++) {
-          for (let x = 0; x < canvasWidth; x++) {
+        for (let y = 0; y &lt; canvasHeight; y++) {
+          for (let x = 0; x &lt; canvasWidth; x++) {
             // For every pixel...
 
             // ... Make it transparent unless it is the "center"
@@ -177,3 +205,26 @@ export default class Template {
     return { templateTiles, templateTilesBuffers };
   }
 }
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="module.exports.html">exports</a></li><li><a href="module.exports_module.exports.html">exports</a></li></ul><h3>Global</h3><ul><li><a href="global.html#addBr">addBr</a></li><li><a href="global.html#addButton">addButton</a></li><li><a href="global.html#addButtonHelp">addButtonHelp</a></li><li><a href="global.html#addCheckbox">addCheckbox</a></li><li><a href="global.html#addDiv">addDiv</a></li><li><a href="global.html#addHeader">addHeader</a></li><li><a href="global.html#addHr">addHr</a></li><li><a href="global.html#addImg">addImg</a></li><li><a href="global.html#addInput">addInput</a></li><li><a href="global.html#addInputFile">addInputFile</a></li><li><a href="global.html#addP">addP</a></li><li><a href="global.html#addSmall">addSmall</a></li><li><a href="global.html#addTextarea">addTextarea</a></li><li><a href="global.html#base64ToUint8">base64ToUint8</a></li><li><a href="global.html#buildElement">buildElement</a></li><li><a href="global.html#buildOverlay">buildOverlay</a></li><li><a href="global.html#buildOverlayMain">buildOverlayMain</a></li><li><a href="global.html#consoleError">consoleError</a></li><li><a href="global.html#consoleLog">consoleLog</a></li><li><a href="global.html#consoleWarn">consoleWarn</a></li><li><a href="global.html#createJSON">createJSON</a></li><li><a href="global.html#createObserverBody">createObserverBody</a></li><li><a href="global.html#createTemplate">createTemplate</a></li><li><a href="global.html#createTemplateTiles">createTemplateTiles</a></li><li><a href="global.html#deleteTemplate">deleteTemplate</a></li><li><a href="global.html#disableTemplate">disableTemplate</a></li><li><a href="global.html#drawTemplateOnTile">drawTemplateOnTile</a></li><li><a href="global.html#escapeHTML">escapeHTML</a></li><li><a href="global.html#getObserverBody">getObserverBody</a></li><li><a href="global.html#handleDisplayError">handleDisplayError</a></li><li><a href="global.html#handleDisplayStatus">handleDisplayStatus</a></li><li><a href="global.html#handleDrag">handleDrag</a></li><li><a href="global.html#importJSON">importJSON</a></li><li><a href="global.html#inject">inject</a></li><li><a href="global.html#negativeSafeModulo">negativeSafeModulo</a></li><li><a href="global.html#numberToEncoded">numberToEncoded</a></li><li><a href="global.html#observe">observe</a></li><li><a href="global.html#observeBlack">observeBlack</a></li><li><a href="global.html#serverTPtoDisplayTP">serverTPtoDisplayTP</a></li><li><a href="global.html#setApiManager">setApiManager</a></li><li><a href="global.html#setTemplatesShouldBeDrawn">setTemplatesShouldBeDrawn</a></li><li><a href="global.html#spontaneousResponseListener">spontaneousResponseListener</a></li><li><a href="global.html#uint8ToBase64">uint8ToBase64</a></li><li><a href="global.html#updateInnerHTML">updateInnerHTML</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc/jsdoc">JSDoc 4.0.4</a> on Fri Aug 08 2025 16:09:33 GMT-0400 (Eastern Daylight Time)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>
