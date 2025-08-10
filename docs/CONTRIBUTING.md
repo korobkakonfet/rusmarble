@@ -34,6 +34,15 @@
     <td>&emsp;<a href="#how-to-contribute">How to Contribute</a></td>
   </tr>
   <tr>
+    <td>&emsp;<a href="#production-enviroment">Production Enviroment</a></td>
+  </tr>
+  <tr>
+    <td>&emsp;&emsp;<a href="#npm-run">Npm Run</a></td>
+  </tr>
+  <tr>
+    <td>&emsp;&emsp;<a href="#charts">Charts</a></td>
+  </tr>
+  <tr>
     <td>&emsp;<a href="#development-environment">Development Environment</a></td>
   </tr>
 </table>
@@ -42,6 +51,8 @@
 <a href="https://github.com/SwingTheVine/Wplace-BlueMarble/blob/main/LICENSE.txt" target="_blank" rel="noopener noreferrer"><img alt="Software License: MPL-2.0" src="https://img.shields.io/badge/Software_License-MPL--2.0-slateblue?style=flat"></a>
 <p>
   Thank you for wanting to contribute to the userscript "Blue Marble"! It means a lot to me that someone likes my project enough to want to help it grow. If you haven't already done so, consider joining our Discord. You can ask questions about the userscript there and receive feedback.
+  <br>
+  <b>Note</b>: If you are using AI, and you want to tell the AI how the codebase files are related to each-other, go to the <code>Class diagram of relationships for Blue Marble</code> diagram in the chart section of this file. Copy the chart, and give it to the AI.
 </p>
 
 <h2>Summary</h2>
@@ -126,6 +137,182 @@
     <li>Submit a pull request between your fork and this project.</li>
   </ol>
 </p>
+
+<h2>Production Enviroment</h2>
+<p>
+  Here lies information that may be of interest to those who wish to modify Blue Marble.
+
+  <h3>Npm Run</h3>
+  <p>
+    Running <code>npm run build</code> will compile Blue Marble. The compiled files can be found in the <code>dist/</code> directory. Running <code>npm run patch</code> will increment the patch version, and compile Blue Marble.
+  </p>
+
+  <h3>Charts</h3>
+  <p>
+    Use the arrow and zoom buttons to navigate the charts. Use the ↔️ button to go fullscreen. Use the 🔄 button to reset. All buttons can be found on the chart. Use the "two squares" icon to copy the chart. If you need assistance reading the chart, copy the chart into an AI using the "two squares" button on the chart.
+  </p>
+</p>
+
+<!-- https://mermaid.js.org/syntax/classDiagram.html -->
+
+Class diagram of relationships for Blue Marble:
+(last updated 0.74.0)
+```mermaid
+---
+  config:
+    class:
+      hideEmptyMembersBox: true
+---
+classDiagram
+  class main {
+    name : string
+    version : string
+    +inject()
+    +observeBlack()
+    +buildOverlayMain()
+  }
+  class utils {
+    +escapeHTML()
+    +serverTPtoDisplayTP()
+    +negativeSafeModulo()
+    +consoleLog()
+    +consoleError()
+    +consoleWarn()
+    +numberToEncoded()
+    +uint8ToBase64()
+    +base64ToUint8()
+  }
+  class apiManager {
+    coordsTilePixel : number[4]
+    +spontaneousResponseListener()
+  }
+  class templateManager {
+    userID : number
+    templatesShouldBeDrawn : boolean
+    +createJSON()
+    +createTemplate()
+    -storeTemplates()
+    +disableTemplate()
+    +drawTemplateOnTile()
+    +importJSON()
+    +parseBlueMarble()
+    +setTemplatesShouldBeDrawn()
+  }
+  class Template {
+    +createTemplateTiles()
+  }
+  class Overlay {
+    +setApiManager()
+    -createElement()
+    +add...()
+    +buildElement()
+    +buildOverlay()
+    +updateInnerHTML()
+    +handleDrag()
+    +handleDisplayStatus()
+    +handleDisplayError()
+  }
+
+  main o-- apiManager : creates
+  main o-- utils : creates
+  main o-- Overlay : creates main, tabTemplate
+  main o-- templateManager : creates
+  apiManager ..> templateManager : calls drawTemplateOnTiles(), sets userID
+  apiManager ..> utils : calls escapeHTML(), numberToEncoded(), serverTPtoDisplayTP()
+  Overlay ..> apiManager : uses coordsTilePixel
+  Overlay ..> templateManager : calls setTemplatesShouldBeDrawn()
+  templateManager *-- Template : manages
+  templateManager ..> utils : calls base64ToUint8(), numberToEncoded()
+  Template ..> utils : calls uint8ToBase64()
+```
+
+Class diagram of relationships for Blue Marble's compiler/builder:
+(last updated 0.74.0)
+```mermaid
+---
+  config:
+    class:
+      hideEmptyMembersBox: true
+---
+classDiagram
+
+  namespace npm_run_patch {
+    class `patch.js` {
+    }
+
+    class `docs/README.md` {
+    }
+  }
+
+  namespace npm_run_build {
+    class `build.js` {
+      mapCSS : JSON Object
+    }
+
+    class `cssMangler.js` {
+      importMap : JSON Object
+      returnMap : JSON Object
+      +mangleSelectors()
+      +escapeRegex()
+      +numberToEncoded()
+    }
+
+    class `update-version.js` {
+    }
+
+    class `utils.js` {
+      +consoleStyle()
+    }
+
+    class esbuild {
+      +build()
+    }
+
+    class terser {
+      +minify()
+    }
+
+    class `dist/BlueMarble.user.js` {
+    }
+
+    class `dist/BlueMarble.user.css` {
+    }
+
+    class `dist/BlueMarble.user.css.map.json` {
+    }
+
+    class `src/BlueMarble.meta.js` {
+    }
+
+    class `src/main.js` {
+    }
+
+    class `package.json` {
+    }
+  }
+
+  note for `patch.js` "calls npm_run_build"
+  `build.js` ..> terser : requires
+  `build.js` ..> `utils.js` : calls consoleStyle()
+  `build.js` ..> `update-version.js` : executes
+  `build.js` ..> `src/BlueMarble.meta.js` : reads
+  `build.js` ..> esbuild : calls build()
+  `build.js` ..> `dist/BlueMarble.user.css` : writes
+  esbuild ..> `src/main.js` : reads
+  `build.js` ..> `dist/BlueMarble.user.js` : writes
+  terser ..> `dist/BlueMarble.user.js` : reads & writes
+  `build.js` ..> `cssMangler.js` : calls manglerSelectors()
+  `cssMangler.js` ..> `dist/BlueMarble.user.css.map.json` : reads
+  `cssMangler.js` ..> `dist/BlueMarble.user.js` : reads & writes
+  `cssMangler.js` ..> `dist/BlueMarble.user.css` : reads & writes
+  `build.js` <.. `cssMangler.js` : returns mapCSS
+  `build.js` ..> `dist/BlueMarble.user.css.map.json` : writes mapCSS
+  `patch.js` ..> `docs/README.md` : reads & writes
+  `patch.js` ..> `utils.js` : calls consoleStyle()
+  `update-version.js` ..> `package.json` : reads
+  `update-version.js` ..> `src/BlueMarble.meta.js` : reads & writes
+  `update-version.js` ..> `utils.js` : calls consoleStyle()
+```
 
 <h2>Development Environment</h2>
 <p>

@@ -1,4 +1,32 @@
-/** The overlay builder for the Blue Marble script.
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: Overlay.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: Overlay.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>/** The overlay builder for the Blue Marble script.
  * @description This class handles the overlay UI for the Blue Marble script.
  * @since 0.0.2
  * @example
@@ -7,20 +35,20 @@
  *   .addDiv({ 'id': 'header' })
  *     .addHeader(1, {'textContent': 'Your Overlay'}).buildElement()
  *     .addP({'textContent': 'This is your overlay. It is versatile.'}).buildElement()
- *   .buildElement() // Marks the end of the header <div>
+ *   .buildElement() // Marks the end of the header &lt;div>
  *   .addHr().buildElement()
  * .buildOverlay(document.body);
  * // Output:
- * // (Assume <body> already exists in the webpage)
- * <body>
- *   <div id="overlay">
- *     <div id="header">
- *       <h1>Your Overlay</h1>
- *       <p>This is your overlay. It is versatile.</p>
- *     </div>
- *     <hr>
- *   </div>
- * </body>
+ * // (Assume &lt;body> already exists in the webpage)
+ * &lt;body>
+ *   &lt;div id="overlay">
+ *     &lt;div id="header">
+ *       &lt;h1>Your Overlay&lt;/h1>
+ *       &lt;p>This is your overlay. It is versatile.&lt;/p>
+ *     &lt;/div>
+ *     &lt;hr>
+ *   &lt;/div>
+ * &lt;/body>
 */
 export default class Overlay {
 
@@ -52,7 +80,7 @@ export default class Overlay {
   /** Creates an element.
    * For **internal use** of the {@link Overlay} class.
    * @param {string} tag - The tag name as a string.
-   * @param {Object.<string, any>} [properties={}] - The DOM properties of the element.
+   * @param {Object.&lt;string, any>} [properties={}] - The DOM properties of the element.
    * @returns {HTMLElement} HTML Element
    * @since 0.43.2
    */
@@ -91,9 +119,9 @@ export default class Overlay {
    * @example
    * overlay
    *   .addDiv()
-   *     .addHeader(1).buildElement() // Breaks out of the <h1>
-   *     .addP().buildElement() // Breaks out of the <p>
-   *   .buildElement() // Breaks out of the <div>
+   *     .addHeader(1).buildElement() // Breaks out of the &lt;h1>
+   *     .addP().buildElement() // Breaks out of the &lt;p>
+   *   .buildElement() // Breaks out of the &lt;div>
    *   .addHr() // Since there are no more elements, calling buildElement() is optional
    * .buildOverlay(document.body);
    */
@@ -114,7 +142,7 @@ export default class Overlay {
    *     .addP().buildElement()
    *   .buildElement()
    * .buildOverlay(document.body); // Adds DOM structure to document body
-   * // <div><p></p></div>
+   * // &lt;div>&lt;p>&lt;/p>&lt;/div>
    */
   buildOverlay(parent) {
     parent?.appendChild(this.overlay);
@@ -128,24 +156,24 @@ export default class Overlay {
   /** Adds a `div` to the overlay.
    * This `div` element will have properties shared between all `div` elements in the overlay.
    * You can override the shared properties by using a callback.
-   * @param {Object.<string, any>} [additionalProperties={}] - The DOM properties of the `div` that are NOT shared between all overlay `div` elements. These should be camelCase.
+   * @param {Object.&lt;string, any>} [additionalProperties={}] - The DOM properties of the `div` that are NOT shared between all overlay `div` elements. These should be camelCase.
    * @param {function(Overlay, HTMLDivElement):void} [callback=()=>{}] - Additional JS modification to the `div`.
    * @returns {Overlay} Overlay class instance (this)
    * @since 0.43.2
    * @example
-   * // Assume all <div> elements have a shared class (e.g. {'className': 'bar'})
+   * // Assume all &lt;div> elements have a shared class (e.g. {'className': 'bar'})
    * overlay.addDiv({'id': 'foo'}).buildOverlay(document.body);
    * // Output:
-   * // (Assume <body> already exists in the webpage)
-   * <body>
-   *   <div id="foo" class="bar"></div>
-   * </body>
+   * // (Assume &lt;body> already exists in the webpage)
+   * &lt;body>
+   *   &lt;div id="foo" class="bar">&lt;/div>
+   * &lt;/body>
    */
   addDiv(additionalProperties = {}, callback = () => {}) {
 
-    const properties = {}; // Shared <div> DOM properties
+    const properties = {}; // Shared &lt;div> DOM properties
 
-    const div = this.#createElement('div', properties, additionalProperties); // Creates the <div> element
+    const div = this.#createElement('div', properties, additionalProperties); // Creates the &lt;div> element
     callback(this, div); // Runs any script passed in through the callback
     return this;
   }
@@ -153,24 +181,24 @@ export default class Overlay {
   /** Adds a `p` to the overlay.
    * This `p` element will have properties shared between all `p` elements in the overlay.
    * You can override the shared properties by using a callback.
-   * @param {Object.<string, any>} [additionalProperties={}] - The DOM properties of the `p` that are NOT shared between all overlay `p` elements. These should be camelCase.
+   * @param {Object.&lt;string, any>} [additionalProperties={}] - The DOM properties of the `p` that are NOT shared between all overlay `p` elements. These should be camelCase.
    * @param {function(Overlay, HTMLParagraphElement):void} [callback=()=>{}] - Additional JS modification to the `p`.
    * @returns {Overlay} Overlay class instance (this)
    * @since 0.43.2
    * @example
-   * // Assume all <p> elements have a shared class (e.g. {'className': 'bar'})
+   * // Assume all &lt;p> elements have a shared class (e.g. {'className': 'bar'})
    * overlay.addP({'id': 'foo', 'textContent': 'Foobar.'}).buildOverlay(document.body);
    * // Output:
-   * // (Assume <body> already exists in the webpage)
-   * <body>
-   *   <p id="foo" class="bar">Foobar.</p>
-   * </body>
+   * // (Assume &lt;body> already exists in the webpage)
+   * &lt;body>
+   *   &lt;p id="foo" class="bar">Foobar.&lt;/p>
+   * &lt;/body>
    */
   addP(additionalProperties = {}, callback = () => {}) {
 
-    const properties = {}; // Shared <p> DOM properties
+    const properties = {}; // Shared &lt;p> DOM properties
 
-    const p = this.#createElement('p', properties, additionalProperties); // Creates the <p> element
+    const p = this.#createElement('p', properties, additionalProperties); // Creates the &lt;p> element
     callback(this, p); // Runs any script passed in through the callback
     return this;
   }
@@ -178,24 +206,24 @@ export default class Overlay {
   /** Adds a `small` to the overlay.
    * This `small` element will have properties shared between all `small` elements in the overlay.
    * You can override the shared properties by using a callback.
-   * @param {Object.<string, any>} [additionalProperties={}] - The DOM properties of the `small` that are NOT shared between all overlay `small` elements. These should be camelCase.
+   * @param {Object.&lt;string, any>} [additionalProperties={}] - The DOM properties of the `small` that are NOT shared between all overlay `small` elements. These should be camelCase.
    * @param {function(Overlay, HTMLParagraphElement):void} [callback=()=>{}] - Additional JS modification to the `small`.
    * @returns {Overlay} Overlay class instance (this)
    * @since 0.55.8
    * @example
-   * // Assume all <small> elements have a shared class (e.g. {'className': 'bar'})
+   * // Assume all &lt;small> elements have a shared class (e.g. {'className': 'bar'})
    * overlay.addSmall({'id': 'foo', 'textContent': 'Foobar.'}).buildOverlay(document.body);
    * // Output:
-   * // (Assume <body> already exists in the webpage)
-   * <body>
-   *   <small id="foo" class="bar">Foobar.</small>
-   * </body>
+   * // (Assume &lt;body> already exists in the webpage)
+   * &lt;body>
+   *   &lt;small id="foo" class="bar">Foobar.&lt;/small>
+   * &lt;/body>
    */
   addSmall(additionalProperties = {}, callback = () => {}) {
 
-    const properties = {}; // Shared <small> DOM properties
+    const properties = {}; // Shared &lt;small> DOM properties
 
-    const small = this.#createElement('small', properties, additionalProperties); // Creates the <small> element
+    const small = this.#createElement('small', properties, additionalProperties); // Creates the &lt;small> element
     callback(this, small); // Runs any script passed in through the callback
     return this;
   }
@@ -203,24 +231,24 @@ export default class Overlay {
   /** Adds a `img` to the overlay.
    * This `img` element will have properties shared between all `img` elements in the overlay.
    * You can override the shared properties by using a callback.
-   * @param {Object.<string, any>} [additionalProperties={}] - The DOM properties of the `img` that are NOT shared between all overlay `img` elements. These should be camelCase.
+   * @param {Object.&lt;string, any>} [additionalProperties={}] - The DOM properties of the `img` that are NOT shared between all overlay `img` elements. These should be camelCase.
    * @param {function(Overlay, HTMLImageElement):void} [callback=()=>{}] - Additional JS modification to the `img`.
    * @returns {Overlay} Overlay class instance (this)
    * @since 0.43.2
    * @example
-   * // Assume all <img> elements have a shared class (e.g. {'className': 'bar'})
+   * // Assume all &lt;img> elements have a shared class (e.g. {'className': 'bar'})
    * overlay.addimg({'id': 'foo', 'src': './img.png'}).buildOverlay(document.body);
    * // Output:
-   * // (Assume <body> already exists in the webpage)
-   * <body>
-   *   <img id="foo" src="./img.png" class="bar">
-   * </body>
+   * // (Assume &lt;body> already exists in the webpage)
+   * &lt;body>
+   *   &lt;img id="foo" src="./img.png" class="bar">
+   * &lt;/body>
    */
   addImg(additionalProperties = {}, callback = () => {}) {
 
-    const properties = {}; // Shared <img> DOM properties
+    const properties = {}; // Shared &lt;img> DOM properties
 
-    const img = this.#createElement('img', properties, additionalProperties); // Creates the <img> element
+    const img = this.#createElement('img', properties, additionalProperties); // Creates the &lt;img> element
     callback(this, img); // Runs any script passed in through the callback
     return this;
   }
@@ -229,7 +257,7 @@ export default class Overlay {
    * This header element will have properties shared between all header elements in the overlay.
    * You can override the shared properties by using a callback.
    * @param {number} level - The header level. Must be between 1 and 6 (inclusive)
-   * @param {Object.<string, any>} [additionalProperties={}] - The DOM properties of the header that are NOT shared between all overlay header elements. These should be camelCase.
+   * @param {Object.&lt;string, any>} [additionalProperties={}] - The DOM properties of the header that are NOT shared between all overlay header elements. These should be camelCase.
    * @param {function(Overlay, HTMLHeadingElement):void} [callback=()=>{}] - Additional JS modification to the header.
    * @returns {Overlay} Overlay class instance (this)
    * @since 0.43.7
@@ -237,10 +265,10 @@ export default class Overlay {
    * // Assume all header elements have a shared class (e.g. {'className': 'bar'})
    * overlay.addHeader(6, {'id': 'foo', 'textContent': 'Foobar.'}).buildOverlay(document.body);
    * // Output:
-   * // (Assume <body> already exists in the webpage)
-   * <body>
-   *   <h6 id="foo" class="bar">Foobar.</h6>
-   * </body>
+   * // (Assume &lt;body> already exists in the webpage)
+   * &lt;body>
+   *   &lt;h6 id="foo" class="bar">Foobar.&lt;/h6>
+   * &lt;/body>
    */
   addHeader(level, additionalProperties = {}, callback = () => {}) {
 
@@ -254,24 +282,24 @@ export default class Overlay {
   /** Adds a `hr` to the overlay.
    * This `hr` element will have properties shared between all `hr` elements in the overlay.
    * You can override the shared properties by using a callback.
-   * @param {Object.<string, any>} [additionalProperties={}] - The DOM properties of the `hr` that are NOT shared between all overlay `hr` elements. These should be camelCase.
+   * @param {Object.&lt;string, any>} [additionalProperties={}] - The DOM properties of the `hr` that are NOT shared between all overlay `hr` elements. These should be camelCase.
    * @param {function(Overlay, HTMLHRElement):void} [callback=()=>{}] - Additional JS modification to the `hr`.
    * @returns {Overlay} Overlay class instance (this)
    * @since 0.43.7
    * @example
-   * // Assume all <hr> elements have a shared class (e.g. {'className': 'bar'})
+   * // Assume all &lt;hr> elements have a shared class (e.g. {'className': 'bar'})
    * overlay.addhr({'id': 'foo'}).buildOverlay(document.body);
    * // Output:
-   * // (Assume <body> already exists in the webpage)
-   * <body>
-   *   <hr id="foo" class="bar">
-   * </body>
+   * // (Assume &lt;body> already exists in the webpage)
+   * &lt;body>
+   *   &lt;hr id="foo" class="bar">
+   * &lt;/body>
    */
   addHr(additionalProperties = {}, callback = () => {}) {
 
-    const properties = {}; // Shared <hr> DOM properties
+    const properties = {}; // Shared &lt;hr> DOM properties
 
-    const hr = this.#createElement('hr', properties, additionalProperties); // Creates the <hr> element
+    const hr = this.#createElement('hr', properties, additionalProperties); // Creates the &lt;hr> element
     callback(this, hr); // Runs any script passed in through the callback
     return this;
   }
@@ -279,24 +307,24 @@ export default class Overlay {
   /** Adds a `br` to the overlay.
    * This `br` element will have properties shared between all `br` elements in the overlay.
    * You can override the shared properties by using a callback.
-   * @param {Object.<string, any>} [additionalProperties={}] - The DOM properties of the `br` that are NOT shared between all overlay `br` elements. These should be camelCase.
+   * @param {Object.&lt;string, any>} [additionalProperties={}] - The DOM properties of the `br` that are NOT shared between all overlay `br` elements. These should be camelCase.
    * @param {function(Overlay, HTMLBRElement):void} [callback=()=>{}] - Additional JS modification to the `br`.
    * @returns {Overlay} Overlay class instance (this)
    * @since 0.43.11
    * @example
-   * // Assume all <br> elements have a shared class (e.g. {'className': 'bar'})
+   * // Assume all &lt;br> elements have a shared class (e.g. {'className': 'bar'})
    * overlay.addbr({'id': 'foo'}).buildOverlay(document.body);
    * // Output:
-   * // (Assume <body> already exists in the webpage)
-   * <body>
-   *   <br id="foo" class="bar">
-   * </body>
+   * // (Assume &lt;body> already exists in the webpage)
+   * &lt;body>
+   *   &lt;br id="foo" class="bar">
+   * &lt;/body>
    */
   addBr(additionalProperties = {}, callback = () => {}) {
 
-    const properties = {}; // Shared <br> DOM properties
+    const properties = {}; // Shared &lt;br> DOM properties
 
-    const br = this.#createElement('br', properties, additionalProperties); // Creates the <br> element
+    const br = this.#createElement('br', properties, additionalProperties); // Creates the &lt;br> element
     callback(this, br); // Runs any script passed in through the callback
     return this;
   }
@@ -304,7 +332,7 @@ export default class Overlay {
   /** Adds a checkbox to the overlay.
    * This checkbox element will have properties shared between all checkbox elements in the overlay.
    * You can override the shared properties by using a callback. Note: the checkbox element is inside a label element.
-   * @param {Object.<string, any>} [additionalProperties={}] - The DOM properties of the checkbox that are NOT shared between all overlay checkbox elements. These should be camelCase.
+   * @param {Object.&lt;string, any>} [additionalProperties={}] - The DOM properties of the checkbox that are NOT shared between all overlay checkbox elements. These should be camelCase.
    * @param {function(Overlay, HTMLLabelElement, HTMLInputElement):void} [callback=()=>{}] - Additional JS modification to the checkbox.
    * @returns {Overlay} Overlay class instance (this)
    * @since 0.43.10
@@ -312,13 +340,13 @@ export default class Overlay {
    * // Assume all checkbox elements have a shared class (e.g. {'className': 'bar'})
    * overlay.addCheckbox({'id': 'foo', 'textContent': 'Foobar.'}).buildOverlay(document.body);
    * // Output:
-   * // (Assume <body> already exists in the webpage)
-   * <body>
-   *   <label>
-   *     <input type="checkbox" id="foo" class="bar">
+   * // (Assume &lt;body> already exists in the webpage)
+   * &lt;body>
+   *   &lt;label>
+   *     &lt;input type="checkbox" id="foo" class="bar">
    *     "Foobar."
-   *   </label>
-   * </body>
+   *   &lt;/label>
+   * &lt;/body>
    */
   addCheckbox(additionalProperties = {}, callback = () => {}) {
 
@@ -336,24 +364,24 @@ export default class Overlay {
   /** Adds a `button` to the overlay.
    * This `button` element will have properties shared between all `button` elements in the overlay.
    * You can override the shared properties by using a callback.
-   * @param {Object.<string, any>} [additionalProperties={}] - The DOM properties of the `button` that are NOT shared between all overlay `button` elements. These should be camelCase.
+   * @param {Object.&lt;string, any>} [additionalProperties={}] - The DOM properties of the `button` that are NOT shared between all overlay `button` elements. These should be camelCase.
    * @param {function(Overlay, HTMLButtonElement):void} [callback=()=>{}] - Additional JS modification to the `button`.
    * @returns {Overlay} Overlay class instance (this)
    * @since 0.43.12
    * @example
-   * // Assume all <button> elements have a shared class (e.g. {'className': 'bar'})
+   * // Assume all &lt;button> elements have a shared class (e.g. {'className': 'bar'})
    * overlay.addButton({'id': 'foo', 'textContent': 'Foobar.'}).buildOverlay(document.body);
    * // Output:
-   * // (Assume <body> already exists in the webpage)
-   * <body>
-   *   <button id="foo" class="bar">Foobar.</button>
-   * </body>
+   * // (Assume &lt;body> already exists in the webpage)
+   * &lt;body>
+   *   &lt;button id="foo" class="bar">Foobar.&lt;/button>
+   * &lt;/body>
    */
   addButton(additionalProperties = {}, callback = () => {}) {
 
-    const properties = {}; // Shared <button> DOM properties
+    const properties = {}; // Shared &lt;button> DOM properties
 
-    const button = this.#createElement('button', properties, additionalProperties); // Creates the <button> element
+    const button = this.#createElement('button', properties, additionalProperties); // Creates the &lt;button> element
     callback(this, button); // Runs any script passed in through the callback
     return this;
   }
@@ -362,7 +390,7 @@ export default class Overlay {
    * On click, the button will attempt to output the title to the output element (ID defined in Overlay constructor).
    * This `button` element will have properties shared between all `button` elements in the overlay.
    * You can override the shared properties by using a callback.
-   * @param {Object.<string, any>} [additionalProperties={}] - The DOM properties of the `button` that are NOT shared between all overlay `button` elements. These should be camelCase.
+   * @param {Object.&lt;string, any>} [additionalProperties={}] - The DOM properties of the `button` that are NOT shared between all overlay `button` elements. These should be camelCase.
    * @param {function(Overlay, HTMLButtonElement):void} [callback=()=>{}] - Additional JS modification to the `button`.
    * @returns {Overlay} Overlay class instance (this)
    * @since 0.43.12
@@ -370,18 +398,18 @@ export default class Overlay {
    * // Assume all help button elements have a shared class (e.g. {'className': 'bar'})
    * overlay.addButtonHelp({'id': 'foo', 'title': 'Foobar.'}).buildOverlay(document.body);
    * // Output:
-   * // (Assume <body> already exists in the webpage)
-   * <body>
-   *   <button id="foo" class="bar" title="Help: Foobar.">?</button>
-   * </body>
+   * // (Assume &lt;body> already exists in the webpage)
+   * &lt;body>
+   *   &lt;button id="foo" class="bar" title="Help: Foobar.">?&lt;/button>
+   * &lt;/body>
    * @example
    * // Assume all help button elements have a shared class (e.g. {'className': 'bar'})
    * overlay.addButtonHelp({'id': 'foo', 'textContent': 'Foobar.'}).buildOverlay(document.body);
    * // Output:
-   * // (Assume <body> already exists in the webpage)
-   * <body>
-   *   <button id="foo" class="bar" title="Help: Foobar.">?</button>
-   * </body>
+   * // (Assume &lt;body> already exists in the webpage)
+   * &lt;body>
+   *   &lt;button id="foo" class="bar" title="Help: Foobar.">?&lt;/button>
+   * &lt;/body>
    */
   addButtonHelp(additionalProperties = {}, callback = () => {}) {
 
@@ -400,7 +428,7 @@ export default class Overlay {
       }
     };
 
-    const help = this.#createElement('button', properties, additionalProperties); // Creates the <button> element
+    const help = this.#createElement('button', properties, additionalProperties); // Creates the &lt;button> element
     callback(this, help); // Runs any script passed in through the callback
     return this;
   }
@@ -408,24 +436,24 @@ export default class Overlay {
   /** Adds a `input` to the overlay.
    * This `input` element will have properties shared between all `input` elements in the overlay.
    * You can override the shared properties by using a callback.
-   * @param {Object.<string, any>} [additionalProperties={}] - The DOM properties of the `input` that are NOT shared between all overlay `input` elements. These should be camelCase.
+   * @param {Object.&lt;string, any>} [additionalProperties={}] - The DOM properties of the `input` that are NOT shared between all overlay `input` elements. These should be camelCase.
    * @param {function(Overlay, HTMLInputElement):void} [callback=()=>{}] - Additional JS modification to the `input`.
    * @returns {Overlay} Overlay class instance (this)
    * @since 0.43.13
    * @example
-   * // Assume all <input> elements have a shared class (e.g. {'className': 'bar'})
+   * // Assume all &lt;input> elements have a shared class (e.g. {'className': 'bar'})
    * overlay.addInput({'id': 'foo', 'textContent': 'Foobar.'}).buildOverlay(document.body);
    * // Output:
-   * // (Assume <body> already exists in the webpage)
-   * <body>
-   *   <input id="foo" class="bar">Foobar.</input>
-   * </body>
+   * // (Assume &lt;body> already exists in the webpage)
+   * &lt;body>
+   *   &lt;input id="foo" class="bar">Foobar.&lt;/input>
+   * &lt;/body>
    */
   addInput(additionalProperties = {}, callback = () => {}) {
 
-    const properties = {}; // Shared <input> DOM properties
+    const properties = {}; // Shared &lt;input> DOM properties
 
-    const input = this.#createElement('input', properties, additionalProperties); // Creates the <input> element
+    const input = this.#createElement('input', properties, additionalProperties); // Creates the &lt;input> element
     callback(this, input); // Runs any script passed in through the callback
     return this;
   }
@@ -434,7 +462,7 @@ export default class Overlay {
    * This input element will have properties shared between all file input elements in the overlay.
    * Uses multiple hiding methods to prevent browser native text from appearing during minimize/maximize.
    * You can override the shared properties by using a callback.
-   * @param {Object.<string, any>} [additionalProperties={}] - The DOM properties of the file input that are NOT shared between all overlay file input elements. These should be camelCase.
+   * @param {Object.&lt;string, any>} [additionalProperties={}] - The DOM properties of the file input that are NOT shared between all overlay file input elements. These should be camelCase.
    * @param {function(Overlay, HTMLDivElement, HTMLInputElement, HTMLButtonElement):void} [callback=()=>{}] - Additional JS modification to the file input.
    * @returns {Overlay} Overlay class instance (this)
    * @since 0.43.17
@@ -442,13 +470,13 @@ export default class Overlay {
    * // Assume all file input elements have a shared class (e.g. {'className': 'bar'})
    * overlay.addInputFile({'id': 'foo', 'textContent': 'Foobar.'}).buildOverlay(document.body);
    * // Output:
-   * // (Assume <body> already exists in the webpage)
-   * <body>
-   *   <div>
-   *     <input type="file" id="foo" class="bar" style="display: none"></input>
-   *     <button>Foobar.</button>
-   *   </div>
-   * </body>
+   * // (Assume &lt;body> already exists in the webpage)
+   * &lt;body>
+   *   &lt;div>
+   *     &lt;input type="file" id="foo" class="bar" style="display: none">&lt;/input>
+   *     &lt;button>Foobar.&lt;/button>
+   *   &lt;/div>
+   * &lt;/body>
    */
   addInputFile(additionalProperties = {}, callback = () => {}) {
     
@@ -492,24 +520,24 @@ export default class Overlay {
   /** Adds a `textarea` to the overlay.
    * This `textarea` element will have properties shared between all `textarea` elements in the overlay.
    * You can override the shared properties by using a callback.
-   * @param {Object.<string, any>} [additionalProperties={}] - The DOM properties of the `textarea` that are NOT shared between all overlay `textarea` elements. These should be camelCase.
+   * @param {Object.&lt;string, any>} [additionalProperties={}] - The DOM properties of the `textarea` that are NOT shared between all overlay `textarea` elements. These should be camelCase.
    * @param {function(Overlay, HTMLTextAreaElement):void} [callback=()=>{}] - Additional JS modification to the `textarea`.
    * @returns {Overlay} Overlay class instance (this)
    * @since 0.43.13
    * @example
-   * // Assume all <textarea> elements have a shared class (e.g. {'className': 'bar'})
+   * // Assume all &lt;textarea> elements have a shared class (e.g. {'className': 'bar'})
    * overlay.addTextarea({'id': 'foo', 'textContent': 'Foobar.'}).buildOverlay(document.body);
    * // Output:
-   * // (Assume <body> already exists in the webpage)
-   * <body>
-   *   <textarea id="foo" class="bar">Foobar.</textarea>
-   * </body>
+   * // (Assume &lt;body> already exists in the webpage)
+   * &lt;body>
+   *   &lt;textarea id="foo" class="bar">Foobar.&lt;/textarea>
+   * &lt;/body>
    */
   addTextarea(additionalProperties = {}, callback = () => {}) {
 
-    const properties = {}; // Shared <textarea> DOM properties
+    const properties = {}; // Shared &lt;textarea> DOM properties
 
-    const textarea = this.#createElement('textarea', properties, additionalProperties); // Creates the <textarea> element
+    const textarea = this.#createElement('textarea', properties, additionalProperties); // Creates the &lt;textarea> element
     callback(this, textarea); // Runs any script passed in through the callback
     return this;
   }
@@ -562,7 +590,7 @@ export default class Overlay {
 
     // What to do when one of the two elements are not found
     if (!moveMe || !iMoveThings) {
-      this.handleDisplayError(`Can not drag! ${!moveMe ? 'moveMe' : ''} ${!moveMe && !iMoveThings ? 'and ' : ''}${!iMoveThings ? 'iMoveThings ' : ''}was not found!`);
+      this.handleDisplayError(`Can not drag! ${!moveMe ? 'moveMe' : ''} ${!moveMe &amp;&amp; !iMoveThings ? 'and ' : ''}${!iMoveThings ? 'iMoveThings ' : ''}was not found!`);
       return; // Kills itself
     }
 
@@ -601,7 +629,7 @@ export default class Overlay {
       const computedStyle = window.getComputedStyle(moveMe);
       const transform = computedStyle.transform;
       
-      if (transform && transform !== 'none') {
+      if (transform &amp;&amp; transform !== 'none') {
         const matrix = new DOMMatrix(transform);
         currentX = matrix.m41;
         currentY = matrix.m42;
@@ -649,7 +677,7 @@ export default class Overlay {
 
     // Mouse move - update target position
     document.addEventListener('mousemove', function(event) {
-      if (isDragging && initialRect) {
+      if (isDragging &amp;&amp; initialRect) {
         targetX = event.clientX - offsetX;
         targetY = event.clientY - offsetY;
       }
@@ -657,7 +685,7 @@ export default class Overlay {
 
     // Touch move - update target position
     document.addEventListener('touchmove', function(event) {
-      if (isDragging && initialRect) {
+      if (isDragging &amp;&amp; initialRect) {
         const touch = event?.touches?.[0];
         if (!touch) {return;}
         targetX = touch.clientX - offsetX;
@@ -695,4 +723,26 @@ export default class Overlay {
     consoleError(`${this.name}: ${text}`); // Outputs something like "ScriptName: text" as an error message to the console
     this.updateInnerHTML(this.outputStatusId, 'Error: ' + text, true); // Update output Status box
   }
-}
+}</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="module.exports.html">exports</a></li><li><a href="module.exports_module.exports.html">exports</a></li></ul><h3>Global</h3><ul><li><a href="global.html#addBr">addBr</a></li><li><a href="global.html#addButton">addButton</a></li><li><a href="global.html#addButtonHelp">addButtonHelp</a></li><li><a href="global.html#addCheckbox">addCheckbox</a></li><li><a href="global.html#addDiv">addDiv</a></li><li><a href="global.html#addHeader">addHeader</a></li><li><a href="global.html#addHr">addHr</a></li><li><a href="global.html#addImg">addImg</a></li><li><a href="global.html#addInput">addInput</a></li><li><a href="global.html#addInputFile">addInputFile</a></li><li><a href="global.html#addP">addP</a></li><li><a href="global.html#addSmall">addSmall</a></li><li><a href="global.html#addTextarea">addTextarea</a></li><li><a href="global.html#base64ToUint8">base64ToUint8</a></li><li><a href="global.html#buildElement">buildElement</a></li><li><a href="global.html#buildOverlay">buildOverlay</a></li><li><a href="global.html#buildOverlayMain">buildOverlayMain</a></li><li><a href="global.html#consoleError">consoleError</a></li><li><a href="global.html#consoleLog">consoleLog</a></li><li><a href="global.html#consoleWarn">consoleWarn</a></li><li><a href="global.html#createJSON">createJSON</a></li><li><a href="global.html#createObserverBody">createObserverBody</a></li><li><a href="global.html#createTemplate">createTemplate</a></li><li><a href="global.html#createTemplateTiles">createTemplateTiles</a></li><li><a href="global.html#deleteTemplate">deleteTemplate</a></li><li><a href="global.html#disableTemplate">disableTemplate</a></li><li><a href="global.html#drawTemplateOnTile">drawTemplateOnTile</a></li><li><a href="global.html#escapeHTML">escapeHTML</a></li><li><a href="global.html#getObserverBody">getObserverBody</a></li><li><a href="global.html#handleDisplayError">handleDisplayError</a></li><li><a href="global.html#handleDisplayStatus">handleDisplayStatus</a></li><li><a href="global.html#handleDrag">handleDrag</a></li><li><a href="global.html#importJSON">importJSON</a></li><li><a href="global.html#inject">inject</a></li><li><a href="global.html#negativeSafeModulo">negativeSafeModulo</a></li><li><a href="global.html#numberToEncoded">numberToEncoded</a></li><li><a href="global.html#observe">observe</a></li><li><a href="global.html#observeBlack">observeBlack</a></li><li><a href="global.html#serverTPtoDisplayTP">serverTPtoDisplayTP</a></li><li><a href="global.html#setApiManager">setApiManager</a></li><li><a href="global.html#setTemplatesShouldBeDrawn">setTemplatesShouldBeDrawn</a></li><li><a href="global.html#spontaneousResponseListener">spontaneousResponseListener</a></li><li><a href="global.html#uint8ToBase64">uint8ToBase64</a></li><li><a href="global.html#updateInnerHTML">updateInnerHTML</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc/jsdoc">JSDoc 4.0.4</a> on Fri Aug 08 2025 16:09:33 GMT-0400 (Eastern Daylight Time)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>

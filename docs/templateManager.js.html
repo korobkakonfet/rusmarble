@@ -1,4 +1,32 @@
-import Template from "./Template";
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: templateManager.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: templateManager.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>import Template from "./Template";
 import { base64ToUint8, numberToEncoded } from "./utils";
 
 /** Manages the template system.
@@ -46,7 +74,7 @@ export default class TemplateManager {
     this.overlay = overlay; // The main instance of the Overlay class
     this.templatesVersion = '1.0.0'; // Version of JSON schema
     this.userID = null; // The ID of the current user
-    this.encodingBase = '!#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~'; // Characters to use for encoding/decoding
+    this.encodingBase = '!#$%&amp;\'()*+,-./0123456789:;&lt;=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~'; // Characters to use for encoding/decoding
     this.tileSize = 1000; // The number of pixels in a tile. Assumes the tile is square
     this.drawMult = 3; // The enlarged size for each pixel. E.g. when "3", a 1x1 pixel becomes a 1x1 pixel inside a 3x3 area. MUST BE ODD
     
@@ -118,7 +146,7 @@ export default class TemplateManager {
   /** Creates the template from the inputed file blob
    * @param {File} blob - The file blob to create a template from
    * @param {string} name - The display name of the template
-   * @param {Array<number, number, number, number>} coords - The coordinates of the top left corner of the template
+   * @param {Array&lt;number, number, number, number>} coords - The coordinates of the top left corner of the template
    * @since 0.65.77
    */
   async createTemplate(blob, name, coords) {
@@ -199,7 +227,7 @@ export default class TemplateManager {
   /** Draws all templates on the specified tile.
    * This method handles the rendering of template overlays on individual tiles.
    * @param {File} tileBlob - The pixels that are placed on a tile
-   * @param {Array<number>} tileCoords - The tile coordinates [x, y]
+   * @param {Array&lt;number>} tileCoords - The tile coordinates [x, y]
    * @since 0.65.77
    */
   async drawTemplateOnTile(tileBlob, tileCoords) {
@@ -391,3 +419,26 @@ export default class TemplateManager {
     this.templatesShouldBeDrawn = value;
   }
 }
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="module.exports.html">exports</a></li><li><a href="module.exports_module.exports.html">exports</a></li></ul><h3>Global</h3><ul><li><a href="global.html#addBr">addBr</a></li><li><a href="global.html#addButton">addButton</a></li><li><a href="global.html#addButtonHelp">addButtonHelp</a></li><li><a href="global.html#addCheckbox">addCheckbox</a></li><li><a href="global.html#addDiv">addDiv</a></li><li><a href="global.html#addHeader">addHeader</a></li><li><a href="global.html#addHr">addHr</a></li><li><a href="global.html#addImg">addImg</a></li><li><a href="global.html#addInput">addInput</a></li><li><a href="global.html#addInputFile">addInputFile</a></li><li><a href="global.html#addP">addP</a></li><li><a href="global.html#addSmall">addSmall</a></li><li><a href="global.html#addTextarea">addTextarea</a></li><li><a href="global.html#base64ToUint8">base64ToUint8</a></li><li><a href="global.html#buildElement">buildElement</a></li><li><a href="global.html#buildOverlay">buildOverlay</a></li><li><a href="global.html#buildOverlayMain">buildOverlayMain</a></li><li><a href="global.html#consoleError">consoleError</a></li><li><a href="global.html#consoleLog">consoleLog</a></li><li><a href="global.html#consoleWarn">consoleWarn</a></li><li><a href="global.html#createJSON">createJSON</a></li><li><a href="global.html#createObserverBody">createObserverBody</a></li><li><a href="global.html#createTemplate">createTemplate</a></li><li><a href="global.html#createTemplateTiles">createTemplateTiles</a></li><li><a href="global.html#deleteTemplate">deleteTemplate</a></li><li><a href="global.html#disableTemplate">disableTemplate</a></li><li><a href="global.html#drawTemplateOnTile">drawTemplateOnTile</a></li><li><a href="global.html#escapeHTML">escapeHTML</a></li><li><a href="global.html#getObserverBody">getObserverBody</a></li><li><a href="global.html#handleDisplayError">handleDisplayError</a></li><li><a href="global.html#handleDisplayStatus">handleDisplayStatus</a></li><li><a href="global.html#handleDrag">handleDrag</a></li><li><a href="global.html#importJSON">importJSON</a></li><li><a href="global.html#inject">inject</a></li><li><a href="global.html#negativeSafeModulo">negativeSafeModulo</a></li><li><a href="global.html#numberToEncoded">numberToEncoded</a></li><li><a href="global.html#observe">observe</a></li><li><a href="global.html#observeBlack">observeBlack</a></li><li><a href="global.html#serverTPtoDisplayTP">serverTPtoDisplayTP</a></li><li><a href="global.html#setApiManager">setApiManager</a></li><li><a href="global.html#setTemplatesShouldBeDrawn">setTemplatesShouldBeDrawn</a></li><li><a href="global.html#spontaneousResponseListener">spontaneousResponseListener</a></li><li><a href="global.html#uint8ToBase64">uint8ToBase64</a></li><li><a href="global.html#updateInnerHTML">updateInnerHTML</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc/jsdoc">JSDoc 4.0.4</a> on Fri Aug 08 2025 16:09:33 GMT-0400 (Eastern Daylight Time)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>

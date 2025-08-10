@@ -8,6 +8,23 @@
   padding: 10px;
   border-radius: 8px;
   z-index: 9000;
+  transition: all 0.3s ease;
+  max-width: 300px;
+  width: auto;
+  /* Performance optimizations for smooth dragging */
+  will-change: transform;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transform-style: preserve-3d;
+  -webkit-transform-style: preserve-3d;
+}
+
+/* Smooth transitions for minimize/maximize functionality */
+#bm-contain-userinfo,
+#bm-overlay hr,
+#bm-contain-automation, 
+#bm-contain-buttons-action {
+  transition: opacity 0.2s ease, height 0.2s ease;
 }
 
 /* The entire overlay BUT it is cascading */
@@ -38,9 +55,38 @@ div#bm-overlay {
   cursor: grabbing;
 }
 
+/* Disable interactions during drag for better performance */
+#bm-overlay:has(#bm-bar-drag.dragging) {
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+}
+
+/* Keep drag bar interactive when dragging */
+#bm-bar-drag.dragging {
+  pointer-events: auto;
+}
+
 /* The container for the overlay header */
 #bm-contain-header {
   margin-bottom: 0.5em;
+}
+
+/* When minimized, adjust header container */
+#bm-contain-header[style*="text-align: center"] {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Ensure overlay maintains consistent width when minimized */
+#bm-overlay[style*="padding: 5px"] {
+  width: auto !important;
+  max-width: 300px;
+  min-width: 200px;
 }
 
 /* The Blue Marble image */
@@ -49,6 +95,20 @@ div#bm-overlay {
   height: 2.5em;
   margin-right: 1ch;
   vertical-align: middle;
+  transition: opacity 0.2s ease;
+}
+
+/* When overlay is minimized, adjust image styling */
+#bm-contain-header[style*="text-align: center"] img {
+  margin-right: 0;
+  margin-left: 0;
+  display: block;
+  margin: 0 auto;
+}
+
+/* Ensure drag bar remains functional when minimized */
+#bm-bar-drag {
+  transition: margin-bottom 0.2s ease;
 }
 
 /* The Blue Marble header */
@@ -146,6 +206,21 @@ div:has(> #bm-input-file-template) > button {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Force complete invisibility of file input to prevent native browser text */
+#bm-input-file-template,
+input[type="file"][id*="template"] {
+  display: none !important;
+  visibility: hidden !important;
+  position: absolute !important;
+  left: -9999px !important;
+  top: -9999px !important;
+  width: 0 !important;
+  height: 0 !important;
+  opacity: 0 !important;
+  z-index: -9999 !important;
+  pointer-events: none !important;
 }
 
 /* Output status area */
