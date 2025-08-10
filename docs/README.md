@@ -4,6 +4,9 @@
     <td valign="top" rowspan="99"><a href="https://discord.gg/tpeBPy46hf"><img alt="Discord Banner" src="https://discord.com/api/guilds/796124137042608188/widget.png?style=banner4"></a></td>
   </tr>
   <tr>
+    <td>&emsp;<a href="#quick-guide">Quick Guide</a></td>
+  </tr>
+  <tr>
     <td>&emsp;<a href="#overview">Overview</a></td>
   </tr>
   <tr>
@@ -51,6 +54,43 @@
 <a href="" target="_blank" rel="noopener noreferrer"><img alt="Visitors" src="https://img.shields.io/badge/Visitors-37_847-gainsboro?style=flat"></a>
 <a href="" target="_blank" rel="noopener noreferrer"><img alt="Build" src="https://github.com/SwingTheVine/Wplace-BlueMarble/actions/workflows/build.yml/badge.svg"></a>
 <a href="" target="_blank" rel="noopener noreferrer"><img alt="CodeQL" src="https://github.com/SwingTheVine/Wplace-BlueMarble/actions/workflows/github-code-scanning/codeql/badge.svg"></a>
+
+<h2>Quick Guide</h2>
+<p>
+  Press the arrows to reveal the option you want.
+  <details>
+    <summary>
+      <b>I want to download Blue Marble.</b> <sup>(Click to Expand)</sup>
+    </summary>
+    <a href="#installation-instructions">Click here</a> to view the installation instructions.
+  </details>
+  <details>
+    <summary>
+      <b>I want to ask questions about Blue Marble.</b> <sup>(Click to Expand)</sup>
+    </summary>
+    <a href="https://discord.gg/tpeBPy46hf" target="_blank" rel="noopener noreferrer">Click here</a> for the Discord server invite to the Blue Marble support server.
+    <br>
+    <a href="https://github.com/SwingTheVine/Wplace-BlueMarble/discussions/categories/q-a">Click here</a> for the GitHub help & question page for Blue Marble.
+  </details>
+  <details>
+    <summary>
+      <b>I want to report a bug.</b> <sup>(Click to Expand)</sup>
+    </summary>
+    <a href="https://github.com/SwingTheVine/Wplace-BlueMarble/issues/new/choose">Click here</a> to report a bug, then choose the "Bug Report" option.
+  </details>
+  <details>
+    <summary>
+      <b>I want to suggest a feature.</b> <sup>(Click to Expand)</sup>
+    </summary>
+    <a href="https://github.com/SwingTheVine/Wplace-BlueMarble/issues/new/choose">Click here</a> to suggest a feature, then choose the Feature Request" option.
+  </details>
+  <details>
+    <summary>
+      <b>I want to contribute.</b> <sup>(Click to Expand)</sup>
+    </summary>
+    <a href="https://github.com/SwingTheVine/Wplace-BlueMarble/blob/main/docs/CONTRIBUTING.md">Click here</a> to read the contributing guidelines.
+  </details>
+</p>
 
 <h2>Overview</h2>
 <p>
