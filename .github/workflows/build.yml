@@ -202,7 +202,7 @@ jobs:
       - name: Install dependencies
         run: |
           npm ci
-          npm install minami --no-save
+          npm install minami taffydb
         
       - name: Generate JSDoc from jsdoc.json
         run: |
