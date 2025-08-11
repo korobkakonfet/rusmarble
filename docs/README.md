@@ -97,7 +97,17 @@
 
 <h2>Overview</h2>
 <p>
-  Welcome to Blue Marble! Blue Marble is a userscript for the website <a href="https://wplace.live/" target="_blank" rel="noopener noreferrer">wplace.live</a>. If you like this userscript, please ⭐ the repository! If you wish to contribute to Blue Marble, check out the <a href="https://github.com/SwingTheVine/Wplace-BlueMarble/blob/main/docs/CONTRIBUTING.md" target="_blank" rel="noopener noreferrer">CONTRIBUTING.md</a> file in <code>docs/</code>.
+  Welcome to Blue Marble! Blue Marble is a userscript for the website <a href="https://wplace.live/" target="_blank" rel="noopener noreferrer">wplace.live</a>. The purpose of Blue Marble is to allow you to take an image, and layer it onto the canvas! That way, you can easily trace the image of your art, without having to look back and forth between multiple tabs/monitors. In addition, Blue Marble supports some neat extra features such as: 
+  <ul>
+    <li>Displaying the number of pixels you need to level up</li>
+    <li>Displaying a simple coordinate system (tile coordinats & pixel coordinates)</li>
+    <li>Allowing you to move the color palette to the top of the screen when placing pixels</li>
+    <li>Allowing you to use the eyedropper on the template image, provided the colors are correct</li>
+    <li>...and more!</li>
+  </ul>
+  If you like this userscript, please ⭐ the repository! If you wish to contribute to Blue Marble, check out the <a href="https://github.com/SwingTheVine/Wplace-BlueMarble/blob/main/docs/CONTRIBUTING.md" target="_blank" rel="noopener noreferrer">CONTRIBUTING.md</a> file in <code>docs/</code>.
+
+  <img alt="Showcase image of Blue Marble template" src="./assets/Showcase1.png">
 
   <h3>Installation Instructions</h3>
   <a href="" target="_blank" rel="noopener noreferrer"><img alt="Supported Browsers" src="https://img.shields.io/badge/Supported%20Browsers-Chrome%20%7C%20Firefox%2A%20%7C%20Safari%20%7C%20Edge%20%7C%20Brave-orange?style=flat"></a>

@@ -69,19 +69,28 @@ jobs:
           current_version=$(jq -r '.version' package.json)
           echo "Current version: $current_version"
           echo "current_version=$current_version" >> $GITHUB_OUTPUT
-      
+
+      - name: Get latest release tag (no "v" prefix)
+        id: get_latest_tag
+        run: |
+          latest_tag=$(gh release list --limit 1 --exclude-drafts --exclude-pre-releases=false | head -n 1 | awk '{print $1}')
+          latest_tag_no_v=${latest_tag#v}
+          echo "latest_tag_no_v=$latest_tag_no_v" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Update static version numbers
         run: |
-          current_version=${{ steps.get_version.outputs.current_version }}
+          current_version="${{ steps.get_latest_tag.outputs.latest_tag_no_v }}"
           if [ -f "docs/README.md" ]; then
             echo "README.md exists. Modifying..."
+            sed -i \
+              -e 's|\(Latest_Version-\)[^-\ ]*\(-lightblue\)|\1'"$current_version"'\2|' \
+              -e 's|v[0-9]\+\.[0-9]\+\.[0-9]\+|v'"$current_version"'|g' \
+              docs/README.md
           else
             echo "README.md was not found. Skipping..."
           fi
-          sed -i \
-          -e 's|\(Latest_Version-\)[^-\ ]*\(-lightblue\)|\1'$current_version'\2|' \
-          -e 's|v[0-9]\+\.[0-9]\+\.[0-9]\+|v'"$current_version"'|g' \
-          docs/README.md
       
       - name: Update compression badge
         run: |
