@@ -6,7 +6,7 @@ import Overlay from './Overlay.js';
 import Observers from './observers.js';
 import ApiManager from './apiManager.js';
 import TemplateManager from './templateManager.js';
-import { consoleLog, consoleWarn, selectAllCoordinateInputs, teleportToTileCoords } from './utils.js';
+import { consoleLog, consoleWarn, selectAllCoordinateInputs, teleportToTileCoords, rgbToMeta } from './utils.js';
 
 const name = GM_info.script.name.toString(); // Name of userscript
 const version = GM_info.script.version.toString(); // Version of userscript
@@ -37,6 +37,14 @@ inject(() => {
   const name = script?.getAttribute('bm-name') || 'Blue Marble'; // Gets the name value that was passed in. Defaults to "Blue Marble" if nothing was found
   const consoleStyle = script?.getAttribute('bm-cStyle') || ''; // Gets the console style value that was passed in. Defaults to no styling if nothing was found
   const fetchedBlobQueue = new Map(); // Blobs being processed
+
+  // intercept 
+  // const originalBroadcastChannel_onmessage = window.BroadcastChannel.prototype.onmessage;
+  // function wrapped(...args) {
+  //   console.log("BroadcastChannel onmessage", args);
+  //   return originalBroadcastChannel_onmessage.apply(this, args);
+  // }
+  // window.BroadcastChannel.prototype.onmessage = wrapped;
 
   window.addEventListener('message', (event) => {
     const { source, endpoint, blobID, blobData, blink } = event.data;
@@ -235,6 +243,7 @@ function observeBlack() {
 
       paintPixel.parentNode?.appendChild(move); // Adds the move button
     }
+
   });
 
   observer.observe(document.body, { childList: true, subtree: true });
