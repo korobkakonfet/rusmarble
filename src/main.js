@@ -6,7 +6,7 @@ import Overlay from './Overlay.js';
 import Observers from './observers.js';
 import ApiManager from './apiManager.js';
 import TemplateManager from './templateManager.js';
-import { consoleLog, consoleWarn, selectAllCoordinateInputs, teleportToTileCoords, rgbToMeta, getCoords } from './utils.js';
+import { consoleLog, consoleWarn, selectAllCoordinateInputs, teleportToTileCoords, rgbToMeta, getOverlayCoords, getCenterGeoCoords, coordsGeoToTileCoords } from './utils.js';
 
 const name = GM_info.script.name.toString(); // Name of userscript
 const version = GM_info.script.version.toString(); // Version of userscript
@@ -256,7 +256,7 @@ function observeBlack() {
 
 const persistCoords = () => {
   try {
-    const [[tx, ty], [px, py]] = getCoords();
+    const [[tx, ty], [px, py]] = getOverlayCoords();
     const data = { tx, ty, px, py };
     GM.setValue('bmCoords', JSON.stringify(data));
   } catch (_) {}
@@ -264,7 +264,7 @@ const persistCoords = () => {
 
 const teleportCoords = () => {
   try {
-    const [[tx, ty], [px, py]] = getCoords();
+    const [[tx, ty], [px, py]] = getOverlayCoords();
     teleportToTileCoords([tx, ty], [px, py]);
   } catch (_) {}
 };
