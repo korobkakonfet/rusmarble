@@ -6,7 +6,7 @@ import Overlay from './Overlay.js';
 import Observers from './observers.js';
 import ApiManager from './apiManager.js';
 import TemplateManager from './templateManager.js';
-import { consoleLog, consoleWarn, selectAllCoordinateInputs, teleportToTileCoords, rgbToMeta } from './utils.js';
+import { consoleLog, consoleWarn, selectAllCoordinateInputs, teleportToTileCoords, rgbToMeta, getCoords } from './utils.js';
 
 const name = GM_info.script.name.toString(); // Name of userscript
 const version = GM_info.script.version.toString(); // Version of userscript
@@ -254,6 +254,21 @@ function observeBlack() {
   observer.observe(document.body, { childList: true, subtree: true });
 }
 
+const persistCoords = () => {
+  try {
+    const [[tx, ty], [px, py]] = getCoords();
+    const data = { tx, ty, px, py };
+    GM.setValue('bmCoords', JSON.stringify(data));
+  } catch (_) {}
+};
+
+const teleportCoords = () => {
+  try {
+    const [[tx, ty], [px, py]] = getCoords();
+    teleportToTileCoords([tx, ty], [px, py]);
+  } catch (_) {}
+};
+
 /** Deploys the overlay to the page with minimize/maximize functionality.
  * Creates a responsive overlay UI that can toggle between full-featured and minimized states.
  * 
@@ -271,27 +286,6 @@ async function buildOverlayMain() {
   } catch {
     savedCoords = {};
   }
-
-  const persistCoords = () => {
-    try {
-      const tx = Number(document.querySelector('#bm-input-tx')?.value || '');
-      const ty = Number(document.querySelector('#bm-input-ty')?.value || '');
-      const px = Number(document.querySelector('#bm-input-px')?.value || '');
-      const py = Number(document.querySelector('#bm-input-py')?.value || '');
-      const data = { tx, ty, px, py };
-      GM.setValue('bmCoords', JSON.stringify(data));
-    } catch (_) {}
-  };
-
-  const teleportCoords = () => {
-    try {
-      const tx = Number(document.querySelector('#bm-input-tx')?.value || '');
-      const ty = Number(document.querySelector('#bm-input-ty')?.value || '');
-      const px = Number(document.querySelector('#bm-input-px')?.value || '');
-      const py = Number(document.querySelector('#bm-input-py')?.value || '');
-      teleportToTileCoords([tx, ty], [px, py]);
-    } catch (_) {}
-  };
   
   overlayMain.addDiv({'id': 'bm-overlay', 'style': 'top: 10px; right: 75px;'})
     .addDiv({'id': 'bm-contain-header'})
