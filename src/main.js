@@ -783,13 +783,16 @@ async function buildOverlayMain() {
       const filledLabelText = `${filledCount.toLocaleString()}`;
       label.textContent = `${colorName} • ${filledLabelText} / ${labelText}`;
 
+      let currentIndex = 0;
       swatch.addEventListener('click', () => {
         // if ((paletteEntry?.examples?.length ?? 0) > 0) {
         if ((paletteEntry?.examplesEnabled?.length ?? 0) > 0) {
           // const examples = paletteEntry.examples;
           const examples = paletteEntry.examplesEnabled;
-          const exampleIndex = Math.floor(Math.random() * examples.length);
+          // const exampleIndex = Math.floor(Math.random() * examples.length);
+          const exampleIndex = currentIndex % examples.length;
           teleportToTileCoords(examples[exampleIndex][0], examples[exampleIndex][1]);
+          ++currentIndex;
         }
       });
       // if ((paletteEntry?.examples?.length ?? 0) > 0) {
