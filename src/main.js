@@ -882,7 +882,7 @@ async function buildOverlayMain() {
       let label = document.createElement('span');
       label.style.fontSize = '12px';
 
-      if (sortByParts[0] === "remaining" || hideCompleted) {
+      if (sortByParts[0] === "remaining" || (hideCompleted && sortByParts[0] !== "painted")) {
         const remainingLabelText = (totalCount - paintedCount).toLocaleString();
         label.textContent = `${colorName} • ${remainingLabelText} Left`;
       } else {
