@@ -780,7 +780,7 @@ async function buildOverlayMain() {
             .addSelect({'id': 'bm-theme-setting'}, (instance, select) => {
               select.disabled = !templateManager.isThemeOverridden();
               const currentTheme = templateManager.getCurrentTheme();
-              Object.entries(themeList).forEach(([themeValue, displayText]) => {
+              Object.entries(themeList).forEach(([themeValue, [displayText, isDark]]) => {
                 const option = document.createElement('option');
                 option.value = themeValue;
                 option.textContent = displayText;
@@ -789,7 +789,7 @@ async function buildOverlayMain() {
               });
               select.addEventListener('change', async () => {
                 await templateManager.setCurrentTheme(select.value);
-                instance.handleDisplayStatus(`Changed the theme to "${themeList[select.value]}".`);
+                instance.handleDisplayStatus(`Changed the theme to "${themeList[select.value][0]}".`);
                 forceUpdateTheme();
               })
             }).buildElement()
