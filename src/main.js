@@ -6,8 +6,8 @@ import Overlay from './Overlay.js';
 // import Observers from './observers.js';
 import ApiManager from './apiManager.js';
 import TemplateManager from './templateManager.js';
-import { consoleLog, consoleWarn, selectAllCoordinateInputs, teleportToTileCoords, teleportToGeoCoords, rgbToMeta, getOverlayCoords, coordsTileToGeoCoords, coordsGeoToTileCoords, sortByOptions, getCurrentColor } from './utils.js';
-import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, themeList, setTheme, isMapTilerLoaded } from './utilsMaptiler.js';
+import { consoleLog, consoleWarn, selectAllCoordinateInputs, rgbToMeta, getOverlayCoords, sortByOptions, getCurrentColor } from './utils.js';
+import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileToGeoCoords, coordsGeoToTileCoords, isWplaceDoingBadThing} from './utilsMaptiler.js';
 // import { getCenterGeoCoords, addTemplate } from './utilsMaptiler.js';
 
 const name = GM_info.script.name.toString(); // Name of userscript
@@ -84,6 +84,8 @@ inject(() => {
   // Overrides fetch
   window.fetch = async function(...args) {
 
+    const blink = Date.now(); // Current time
+
     const response = await originalFetch.apply(this, args); // Sends a fetch
     const cloned = response.clone(); // Makes a copy of the response
 
@@ -93,11 +95,44 @@ inject(() => {
     // Check Content-Type to only process JSON
     const contentType = cloned.headers.get('content-type') || '';
     if (contentType.includes('application/json')) {
-      const blink = Date.now(); // Current time
-
       // Since this code does not run in the userscript, we can't use consoleLog().
       console.log(`%c${name}%c: Sending JSON message about endpoint "${endpointName}"`, consoleStyle, '');
-      cloned.json()
+      // Sends a message about the endpoint it spied on
+      if (endpointName.endsWith("/tile/random")) {
+        // modify the response to send to desired coordinate
+
+        return new Promise((resolve) => {
+          const blobUUID = crypto.randomUUID(); // Generates a random UUID
+          fetchedBlobQueue.set(blobUUID, (blobProcessed) => {
+            // The response that triggers when the blob is finished processing
+
+            // Creates a new response
+            resolve(new Response(blobProcessed, {
+              headers: cloned.headers,
+              status: cloned.status,
+              statusText: cloned.statusText
+            }));
+
+            // Since this code does not run in the userscript, we can't use consoleLog().
+            console.log(`%c${name}%c: ${fetchedBlobQueue.size} Processed blob "${blobUUID}"`, consoleStyle, '');
+          });
+
+          cloned.json()
+          .then(jsonData => {
+            window.postMessage({
+              source: 'blue-marble',
+              endpoint: endpointName,
+              blobID: blobUUID,
+              jsonData: jsonData,
+              blink: blink
+            }, '*');
+          })
+          .catch(err => {
+            console.error(`%c${name}%c: Failed to parse JSON: `, consoleStyle, '', err);
+          });
+        });
+      } else {
+        cloned.json()
         .then(jsonData => {
           window.postMessage({
             source: 'blue-marble',
@@ -109,10 +144,9 @@ inject(() => {
         .catch(err => {
           console.error(`%c${name}%c: Failed to parse JSON: `, consoleStyle, '', err);
         });
+      }
     } else if (contentType.includes('image/') && (!endpointName.includes('openfreemap') && !endpointName.includes('maps'))) {
       // Fetch custom for all images but opensourcemap
-
-      const blink = Date.now(); // Current time
 
       const blob = await cloned.blob(); // The original blob
 
@@ -778,7 +812,9 @@ async function buildOverlayMain() {
               forceRefreshTiles();
             });
           }).buildElement()
-          .addCheckbox({'id': 'bm-theme-override-enabled', 'textContent': 'Theme Override: ', 'checked': templateManager.isThemeOverridden()}, (instance, label, checkbox) => {
+          .addCheckbox({'id': 'bm-theme-override-enabled', 'textContent': 'Theme Override: ', 'checked': templateManager.isThemeOverridden(), "disabled": true}, (instance, label, checkbox) => {
+            // this feature is currently broken by wplace
+            label.style.display = "none";
             checkbox.addEventListener('change', async () => {
               await templateManager.setThemeOverridden(checkbox.checked);
               const select = document.getElementById('bm-theme-setting');
@@ -787,7 +823,8 @@ async function buildOverlayMain() {
             });
           })
             .addSelect({'id': 'bm-theme-setting'}, (instance, select) => {
-              select.disabled = !templateManager.isThemeOverridden();
+              // this feature is currently broken by wplace
+              select.disabled = true; // !templateManager.isThemeOverridden();
               const currentTheme = templateManager.getCurrentTheme();
               Object.entries(themeList).forEach(([themeValue, [displayText, isDark]]) => {
                 const option = document.createElement('option');
@@ -1336,7 +1373,7 @@ async function buildOverlayMain() {
           teleportButton.textContent = "✈️";
           teleportButton.style.fontSize = '12px';
           teleportButton.onclick = () => {
-            teleportToGeoCoords(coords[0], coords[1], false);
+            teleportToGeoCoords(coords[0], coords[1]);
           }
           row.appendChild(teleportButton);
         } else {
@@ -1400,7 +1437,8 @@ async function buildOverlayMain() {
       }
     } catch (_) {}
     try {
-      if (templateManager.isThemeOverridden()) {
+      // this feature is currently broken by wplace
+      if (false && templateManager.isThemeOverridden()) {
         forceUpdateTheme();
       }
     } catch (_) {}
