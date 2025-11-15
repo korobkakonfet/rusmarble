@@ -223,13 +223,13 @@ inject(() => {
     }
   };
   // Don't hook "set", "get", "has", some Proxy object doing something like "setDefault" may make it into infinite recursion
-  [].forEach(key => {
-    hookedMapFuncs[key] = Map.prototype[key];
-    Map.prototype[key] = function (...args) {
-      this.values(); // call this once
-      return hookedMapFuncs[key].call(this, ...args);
-    };
-  });
+  // [].forEach(key => {
+  //   hookedMapFuncs[key] = Map.prototype[key];
+  //   Map.prototype[key] = function (...args) {
+  //     this.values(); // call this once
+  //     return hookedMapFuncs[key].call(this, ...args);
+  //   };
+  // });
   Map.prototype.values = hookedMapValues;
 });
 
@@ -1119,8 +1119,8 @@ async function buildOverlayMain() {
           combinedProgress[colorKey].painted += content.painted;
           combinedProgress[colorKey].paintedAndEnabled += content.paintedAndEnabled;
           combinedProgress[colorKey].missing += content.missing;
-          combinedProgress[colorKey].examples.push(...content.examples);
-          combinedProgress[colorKey].examplesEnabled.push(...content.examplesEnabled);
+          combinedProgress[colorKey].examples.extend(content.examples);
+          combinedProgress[colorKey].examplesEnabled.extend(content.examplesEnabled);
         }
       })
     };
