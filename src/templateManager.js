@@ -615,7 +615,7 @@ export default class TemplateManager {
                   painted: 1,
                   paintedAndEnabled: +templateTileEnabled,
                   missing: 0,
-                  examples: [ ],
+                  // examples: [ ],
                   examplesEnabled: [ ],
                 }
               } else {
@@ -656,7 +656,7 @@ export default class TemplateManager {
                   painted: 0,
                   paintedAndEnabled: 0,
                   missing: 1,
-                  examples: [ example ],
+                  // examples: [ example ],
                   examplesEnabled: [ ],
                 }
                 if (templateTileEnabled) {
@@ -665,13 +665,13 @@ export default class TemplateManager {
               } else {
                 // missing count >= 1
                 paletteStats[key].missing++;
-                if (paletteStats[key].examples.length < exampleMax) {
-                  paletteStats[key].examples.push(example);
-                } else if (Math.random() * paletteStats[key].examples.length < exampleMax) {
-                  // pick a random sample, so the new entry share the same weight
-                  const replaceIndex = Math.floor(Math.random() * exampleMax);
-                  paletteStats[key].examples[replaceIndex] = example;
-                }
+                // if (paletteStats[key].examples.length < exampleMax) {
+                //   paletteStats[key].examples.push(example);
+                // } else if (Math.random() * paletteStats[key].examples.length < exampleMax) {
+                //   // pick a random sample, so the new entry share the same weight
+                //   const replaceIndex = Math.floor(Math.random() * exampleMax);
+                //   paletteStats[key].examples[replaceIndex] = example;
+                // }
                 if (templateTileEnabled) {
                   if (paletteStats[key].examplesEnabled.length < exampleMax) {
                     paletteStats[key].examplesEnabled.push(example);
