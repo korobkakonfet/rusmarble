@@ -1062,7 +1062,7 @@ async function buildOverlayMain() {
           .addButton({'id': 'bm-button-website', 'className': 'bm-help', 'innerHTML': '🌐', 'title': 'Official Blue Marble Website'}, 
             (instance, button) => {
             button.addEventListener('click', () => {
-              window.open('https://bluemarble.camilledaguin.fr/', '_blank', 'noopener noreferrer');
+              window.open('https://bluemarble.lol/', '_blank', 'noopener noreferrer');
             });
           }).buildElement()
         .buildElement()
