@@ -711,6 +711,7 @@ async function buildOverlayMain() {
             checkbox.addEventListener('change', () => {
               templateManager.setHideLockedColors(checkbox.checked);
               buildColorFilterList();
+              templateManager.createOverlayOnMap();
               if (checkbox.checked) {
                 instance.handleDisplayStatus("Hidden all locked colors.");
               } else {
@@ -722,6 +723,7 @@ async function buildOverlayMain() {
             checkbox.addEventListener('change', () => {
               templateManager.setHideCompletedColors(checkbox.checked);
               buildColorFilterList();
+              templateManager.createOverlayOnMap();
               if (checkbox.checked) {
                 instance.handleDisplayStatus("Hidden all completed colors.");
               } else {
