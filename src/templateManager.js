@@ -1548,6 +1548,7 @@ export default class TemplateManager {
    * @since 0.85.17
    */
   isColorUnlocked(color) {
+    if (this.extraColorsBitmap === -1) return true; // all colors unlocked
     if (color < 32) return true;
     const mask = 1 << (color - 32);
     return (this.extraColorsBitmap & mask) !== 0;
