@@ -470,7 +470,7 @@ function observeBlack() {
           // prevent lagging
           setTimeout(() => {
             templateManager.createOverlayOnMap()
-            if (templateManager.isErrorMapOnlyEnabledColorsShown()) {
+            if (templateManager.isErrorMapShown() && templateManager.isErrorMapOnlyEnabledColorsShown()) {
               forceRefreshTiles();
             };
             // Just build the list (with the selected color toggled) as nothing has changed
@@ -890,7 +890,7 @@ async function buildOverlayMain() {
                 buildColorFilterList();
               };
               templateManager.createOverlayOnMap();
-              if (templateManager.isErrorMapOnlyEnabledColorsShown()) {
+              if (templateManager.isErrorMapShown() && templateManager.isErrorMapOnlyEnabledColorsShown()) {
                 forceRefreshTiles();
               };
               // Release the checkboxes
@@ -918,6 +918,10 @@ async function buildOverlayMain() {
                 instance.handleDisplayStatus("Hidden all completed colors.");
               } else {
                 instance.handleDisplayStatus("Restored all colors.");
+              }
+              if (templateManager.isErrorMapShown() && templateManager.isErrorMapOnlyEnabledColorsShown()) {
+                // This setting may change the enabled color list
+                forceRefreshTiles();
               }
             });
           }).buildElement()
@@ -1163,7 +1167,7 @@ async function buildOverlayMain() {
               templateManager.createOverlayOnMap();
               buildColorFilterList();
               instance.handleDisplayStatus('Enabled all colors');
-              if (templateManager.isErrorMapOnlyEnabledColorsShown()) {
+              if (templateManager.isErrorMapShown() && templateManager.isErrorMapOnlyEnabledColorsShown()) {
                 forceRefreshTiles();
               };
             };
@@ -1178,7 +1182,7 @@ async function buildOverlayMain() {
               removeLayer("overlay");
               buildColorFilterList();
               instance.handleDisplayStatus('Disabled all colors');
-              if (templateManager.isErrorMapOnlyEnabledColorsShown()) {
+              if (templateManager.isErrorMapShown() && templateManager.isErrorMapOnlyEnabledColorsShown()) {
                 forceRefreshTiles();
               };
             };
@@ -1469,7 +1473,7 @@ async function buildOverlayMain() {
         overlayMain.handleDisplayStatus(`${toggle.checked ? 'Enabled' : 'Disabled'} ${rgb}`);
         syncToggleList();
         templateManager.createOverlayOnMap();
-        if (templateManager.isErrorMapOnlyEnabledColorsShown()) {
+        if (templateManager.isErrorMapShown() && templateManager.isErrorMapOnlyEnabledColorsShown()) {
           forceRefreshTiles();
         };
       });
