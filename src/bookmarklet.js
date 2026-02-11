@@ -1,4 +1,4 @@
-(function () {
+﻿(function () {
     fetch("https://raw.githubusercontent.com/t-wy/Wplace-BlueMarble-Userscripts/custom-improve/dist/BlueMarble.user.js").then(function (response) {
         return response.text();
     }).then(function (content) {
@@ -43,7 +43,7 @@
         const GM_string = "{addStyle: " + GM.addStyle + ", getValue: " + GM.getValue + ", setValue: " + GM.setValue + "}";
         const GM_info = {
             "script": {
-                "name": "Blue Marble",
+                "name": "Rus Marble",
                 "version": content.match(/@version\s+([\d.]+)/)[1],
             }
         };

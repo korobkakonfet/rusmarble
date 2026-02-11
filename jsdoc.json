@@ -1,9 +1,9 @@
-{
+﻿{
   "source": {
     "include": ["src"],
     "exclude": ["node_modules", "build", "dist"]
   },
-  "homepage": "https://bluemarble.lol/",
+  "homepage": "https://RusMarble.lol/",
   "opts": {
     "destination": "docs",
     "template": "node_modules/minami",

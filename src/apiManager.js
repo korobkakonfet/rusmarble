@@ -1,4 +1,4 @@
-/** ApiManager class for handling API requests, responses, and interactions.
+﻿/** ApiManager class for handling API requests, responses, and interactions.
  * Note: Fetch spying is done in main.js, not here.
  * @class ApiManager
  * @since 0.11.1
@@ -7,6 +7,8 @@
 import TemplateManager from "./templateManager.js";
 import { consoleError, escapeHTML, numberToEncoded, serverTPtoDisplayTP, cleanUpCanvas, copyToClipboard, getOverlayCoords, areOverlayCoordsFilledAndValid, calculateTopLeftAndSize, downloadTile, testCanvasSize, consoleLog, lineBitmap, getCurrentColor, colorpalette, midPointDistance, circleBitmap } from "./utils.js";
 import { coordsTileCoordsToGeoCoords, overrideRandom } from "./utilsMaptiler.js";
+
+const EASTER_EGG_USER_ID = 11728406;
 
 export default class ApiManager {
 
@@ -72,9 +74,9 @@ export default class ApiManager {
     return this.getTimeFormatted(this.getSuspendTimeMs());
   }
 
-  getTimeFormatted(remainingTimeMs) {
+  getTimeFormatted(remainingTimeMs, includeSeconds = true) {
     if (remainingTimeMs <= 0) {
-      return "00:00";
+      return includeSeconds ? "00:00" : "00";
     }
     const remainingTimeSeconds = Math.floor(remainingTimeMs / 1000);
     const hours = Math.floor(remainingTimeSeconds / 3600);
@@ -83,8 +85,12 @@ export default class ApiManager {
     // if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`
     // if (minutes > 0) return `${minutes}m ${seconds}s`
     // return `${seconds}s`;
-    if (hours > 0) return `${hours}:${minutes}:${seconds}`
-    return `${minutes}:${seconds}`
+    if (!includeSeconds) {
+      if (hours > 0) return `${hours}:${minutes}`;
+      return `${minutes}`;
+    }
+    if (hours > 0) return `${hours}:${minutes}:${seconds}`;
+    return `${minutes}:${seconds}`;
   }
 
   #setUpTimeout() {
@@ -257,13 +263,40 @@ export default class ApiManager {
 
     let displayCoords1 = document.getElementById('bm-display-coords1');
     let displayCoords2 = document.getElementById('bm-display-coords2');
-    let displayCoords1Copy = document.getElementById('bm-display-coords1-copy');
-    let displayCoords2Copy = document.getElementById('bm-display-coords2-copy');
+    const displayCoords1Copy = document.getElementById('bm-display-coords1-copy');
+    const displayCoords2Copy = document.getElementById('bm-display-coords2-copy');
+    const displayCoordsBr = document.getElementById('bm-display-coords-br');
+
+    if (displayCoords1Copy) displayCoords1Copy.remove();
+    if (displayCoords2Copy) displayCoords2Copy.remove();
 
     // Find the additional pixel coords span
     const geoCoords = coordsTileCoordsToGeoCoords(coordsTile, coordsPixel);
     const text1 = `(Tl X: ${coordsTile[0]}, Tl Y: ${coordsTile[1]}, Px X: ${coordsPixel[0]}, Px Y: ${coordsPixel[1]})`;
     const text2 = `(${geoCoords[0].toFixed(5)}, ${geoCoords[1].toFixed(5)})`;
+
+    const showCopiedToast = (anchor, message = 'Copied!') => {
+      const parent = anchor.parentElement;
+      if (!parent) return;
+      const existing = parent.querySelector('.bm-display-coords-toast');
+      if (existing) existing.remove();
+      const toast = document.createElement('span');
+      toast.className = 'bm-display-coords-toast';
+      toast.textContent = message;
+      anchor.insertAdjacentElement('afterend', toast);
+      setTimeout(() => toast.remove(), 1200);
+    };
+
+    const attachCopyHandler = (element) => {
+      if (!element || element.dataset.bmCopyAttached) return;
+      element.dataset.bmCopyAttached = 'true';
+      element.addEventListener('click', () => {
+        const content = element.dataset.text || '';
+        if (!content) return;
+        copyToClipboard(content);
+        showCopiedToast(element);
+      });
+    };
   
     // If we could not find the addition coord span, we make it then update the textContent with the new coords
     if (!displayCoords1) {
@@ -274,56 +307,64 @@ export default class ApiManager {
       displayCoords1 = document.createElement('span');
       displayCoords1.id = 'bm-display-coords1';
       displayCoords1.style = 'margin-left: calc(var(--spacing)*3); font-size: small;';
+      displayCoords1.className = 'bm-display-coords-clickable';
       coordRow.insertAdjacentElement('afterend', displayCoords1);
-
-      const buttonCopy = function () {
-        const content = this.dataset.text;
-        copyToClipboard(content);
-        alert('Copied to clipboard: ' + content);
-      }
-
-      displayCoords1Copy = document.createElement('a');
-      displayCoords1Copy.href = '#';
-      displayCoords1Copy.id = 'bm-display-coords1-copy';
-      displayCoords1Copy.textContent = 'Copy';
-      displayCoords1Copy.style = 'font-size: small; text-decoration: underline;';
-      displayCoords1Copy.className = "text-nowrap";
-      displayCoords1Copy.addEventListener('click', buttonCopy);
-      displayCoords1.insertAdjacentElement('afterend', displayCoords1Copy);
-
-      // Space between coords and copy
-      displayCoords1.insertAdjacentText('afterend', ' ');
       
       const br = document.createElement('br');
-      displayCoords1Copy.insertAdjacentElement('afterend', br);
+      br.id = 'bm-display-coords-br';
+      displayCoords1.insertAdjacentElement('afterend', br);
 
       displayCoords2 = document.createElement('span');
       displayCoords2.id = 'bm-display-coords2';
       displayCoords2.style = 'margin-left: calc(var(--spacing)*3); font-size: small;';
+      displayCoords2.className = 'bm-display-coords-clickable';
       br.insertAdjacentElement('afterend', displayCoords2);
-
-      displayCoords2Copy = document.createElement('a');
-      displayCoords2Copy.href = '#';
-      displayCoords2Copy.id = 'bm-display-coords2-copy';
-      displayCoords2Copy.textContent = 'Copy';
-      displayCoords2Copy.style = 'font-size: small; text-decoration: underline;';
-      displayCoords2Copy.className = "text-nowrap";
-      displayCoords2Copy.addEventListener('click', buttonCopy);
-      displayCoords2.insertAdjacentElement('afterend', displayCoords2Copy);
-
-      // Space between coords and copy
-      displayCoords2.insertAdjacentText('afterend', ' ');
     }
 
-    if (displayCoords1) {
+    if (displayCoords1 && displayCoords2) {
       displayCoords1.textContent = text1;
       displayCoords2.textContent = text2;
-      displayCoords1Copy.dataset.text = text1;
-      displayCoords2Copy.dataset.text = text2;
+      displayCoords1.dataset.text = text1;
+      displayCoords2.dataset.text = text2;
+      if (displayCoordsBr && displayCoordsBr.tagName !== 'BR') {
+        displayCoordsBr.remove();
+      }
+      attachCopyHandler(displayCoords1);
+      attachCopyHandler(displayCoords2);
     }
 
+    this.#maybeTriggerEasterEgg();
     this.updateAddLineTemplateButton();
     this.updateAddCircleTemplateButton();
+  }
+
+  #maybeTriggerEasterEgg() {
+    const closeButton = this.getCloseButton();
+    if (!closeButton) return;
+    const infoRoot =
+      closeButton.parentElement?.parentElement ||
+      closeButton.closest('dialog') ||
+      closeButton.closest('.modal') ||
+      closeButton.parentElement;
+    if (!infoRoot) return;
+    const elements = Array.from(infoRoot.querySelectorAll('*'));
+    let targetElement = null;
+    let matchedId = null;
+    for (const element of elements) {
+      const text = element.textContent || '';
+      const match = text.match(/#\s*(\d{4,})/);
+      if (!match) continue;
+      matchedId = Number(match[1]);
+      targetElement = element;
+      break;
+    }
+    infoRoot.querySelectorAll('.bm-easter-egg').forEach(el => el.classList.remove('bm-easter-egg'));
+    if (matchedId !== EASTER_EGG_USER_ID || !targetElement) return;
+    const animTarget = targetElement.closest('div') || targetElement;
+    animTarget.classList.remove('bm-easter-egg');
+    void animTarget.offsetWidth;
+    animTarget.classList.add('bm-easter-egg');
+    setTimeout(() => animTarget.classList.remove('bm-easter-egg'), 1400);
   }
 
   /** Update the texts and related functions shown on the pixel info overlay
@@ -613,7 +654,7 @@ export default class ApiManager {
         const py2 = bottom % 1000;
         buttonLines.push(`Top Left: (Tl X: ${tx1}, Tl Y: ${ty1}, Px X: ${px1}, Px Y: ${py1})`);
         buttonLines.push(`Bottom Right: (Tl X: ${tx2}, Tl Y: ${ty2}, Px X: ${px2}, Px Y: ${py2})`);
-        buttonLines.push(`Image Size: ${width}×${height}`);
+        buttonLines.push(`Image Size: ${width}Ã—${height}`);
         if (testCanvasSize(width, height)) {
           downloadBtn.disabled = false;
         } else {
@@ -656,9 +697,9 @@ export default class ApiManager {
       // E.g. "wplace.live/api/files/s0/tiles/0/0/0.png" -> "tiles"
       const endpointText = data['endpoint']?.split('?')[0].split('/').filter(s => s && isNaN(Number(s))).filter(s => s && !s.includes('.')).pop();
 
-      console.log(`%cBlue Marble%c: Recieved message about "%s"`, 'color: cornflowerblue;', '', endpointText);
+      console.log(`%cRus Marble%c: Recieved message about "%s"`, 'color: cornflowerblue;', '', endpointText);
 
-      // Each case is something that Blue Marble can use from the fetch.
+      // Each case is something that Rus Marble can use from the fetch.
       // For instance, if the fetch was for "me", we can update the overlay stats
       switch (endpointText) {
 
@@ -799,7 +840,7 @@ export default class ApiManager {
           break;
 
         case 'robots': // Request to retrieve what script types are allowed
-          this.disableAll = dataJSON['userscript']?.toString().toLowerCase() == 'false'; // Disables Blue Marble if site owner wants userscripts disabled
+          this.disableAll = dataJSON['userscript']?.toString().toLowerCase() == 'false'; // Disables Rus Marble if site owner wants userscripts disabled
           break;
 
         // some interesting endpoints:
@@ -809,3 +850,4 @@ export default class ApiManager {
     });
   }
 }
+

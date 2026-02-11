@@ -1,11 +1,11 @@
 {
-  "name": "wplace-bluemarble",
+  "name": "wplace-RusMarble",
   "version": "0.87.4",
   "type": "module",
-  "homepage": "https://bluemarble.lol/",
+  "homepage": "https://t.me/ruswplace",
   "repository": {
     "type": "git",
-    "url": "https://github.com/t-wy/Wplace-BlueMarble-Userscripts.git"
+    "url": "https://github.com/t-wy/Wplace-RusMarble-Userscripts.git"
   },
   "scripts": {
     "build": "node build/build.js",
@@ -18,3 +18,4 @@
     "terser": "^5.43.1"
   }
 }
+

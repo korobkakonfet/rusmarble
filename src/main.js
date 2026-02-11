@@ -1,4 +1,4 @@
-/** @file The main file. Everything in the userscript is executed from here.
+﻿/** @file The main file. Everything in the userscript is executed from here.
  * @since 0.0.0
  */
 import "./polyfill.js";
@@ -13,7 +13,69 @@ import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, removeLa
 const name = GM_info.script.name.toString(); // Name of userscript
 const version = GM_info.script.version.toString(); // Version of userscript
 const consoleStyle = 'color: cornflowerblue;'; // The styling for the console logs
-// const CSS_BM_File = "https://raw.githubusercontent.com/t-wy/Wplace-BlueMarble-Userscripts/refs/heads/custom-improve/dist/BlueMarble.user.css";
+// const CSS_BM_File = "https://raw.githubusercontent.com/t-wy/Wplace-RusMarble-Userscripts/refs/heads/custom-improve/dist/RusMarble.user.css";
+const CSS_BM_File = "http://localhost:8000/dist/RusMarble.user.css";
+const TEMPLATE_SYNC_BASE_URL = "http://localhost:8003";
+const CHAT_WS_URL = `${TEMPLATE_SYNC_BASE_URL.replace(/^http(s?):\/\//, (_, secure) => (secure ? 'wss://' : 'ws://'))}/ws/chat`;
+const TEMPLATE_UPDATE_POLL_MS = 5000;
+const REMOTE_FLAGS_REFRESH_MS = 60000;
+const NOTIFICATION_POLL_MS = 3000;
+const NOTIFICATION_ROTATE_MS = 10000;
+let chatSocket = null;
+let chatInitialized = false;
+const layoutThemeOptions = {
+  classic: 'Classic',
+  white: 'White',
+  pink: 'Pink',
+  blue: 'Blue',
+  black: 'Black',
+  mint: 'Mint',
+  imperial: 'Russian Imperial',
+  tricolor: 'Russian Tricolor'
+};
+const templateDisplayOptions = {
+  cross: 'Cross',
+  'cross-z-9': 'Cross (Z, 9x9)',
+  'cross-z-11': 'Cross (Z, 11x11)',
+  dot: 'Dot (Original)'
+};
+
+const normalizeLayoutTheme = (value) => {
+  const key = String(value ?? '').toLowerCase();
+  return layoutThemeOptions[key] ? key : 'classic';
+};
+
+const normalizeTemplateDisplay = (value) => {
+  const key = String(value ?? '').toLowerCase();
+  return templateDisplayOptions[key] ? key : 'cross';
+};
+
+const normalizeUpdatedAt = (value) => {
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? `n:${value}` : null;
+  }
+  const text = String(value).trim();
+  if (!text) return null;
+  if (/^\d+$/.test(text)) {
+    return `n:${Number(text)}`;
+  }
+  const parsed = Date.parse(text);
+  if (!Number.isNaN(parsed)) {
+    return `n:${parsed}`;
+  }
+  return `s:${text}`;
+};
+
+const applyLayoutTheme = (value) => {
+  const overlay = document.getElementById('bm-overlay');
+  if (!overlay) return;
+  overlay.dataset.layoutTheme = normalizeLayoutTheme(value);
+  const notificationContainer = document.getElementById('bm-notification-container');
+  if (notificationContainer) {
+    notificationContainer.dataset.layoutTheme = normalizeLayoutTheme(value);
+  }
+};
 
 /** Injects code into the client
  * This code will execute outside of TamperMonkey's sandbox
@@ -30,6 +92,1131 @@ function inject(callback) {
     script.remove();
 }
 
+function gmRequest(url, responseType = "json") {
+  return new Promise((resolve, reject) => {
+    GM_xmlhttpRequest({
+      method: "GET",
+      url,
+      responseType,
+      onload: (response) => resolve(response),
+      onerror: (err) => reject(err)
+    });
+  });
+}
+
+let templateUpdatePollId = null;
+let templateUpdatePollInFlight = false;
+let templateUpdatePendingCount = 0;
+let templateFlagSyncInFlight = false;
+
+  function setTemplateUpdateBadge(count) {
+    const badge = document.getElementById('bm-sync-templates-badge');
+    if (!badge) return;
+    if (count > 0) {
+      badge.textContent = count > 99 ? '99+' : String(count);
+      badge.style.display = 'inline-flex';
+  } else {
+    badge.textContent = '';
+    badge.style.display = 'none';
+    }
+  }
+
+  async function pruneMissingRemoteTemplates(templateItems) {
+    if (!Array.isArray(templateItems)) return;
+    const serverNames = new Set(
+      templateItems
+        .map(entry => (typeof entry === 'string' ? entry : entry?.name))
+        .filter(name => name)
+    );
+    const missing = (templateManager.templatesArray ?? []).filter(template => {
+      if (!template) return false;
+      const store = templateManager.templatesJSON?.templates?.[template.storageKey];
+      const isRemote = template.isRemote === true || store?.remote === true;
+      if (!isRemote) return false;
+      const templateName = template.remoteName || template.displayName;
+      return !!templateName && !serverNames.has(templateName);
+    });
+    for (const template of missing) {
+      const templateName = template.remoteName || template.displayName || template.storageKey;
+      consoleLog(
+        `%c${name}%c: Remote template "%s" missing from server list. Deleting local copy.`,
+        consoleStyle,
+        '',
+        templateName
+      );
+      await templateManager.deleteTemplate(template.storageKey);
+    }
+  }
+
+  async function checkTemplateUpdates() {
+    if (templateUpdatePollInFlight) return;
+    templateUpdatePollInFlight = true;
+    try {
+      const listResponse = await gmRequest(`${TEMPLATE_SYNC_BASE_URL}/templates`, "json");
+      const listData = listResponse.response ?? JSON.parse(listResponse.responseText || "{}");
+      const templateItems = Array.isArray(listData)
+        ? listData
+        : (Array.isArray(listData?.templates) ? listData.templates : []);
+      await syncRemoteTemplateFlags(templateItems);
+      await pruneMissingRemoteTemplates(templateItems);
+      let changedCount = 0;
+      if (Array.isArray(templateItems)) {
+        for (const entry of templateItems) {
+          const templateName = typeof entry === "string" ? entry : entry?.name;
+          const updatedAt = typeof entry === "object" ? entry?.updated_at : null;
+        if (!templateName) { continue; }
+        const existingTemplate = (templateManager.templatesArray ?? []).find(t => {
+          if (!t) return false;
+          return t.displayName === templateName || t.remoteName === templateName;
+        });
+          const existingUpdatedAt =
+            templateManager.templatesJSON?.templates?.[existingTemplate?.storageKey]?.remoteUpdatedAt ??
+            existingTemplate?.remoteUpdatedAt ??
+            null;
+          const flagsAppliedAt =
+            templateManager.templatesJSON?.templates?.[existingTemplate?.storageKey]?.remoteFlagsAppliedAt ??
+            existingTemplate?.remoteFlagsAppliedAt ??
+            null;
+          const normalizedUpdatedAt = normalizeUpdatedAt(updatedAt);
+          const normalizedExistingUpdatedAt = normalizeUpdatedAt(existingUpdatedAt);
+          const normalizedFlagsAppliedAt = normalizeUpdatedAt(flagsAppliedAt);
+          if (normalizedUpdatedAt && normalizedFlagsAppliedAt && normalizedUpdatedAt === normalizedFlagsAppliedAt) {
+            continue;
+          }
+          const isMissingLocal = !existingTemplate;
+          const isChanged = isMissingLocal || (normalizedUpdatedAt && normalizedUpdatedAt !== normalizedExistingUpdatedAt);
+          if (isChanged) {
+            const updateReasons = [];
+            if (isMissingLocal) { updateReasons.push('missing-local'); }
+            if (normalizedUpdatedAt && normalizedUpdatedAt !== normalizedExistingUpdatedAt) { updateReasons.push('updated_at-changed'); }
+            const reasonText = updateReasons.length ? updateReasons.join(', ') : 'unknown';
+            console.log(
+              `%c${name}%c: Template update flagged for "%s" (reason: %s). updated_at=%s, local_updated_at=%s, flags_applied_at=%s`,
+              consoleStyle,
+              '',
+              templateName,
+              reasonText,
+              updatedAt,
+              existingUpdatedAt,
+              flagsAppliedAt
+            );
+            changedCount += 1;
+          }
+      }
+    }
+    if (changedCount !== templateUpdatePendingCount) {
+      templateUpdatePendingCount = changedCount;
+      setTemplateUpdateBadge(changedCount);
+    }
+  } catch (err) {
+    // Ignore polling errors to avoid noisy UI
+  } finally {
+    templateUpdatePollInFlight = false;
+  }
+}
+
+  async function syncRemoteTemplateFlags(templateItems) {
+    if (templateFlagSyncInFlight) return;
+    if (!Array.isArray(templateItems) || templateItems.length === 0) return;
+    templateFlagSyncInFlight = true;
+    try {
+      let anyChanged = false;
+      for (const entry of templateItems) {
+        const name = typeof entry === "string" ? entry : entry?.name;
+        if (!name) { continue; }
+        const existingTemplate = (templateManager.templatesArray ?? []).find(t => {
+          if (!t) return false;
+          const sameName = t.displayName === name || t.remoteName === name;
+          return sameName;
+        });
+        if (!existingTemplate) { continue; }
+        const store = templateManager.templatesJSON?.templates?.[existingTemplate.storageKey];
+        const isRemote = existingTemplate.isRemote === true || store?.remote === true;
+        if (!isRemote) { continue; }
+        const storedRemoteCoords = Array.isArray(store?.remoteCoords)
+          ? store.remoteCoords
+          : (Array.isArray(existingTemplate.remoteCoords) ? existingTemplate.remoteCoords : null);
+
+        const entryMeta = entry && typeof entry === "object" ? entry : null;
+        const entryUpdatedAt = entryMeta?.updated_at ?? null;
+        const prevFlagsCheckedAt =
+          store?.remoteFlagsCheckedAt ??
+          existingTemplate.remoteFlagsCheckedAt ??
+          null;
+        const normalizedEntryUpdatedAt = normalizeUpdatedAt(entryUpdatedAt);
+        const normalizedPrevFlagsCheckedAt = normalizeUpdatedAt(prevFlagsCheckedAt);
+
+        const fetchMeta = async (reason) => {
+          if (reason) {
+            consoleLog(
+              `%c${name}%c: Fetching template meta for "%s" (reason: %s)`,
+              consoleStyle,
+              '',
+              name,
+              reason
+            );
+          }
+          const safeName = encodeURIComponent(name);
+          const metaResponse = await gmRequest(`${TEMPLATE_SYNC_BASE_URL}/templates/${safeName}`, "json");
+          return metaResponse.response ?? JSON.parse(metaResponse.responseText || "{}");
+        };
+
+        const entryHasMeta = !!entryMeta && (
+          entryMeta?.to_top !== undefined ||
+          entryMeta?.to_top_at !== undefined ||
+          entryMeta?.highlighted !== undefined ||
+          entryMeta?.highlighted_at !== undefined ||
+          entryMeta?.order !== undefined
+        );
+        const lastFlagsCheckedMs =
+          store?.remoteFlagsCheckedAtLocal ??
+          existingTemplate.remoteFlagsCheckedAtLocal ??
+          0;
+        const shouldThrottle = !entryHasMeta
+          && lastFlagsCheckedMs
+          && (Date.now() - lastFlagsCheckedMs) < REMOTE_FLAGS_REFRESH_MS;
+        if (shouldThrottle) {
+          continue;
+        }
+        if (!entryHasMeta && normalizedEntryUpdatedAt && normalizedPrevFlagsCheckedAt && normalizedEntryUpdatedAt === normalizedPrevFlagsCheckedAt) {
+          continue;
+        }
+        let meta = entryHasMeta ? entryMeta : await fetchMeta('list entry missing flags/coords');
+        let metaFetched = !entryHasMeta;
+
+      const prevToTop = existingTemplate.remoteToTop ?? store?.remoteToTop ?? false;
+      const prevToTopAt = existingTemplate.remoteToTopAt ?? store?.remoteToTopAt ?? null;
+      const prevHighlighted = existingTemplate.remoteHighlighted ?? store?.remoteHighlighted ?? false;
+      const prevHighlightedAt = existingTemplate.remoteHighlightedAt ?? store?.remoteHighlightedAt ?? null;
+      const prevOrderRaw = Number.isFinite(existingTemplate.remoteOrder)
+        ? existingTemplate.remoteOrder
+        : Number(store?.remoteOrder);
+      const prevOrder = Number.isFinite(prevOrderRaw) ? prevOrderRaw : null;
+
+      const readMeta = (metaValue) => {
+        const hasToTop = !!metaValue && Object.prototype.hasOwnProperty.call(metaValue, 'to_top');
+        const hasToTopAt = !!metaValue && Object.prototype.hasOwnProperty.call(metaValue, 'to_top_at');
+        const hasHighlighted = !!metaValue && Object.prototype.hasOwnProperty.call(metaValue, 'highlighted');
+        const hasHighlightedAt = !!metaValue && Object.prototype.hasOwnProperty.call(metaValue, 'highlighted_at');
+        const hasOrder = !!metaValue && Object.prototype.hasOwnProperty.call(metaValue, 'order');
+        const nextToTop = hasToTop ? metaValue.to_top === true : prevToTop;
+        const nextToTopAt = hasToTopAt ? metaValue.to_top_at ?? null : (hasToTop ? null : prevToTopAt);
+        const nextHighlighted = hasHighlighted ? metaValue.highlighted === true : prevHighlighted;
+        const nextHighlightedAt = hasHighlightedAt ? metaValue.highlighted_at ?? null : (hasHighlighted ? null : prevHighlightedAt);
+        const nextUpdatedAt = metaValue?.updated_at ?? entryMeta?.updated_at ?? null;
+        const nextOrderRaw = hasOrder ? Number(metaValue?.order) : prevOrder;
+        const nextOrder = Number.isFinite(nextOrderRaw) ? nextOrderRaw : null;
+        const coordsMeta = Array.isArray(metaValue?.coords) ? metaValue.coords.map(Number) : null;
+        return { nextToTop, nextToTopAt, nextHighlighted, nextHighlightedAt, nextUpdatedAt, nextOrder, coordsMeta };
+      };
+
+        let {
+          nextToTop,
+          nextToTopAt,
+          nextHighlighted,
+          nextHighlightedAt,
+          nextUpdatedAt,
+          nextOrder,
+          coordsMeta
+        } = readMeta(meta);
+        if (!coordsMeta && Array.isArray(storedRemoteCoords) && storedRemoteCoords.length === 4) {
+          coordsMeta = storedRemoteCoords.map(Number);
+        }
+
+      let flagsChanged =
+        prevToTop !== nextToTop ||
+        prevToTopAt !== nextToTopAt ||
+        prevHighlighted !== nextHighlighted ||
+        prevHighlightedAt !== nextHighlightedAt ||
+        prevOrder !== nextOrder;
+
+        if (flagsChanged && nextUpdatedAt && !coordsMeta && !metaFetched) {
+          meta = await fetchMeta('flags changed; coords missing in list meta');
+          metaFetched = true;
+        ({
+          nextToTop,
+          nextToTopAt,
+          nextHighlighted,
+          nextHighlightedAt,
+          nextUpdatedAt,
+          nextOrder,
+          coordsMeta
+        } = readMeta(meta));
+        flagsChanged =
+          prevToTop !== nextToTop ||
+          prevToTopAt !== nextToTopAt ||
+          prevHighlighted !== nextHighlighted ||
+          prevHighlightedAt !== nextHighlightedAt ||
+          prevOrder !== nextOrder;
+        }
+
+        if (Array.isArray(coordsMeta) && coordsMeta.length === 4) {
+          const normalizedCoords = coordsMeta.map(Number);
+          const prevRemoteCoords = Array.isArray(existingTemplate.remoteCoords)
+            ? existingTemplate.remoteCoords
+            : (Array.isArray(store?.remoteCoords) ? store.remoteCoords : null);
+          const coordsChanged = !prevRemoteCoords
+            || prevRemoteCoords.length !== 4
+            || prevRemoteCoords.some((value, index) => Number(value) !== normalizedCoords[index]);
+          if (coordsChanged) {
+            existingTemplate.remoteCoords = normalizedCoords;
+            if (store) {
+              store.remoteCoords = normalizedCoords;
+            }
+            anyChanged = true;
+          }
+        }
+
+        if (!flagsChanged) { continue; }
+
+        const coordsMatch = !!coordsMeta
+          && coordsMeta.length === 4
+          && Array.isArray(existingTemplate.coords)
+          && existingTemplate.coords.length === 4
+          && coordsMeta.every((value, index) => Number(value) === Number(existingTemplate.coords[index]));
+
+        existingTemplate.remoteToTop = nextToTop;
+        existingTemplate.remoteToTopAt = nextToTopAt;
+        existingTemplate.remoteHighlighted = nextHighlighted;
+        existingTemplate.remoteHighlightedAt = nextHighlightedAt;
+        existingTemplate.remoteOrder = nextOrder;
+        if (flagsChanged && nextUpdatedAt && (coordsMatch || !coordsMeta)) {
+          existingTemplate.remoteFlagsAppliedAt = nextUpdatedAt;
+          if (store) {
+            store.remoteFlagsAppliedAt = nextUpdatedAt;
+          }
+        }
+        if (nextUpdatedAt && (!coordsMeta || coordsMatch)) {
+          if (prevFlagsCheckedAt !== nextUpdatedAt) {
+            existingTemplate.remoteFlagsCheckedAt = nextUpdatedAt;
+            if (store) {
+              store.remoteFlagsCheckedAt = nextUpdatedAt;
+            }
+            anyChanged = true;
+          }
+        }
+        if (metaFetched) {
+          const flagsCheckNow = Date.now();
+          existingTemplate.remoteFlagsCheckedAtLocal = flagsCheckNow;
+          if (store) {
+            store.remoteFlagsCheckedAtLocal = flagsCheckNow;
+          }
+          anyChanged = true;
+        }
+        if (store) {
+          store.remoteToTop = nextToTop;
+          store.remoteToTopAt = nextToTopAt;
+          store.remoteHighlighted = nextHighlighted;
+          store.remoteHighlightedAt = nextHighlightedAt;
+          store.remoteOrder = nextOrder;
+        }
+        if (flagsChanged) {
+          anyChanged = true;
+        }
+      }
+      if (anyChanged) {
+        await templateManager.storeTemplates();
+      if (typeof window.buildTemplateFilterList === 'function') {
+        window.buildTemplateFilterList();
+      }
+    }
+  } catch (_) {
+    // Ignore polling errors to avoid noisy UI
+  } finally {
+    templateFlagSyncInFlight = false;
+  }
+}
+
+function startTemplateUpdatePolling() {
+  if (templateUpdatePollId) return;
+  templateUpdatePollId = setInterval(checkTemplateUpdates, TEMPLATE_UPDATE_POLL_MS);
+  checkTemplateUpdates();
+}
+
+function resetTemplateUpdateBadge() {
+  templateUpdatePendingCount = 0;
+  setTemplateUpdateBadge(0);
+}
+
+let notificationPollId = null;
+let notificationRotateId = null;
+let notificationQueue = [];
+let notificationCurrent = null;
+const NOTIFICATION_SHOWN_STORAGE_KEY = 'bmNotificationShownIds';
+const NOTIFICATION_SHOWN_MAX = 500;
+const notificationShownIds = new Set();
+let notificationShownList = [];
+let notificationShownInitPromise = null;
+
+function loadNotificationShownIds() {
+  if (notificationShownInitPromise) return notificationShownInitPromise;
+  notificationShownInitPromise = GM.getValue(NOTIFICATION_SHOWN_STORAGE_KEY, '[]')
+    .then((raw) => {
+      let list = [];
+      try {
+        list = Array.isArray(raw) ? raw : JSON.parse(raw ?? '[]');
+      } catch (_) {
+        list = [];
+      }
+      if (!Array.isArray(list)) return;
+      notificationShownList = list
+        .map((id) => normalizeNotificationId(id))
+        .filter((id) => id);
+      notificationShownList.forEach((id) => notificationShownIds.add(id));
+    })
+    .catch(() => {});
+  return notificationShownInitPromise;
+}
+
+function persistNotificationShownIds() {
+  if (notificationShownList.length > NOTIFICATION_SHOWN_MAX) {
+    notificationShownList = notificationShownList.slice(-NOTIFICATION_SHOWN_MAX);
+  }
+  try {
+    GM.setValue(NOTIFICATION_SHOWN_STORAGE_KEY, JSON.stringify(notificationShownList));
+  } catch (_) {}
+}
+
+function normalizeNotificationId(id) {
+  return id === undefined || id === null ? null : String(id);
+}
+
+function trackNotificationShown(id) {
+  const normalized = normalizeNotificationId(id);
+  if (!normalized) return;
+  if (notificationShownIds.has(normalized)) return;
+  notificationShownIds.add(normalized);
+  notificationShownList.push(normalized);
+  persistNotificationShownIds();
+}
+
+function appendLinkedText(target, rawText, options = {}) {
+  const { enableTeleport = false, shortenWplace = true } = options;
+  const text = String(rawText ?? '');
+  target.textContent = '';
+  const urlRegex = /https?:\/\/[^\s)]+/g;
+  let lastIndex = 0;
+  let hasMatch = false;
+  for (const match of text.matchAll(urlRegex)) {
+    hasMatch = true;
+    const matchText = match[0];
+    const matchIndex = match.index ?? 0;
+    if (matchIndex > lastIndex) {
+      target.appendChild(document.createTextNode(text.slice(lastIndex, matchIndex)));
+    }
+    const link = document.createElement('a');
+    let linkLabel = matchText;
+    let parsedCoords = null;
+    try {
+      const parsed = new URL(matchText);
+      if (shortenWplace && parsed.hostname.endsWith('wplace.live')) {
+        const lat = Number(parsed.searchParams.get('lat'));
+        const lng = Number(parsed.searchParams.get('lng'));
+        const zoom = Number(parsed.searchParams.get('zoom'));
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+          parsedCoords = {
+            lat,
+            lng,
+            zoom: Number.isFinite(zoom) ? zoom : null
+          };
+          const shortLat = lat.toFixed(3);
+          const shortLng = lng.toFixed(3);
+          const zoomLabel = Number.isFinite(zoom) ? ` z${zoom.toFixed(2)}` : '';
+          linkLabel = `wplace.live @ ${shortLat}, ${shortLng}${zoomLabel}`;
+        }
+      }
+    } catch (_) {}
+    link.href = matchText;
+    link.textContent = linkLabel;
+    link.title = matchText;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    if (enableTeleport && parsedCoords) {
+      link.dataset.lat = String(parsedCoords.lat);
+      link.dataset.lng = String(parsedCoords.lng);
+      if (Number.isFinite(parsedCoords.zoom)) {
+        link.dataset.zoom = String(parsedCoords.zoom);
+      }
+      link.addEventListener('click', (event) => {
+        if (event.ctrlKey || event.metaKey || event.shiftKey || event.button === 1) {
+          return;
+        }
+        event.preventDefault();
+        const lat = Number(link.dataset.lat);
+        const lng = Number(link.dataset.lng);
+        const zoom = Number(link.dataset.zoom);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+        doAfterMapFound(async () => {
+          await teleportToGeoCoords(lat, lng);
+          if (Number.isFinite(zoom)) {
+            setZoom(zoom);
+          }
+        });
+      });
+    }
+    target.appendChild(link);
+    lastIndex = matchIndex + matchText.length;
+  }
+  if (!hasMatch) {
+    target.textContent = text;
+    return;
+  }
+  if (lastIndex < text.length) {
+    target.appendChild(document.createTextNode(text.slice(lastIndex)));
+  }
+}
+
+function ensureNotificationContainer() {
+  let container = document.getElementById('bm-notification-container');
+  if (container) return container;
+  container = document.createElement('div');
+  container.id = 'bm-notification-container';
+  container.style.display = 'none';
+  container.dataset.layoutTheme = normalizeLayoutTheme(templateManager?.getLayoutTheme?.());
+  const card = document.createElement('div');
+  card.id = 'bm-notification';
+  const close = document.createElement('button');
+  close.id = 'bm-notification-close';
+  close.type = 'button';
+  close.textContent = '×';
+  close.title = 'Dismiss notification';
+  close.addEventListener('click', () => {
+    notificationCurrent = null;
+    if (notificationQueue.length) {
+      showNextNotification();
+    } else {
+      hideNotification();
+      stopNotificationRotation();
+    }
+  });
+  const text = document.createElement('span');
+  text.id = 'bm-notification-text';
+  const meta = document.createElement('span');
+  meta.id = 'bm-notification-meta';
+  card.appendChild(close);
+  card.appendChild(text);
+  card.appendChild(meta);
+  container.appendChild(card);
+  document.body?.appendChild(container);
+  return container;
+}
+
+function renderNotification(notification) {
+  const container = ensureNotificationContainer();
+  const textEl = container.querySelector('#bm-notification-text');
+  const metaEl = container.querySelector('#bm-notification-meta');
+  if (!textEl || !metaEl) return;
+  appendLinkedText(textEl, notification?.text ?? '', { enableTeleport: true, shortenWplace: true });
+  const createdBy = notification?.created_by ? String(notification.created_by) : '';
+  const createdAtRaw = notification?.created_at ? String(notification.created_at) : '';
+  let createdAt = '';
+  if (createdAtRaw) {
+    const parsed = new Date(createdAtRaw);
+    if (!Number.isNaN(parsed.getTime())) {
+      createdAt = parsed.toLocaleString();
+    }
+  }
+  const metaParts = [];
+  if (createdBy) metaParts.push(`by ${createdBy}`);
+  if (createdAt) metaParts.push(createdAt);
+  if (metaParts.length > 0) {
+    metaEl.textContent = metaParts.join(' • ');
+    metaEl.style.display = 'block';
+  } else {
+    metaEl.textContent = '';
+    metaEl.style.display = 'none';
+  }
+  container.style.display = 'flex';
+}
+
+function hideNotification() {
+  const container = document.getElementById('bm-notification-container');
+  if (container) {
+    container.style.display = 'none';
+  }
+}
+
+function showNextNotification() {
+  if (!notificationQueue.length) {
+    notificationCurrent = null;
+    hideNotification();
+    stopNotificationRotation();
+    return;
+  }
+  const current = notificationQueue.shift();
+  notificationCurrent = current;
+  trackNotificationShown(current?.id);
+  renderNotification(current);
+}
+
+function startNotificationRotation() {
+  if (notificationRotateId) return;
+  notificationRotateId = setInterval(showNextNotification, NOTIFICATION_ROTATE_MS);
+  showNextNotification();
+}
+
+function stopNotificationRotation() {
+  if (notificationRotateId) {
+    clearInterval(notificationRotateId);
+    notificationRotateId = null;
+  }
+}
+
+async function fetchNotifications() {
+  try {
+    const response = await gmRequest(`${TEMPLATE_SYNC_BASE_URL}/notifications`, "json");
+    const data = response.response ?? JSON.parse(response.responseText || "{}");
+    const list = Array.isArray(data?.notifications) ? data.notifications : [];
+    const cleaned = list.filter(item => item && item.text && item.id !== undefined && item.id !== null);
+    const queuedIds = new Set(
+      notificationQueue
+        .map(item => normalizeNotificationId(item?.id))
+        .filter(id => id)
+    );
+    const currentId = normalizeNotificationId(notificationCurrent?.id);
+    let added = 0;
+    for (const item of cleaned) {
+      const id = normalizeNotificationId(item.id);
+      if (!id) continue;
+      if (id === currentId) continue;
+      if (notificationShownIds.has(id)) continue;
+      if (queuedIds.has(id)) continue;
+      notificationQueue.push(item);
+      queuedIds.add(id);
+      added += 1;
+    }
+    if (notificationQueue.length) {
+      startNotificationRotation();
+      if (!notificationCurrent && added > 0) {
+        showNextNotification();
+      }
+    } else if (!notificationCurrent) {
+      hideNotification();
+      stopNotificationRotation();
+    }
+  } catch (_) {
+    // Ignore polling errors to avoid noisy UI
+  }
+}
+
+function startNotificationPolling() {
+  if (notificationPollId) return;
+  loadNotificationShownIds()
+    .finally(() => {
+      if (notificationPollId) return;
+      notificationPollId = setInterval(fetchNotifications, NOTIFICATION_POLL_MS);
+      fetchNotifications();
+    });
+}
+
+function initChat() {
+  const statusTextEl = document.getElementById('bm-chat-status-text');
+  const messagesEl = document.getElementById('bm-chat-messages');
+  const userInput = document.getElementById('bm-chat-user');
+  const modCodeInput = document.getElementById('bm-chat-modcode');
+  const textInput = document.getElementById('bm-chat-text');
+  const replyBar = document.getElementById('bm-chat-reply');
+  const replyLabel = document.getElementById('bm-chat-reply-label');
+  const replyText = document.getElementById('bm-chat-reply-text');
+  const replyClear = document.getElementById('bm-chat-reply-clear');
+  const modTools = document.getElementById('bm-chat-mod-tools');
+  const banTypeSelect = document.getElementById('bm-chat-ban-type');
+  const banTargetInput = document.getElementById('bm-chat-ban-target');
+  const chatDetails = document.getElementById('bm-contain-chat');
+  if (!chatDetails) return;
+  let reconnectTimer = null;
+  let reconnectAttempts = 0;
+  let replyToId = null;
+  const messageCache = new Map();
+  const pendingReplies = [];
+  const PENDING_REPLY_WINDOW_MS = 30000;
+
+  if (!messagesEl || !textInput) return;
+  if (modCodeInput) {
+    modCodeInput.style.display = 'none';
+  }
+  // keep status row visible for connection indicator
+
+  const chatSummary = chatDetails?.querySelector('summary');
+  if (chatSummary) {
+    chatSummary.classList.add('bm-chat-summary');
+    if (!chatSummary.querySelector('.bm-chat-status-light')) {
+      const light = document.createElement('span');
+      light.className = 'bm-chat-status-light';
+      light.title = 'Chat status';
+      chatSummary.appendChild(light);
+    }
+  }
+
+  const setStatus = (text) => {
+    if (statusTextEl) {
+      statusTextEl.textContent = `Status: ${text}`;
+    }
+    if (!chatDetails) return;
+    const lowered = String(text || '').toLowerCase();
+    let nextState = null;
+    if (lowered.includes('connecting') || lowered.includes('reconnecting')) {
+      nextState = 'connecting';
+    } else if (lowered.includes('disconnected')) {
+      nextState = 'error';
+    } else if (lowered === 'connected') {
+      nextState = 'connected';
+    } else if (lowered === 'error') {
+      nextState = 'error';
+    }
+    if (!nextState) return;
+    chatDetails.classList.remove('bm-chat-state-connected', 'bm-chat-state-connecting', 'bm-chat-state-error');
+    if (nextState === 'connecting') {
+      chatDetails.classList.add('bm-chat-state-connecting');
+    } else if (nextState === 'connected') {
+      chatDetails.classList.add('bm-chat-state-connected');
+    } else {
+      chatDetails.classList.add('bm-chat-state-error');
+    }
+  };
+
+  const getModCode = () => modCodeInput?.value?.trim() || '';
+  const clipText = (value, max = 120) => {
+    const text = String(value ?? '');
+    if (text.length <= max) return text;
+    return `${text.slice(0, max - 3)}...`;
+  };
+  const normalizeUser = (value) => {
+    const name = String(value ?? '').trim();
+    return name || 'anon';
+  };
+  const prunePendingReplies = (now = Date.now()) => {
+    while (pendingReplies.length && now - pendingReplies[0].ts > PENDING_REPLY_WINDOW_MS) {
+      pendingReplies.shift();
+    }
+  };
+  const queuePendingReply = (user, text, replyId) => {
+    pendingReplies.push({
+      user: normalizeUser(user),
+      text: String(text ?? ''),
+      replyToId: String(replyId),
+      ts: Date.now()
+    });
+  };
+  const applyPendingReply = (payload) => {
+    if (payload?.reply_to !== undefined && payload?.reply_to !== null && payload?.reply_to !== '') return;
+    const user = normalizeUser(payload?.user);
+    const text = String(payload?.text ?? '');
+    const now = Date.now();
+    prunePendingReplies(now);
+    const index = pendingReplies.findIndex((entry) => entry.user === user && entry.text === text);
+    if (index === -1) return;
+    payload.reply_to = pendingReplies[index].replyToId;
+    pendingReplies.splice(index, 1);
+  };
+
+  const clearReply = () => {
+    replyToId = null;
+    if (replyBar) replyBar.style.display = 'none';
+  };
+
+  const setReplyTo = (id) => {
+    if (id === undefined || id === null || id === '') return;
+    replyToId = String(id);
+    const cached = messageCache.get(replyToId);
+    if (replyBar) {
+      replyBar.style.display = '';
+    }
+    if (replyLabel) {
+      replyLabel.textContent = cached?.user ? `Replying to ${cached.user}` : `Replying to #${replyToId}`;
+    }
+    if (replyText) {
+      replyText.textContent = clipText(cached?.text || '');
+    }
+  };
+  const isChatDisabled = () => templateManager?.isChatDisabled?.() ?? false;
+
+  const moderateDelete = (messageId) => {
+    const code = getModCode();
+    if (!code) {
+      setStatus('missing moderation code');
+      return;
+    }
+    GM_xmlhttpRequest({
+      method: "POST",
+      url: `${TEMPLATE_SYNC_BASE_URL}/chat/moderate/delete`,
+      headers: { "Content-Type": "application/json" },
+      data: JSON.stringify({ code, id: messageId }),
+      onload: (response) => {
+        if (response.status >= 200 && response.status < 300) {
+          setStatus('moderation delete sent');
+        } else {
+          setStatus(`moderation failed (${response.status})`);
+        }
+      },
+      onerror: () => setStatus('moderation error')
+    });
+  };
+
+  const parseBanTarget = (value) => {
+    const raw = String(value ?? '').trim();
+    if (!raw) return null;
+    const isMessageId = /^\d+$/.test(raw);
+    return { raw, isMessageId };
+  };
+
+  const postModerationAction = (endpoint, payload) => {
+    GM_xmlhttpRequest({
+      method: "POST",
+      url: `${TEMPLATE_SYNC_BASE_URL}${endpoint}`,
+      headers: { "Content-Type": "application/json" },
+      data: JSON.stringify(payload),
+      onload: (response) => {
+        if (response.status >= 200 && response.status < 300) {
+          setStatus('moderation ok');
+        } else {
+          setStatus(`moderation failed (${response.status})`);
+        }
+      },
+      onerror: () => setStatus('moderation error')
+    });
+  };
+
+  const moderateBan = (target, type, isUnban = false) => {
+    const code = getModCode();
+    if (!code) {
+      setStatus('missing moderation code');
+      return;
+    }
+    const parsed = parseBanTarget(target);
+    if (!parsed) {
+      setStatus('missing ban target');
+      return;
+    }
+    const endpoint = type === 'device'
+      ? (isUnban ? '/chat/moderate/unban_device' : '/chat/moderate/ban_device')
+      : (isUnban ? '/chat/moderate/unban' : '/chat/moderate/ban');
+    const payload = { code };
+    if (type === 'device') {
+      if (isUnban) {
+        payload.device_id = parsed.raw;
+      } else if (parsed.isMessageId) {
+        const cached = messageCache.get(parsed.raw);
+        if (!cached?.device_id) {
+          setStatus('device id not found');
+          return;
+        }
+        payload.device_id = cached.device_id;
+        if (cached?.text) {
+          payload.message = String(cached.text);
+        }
+      } else {
+        payload.device_id = parsed.raw;
+      }
+    } else {
+      if (isUnban) {
+        payload.ip = parsed.raw;
+      } else if (parsed.isMessageId) {
+        payload.message_id = Number(parsed.raw);
+        const cached = messageCache.get(parsed.raw);
+        if (cached?.text) {
+          payload.message = String(cached.text);
+        }
+      } else {
+        payload.ip = parsed.raw;
+      }
+    }
+    postModerationAction(endpoint, payload);
+  };
+
+  const fetchBans = () => {
+    const code = getModCode();
+    if (!code) {
+      setStatus('missing moderation code');
+      return;
+    }
+    GM_xmlhttpRequest({
+      method: "GET",
+      url: `${TEMPLATE_SYNC_BASE_URL}/chat/moderate/banned?code=${encodeURIComponent(code)}`,
+      onload: (response) => {
+        let data = {};
+        try {
+          data = response.response ?? JSON.parse(response.responseText || "{}");
+        } catch (_) {
+          data = {};
+        }
+        const list = Array.isArray(data?.banned) ? data.banned : [];
+        if (!list.length) {
+          setStatus('no bans');
+          return;
+        }
+        const lines = list.map((entry) => {
+          const typeLabel = entry?.type || 'unknown';
+          const idLabel = entry?.identifier || entry?.ip || entry?.device_id || '';
+          const ts = entry?.created_at ? ` @ ${entry.created_at}` : '';
+          const msg = entry?.message ? ` — ${entry.message}` : '';
+          return `${typeLabel}: ${idLabel}${ts}${msg}`;
+        });
+        alert(lines.join('\n'));
+      },
+      onerror: () => setStatus('moderation error')
+    });
+  };
+
+  const ensureDeleteButton = (row) => {
+    const messageId = row.getAttribute('data-msg-id');
+    const messageIdNum = messageId ? Number(messageId) : NaN;
+    const existing = row.querySelector('.bm-chat-delete');
+    const code = getModCode();
+    if (!code || !Number.isFinite(messageIdNum)) {
+      if (existing) existing.remove();
+      row.style.position = '';
+      row.style.paddingRight = '';
+      return;
+    }
+    if (existing) return;
+    const btn = document.createElement('button');
+    btn.className = 'bm-chat-delete';
+    btn.type = 'button';
+    btn.textContent = '✖';
+    btn.title = 'Delete message';
+    row.style.position = 'relative';
+    row.style.paddingRight = '18px';
+    btn.style.position = 'absolute';
+    btn.style.top = '2px';
+    btn.style.right = '2px';
+    btn.style.marginLeft = '0';
+    btn.style.background = 'transparent';
+    btn.style.border = '1px solid var(--bm-border-strong)';
+    btn.style.color = 'var(--bm-accent-strong)';
+    btn.style.borderRadius = '50%';
+    btn.style.width = '14px';
+    btn.style.height = '14px';
+    btn.style.minWidth = '14px';
+    btn.style.minHeight = '14px';
+    btn.style.padding = '0';
+    btn.style.display = 'inline-flex';
+    btn.style.alignItems = 'center';
+    btn.style.justifyContent = 'center';
+    btn.style.fontSize = '9px';
+    btn.style.lineHeight = '1';
+    btn.addEventListener('click', () => moderateDelete(messageIdNum));
+    row.appendChild(btn);
+  };
+
+  const renderModerationControls = () => {
+    const rows = messagesEl.querySelectorAll('.bm-chat-message');
+    rows.forEach(ensureDeleteButton);
+    if (modTools) {
+      modTools.style.display = getModCode() ? 'flex' : 'none';
+    }
+  };
+
+  const appendMessage = (payload) => {
+    applyPendingReply(payload);
+    const user = payload?.user || 'anon';
+    const text = payload?.text || '';
+    const ts = payload?.ts ? new Date(payload.ts) : new Date();
+    const line = document.createElement('div');
+    line.className = 'bm-chat-message';
+    if (payload?.id !== undefined && payload?.id !== null) {
+      const messageId = String(payload.id);
+      line.setAttribute('data-msg-id', messageId);
+      messageCache.set(messageId, payload);
+    }
+    const replyId = payload?.reply_to;
+    if (replyId !== undefined && replyId !== null) {
+      const replyBlock = document.createElement('div');
+      replyBlock.className = 'bm-chat-reply-inline';
+      const replySource = messageCache.get(String(replyId));
+      const replyTitle = document.createElement('span');
+      replyTitle.className = 'bm-chat-reply-title';
+      replyTitle.textContent = replySource?.user ? `↪ Reply to ${replySource.user}` : `↪ Reply to #${replyId}`;
+      const replySnippet = document.createElement('span');
+      replySnippet.className = 'bm-chat-reply-snippet';
+      replySnippet.textContent = clipText(replySource?.text || `Message #${replyId}`);
+      replyBlock.appendChild(replyTitle);
+      replyBlock.appendChild(replySnippet);
+      line.appendChild(replyBlock);
+    }
+    const row = document.createElement('div');
+    row.className = 'bm-chat-row';
+    const meta = document.createElement('span');
+    meta.className = 'bm-chat-meta';
+    const timeLabel = ts.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    meta.textContent = `[${timeLabel}] ${user}: `;
+    const body = document.createElement('span');
+    body.className = 'bm-chat-body';
+    appendLinkedText(body, text, { enableTeleport: true, shortenWplace: true });
+    row.appendChild(meta);
+    row.appendChild(body);
+    line.appendChild(row);
+    messagesEl.appendChild(line);
+    while (messagesEl.childElementCount > 200) {
+      messagesEl.removeChild(messagesEl.firstChild);
+    }
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    ensureDeleteButton(line);
+    line.addEventListener('dblclick', () => {
+      const id = line.getAttribute('data-msg-id');
+      if (id) {
+        setReplyTo(id);
+        textInput.focus();
+      }
+    });
+  };
+
+  const handleDeleted = (payload) => {
+    const messageId = payload?.id;
+    if (typeof messageId !== 'number') return;
+    const row = messagesEl.querySelector(`.bm-chat-message[data-msg-id="${messageId}"]`);
+    if (row) row.remove();
+    messageCache.delete(String(messageId));
+    if (replyToId && String(messageId) === replyToId) {
+      clearReply();
+    }
+  };
+
+  const scheduleReconnect = () => {
+    const delay = reconnectAttempts === 0 ? 2000 : reconnectAttempts === 1 ? 4000 : 10000;
+    reconnectAttempts = Math.min(reconnectAttempts + 1, 2);
+    if (reconnectTimer) return;
+    setStatus(`reconnecting in ${Math.round(delay / 1000)}s`);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+    }, delay);
+  };
+
+  const connect = () => {
+    if (chatSocket && (chatSocket.readyState === WebSocket.OPEN || chatSocket.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+    setStatus('connecting');
+    chatSocket = new WebSocket(CHAT_WS_URL);
+    chatSocket.onopen = () => {
+      reconnectAttempts = 0;
+      setStatus('connected');
+    };
+    chatSocket.onclose = () => {
+      setStatus('disconnected');
+      scheduleReconnect();
+    };
+    chatSocket.onerror = () => {
+      setStatus('error');
+    };
+    chatSocket.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        if (payload?.type === 'chat') {
+          appendMessage(payload);
+        } else if (payload?.type === 'chat_deleted') {
+          handleDeleted(payload);
+        }
+      } catch (_) {}
+    };
+  };
+
+  const sendMessage = () => {
+    const text = textInput.value.trim();
+    if (!text) return;
+    const user = userInput?.value?.trim() || 'anon';
+    if (!chatSocket || chatSocket.readyState !== WebSocket.OPEN) {
+      setStatus('disconnected');
+      return;
+    }
+    const payload = { user, text };
+    if (replyToId) {
+      payload.reply_to = replyToId;
+      queuePendingReply(user, text, replyToId);
+    }
+    chatSocket.send(JSON.stringify(payload));
+    textInput.value = '';
+    clearReply();
+  };
+
+  const setChatEnabled = (enabled) => {
+    chatDetails.style.display = enabled ? '' : 'none';
+    if (!enabled) {
+      try { chatSocket?.close(); } catch (_) {}
+      return;
+    }
+    connect();
+  };
+
+  window.setChatEnabled = setChatEnabled;
+
+  if (chatInitialized) {
+    setChatEnabled(!isChatDisabled());
+    return;
+  }
+  chatInitialized = true;
+
+  textInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      sendMessage();
+    }
+  });
+  modCodeInput?.addEventListener('input', () => {
+    GM.setValue('bmChatModCode', modCodeInput.value.trim());
+    renderModerationControls();
+  });
+  const banBtn = document.getElementById('bm-chat-ban-btn');
+  const unbanBtn = document.getElementById('bm-chat-unban-btn');
+  const bansBtn = document.getElementById('bm-chat-bans-btn');
+  banBtn?.addEventListener('click', () => {
+    moderateBan(banTargetInput?.value, banTypeSelect?.value || 'ip', false);
+  });
+  unbanBtn?.addEventListener('click', () => {
+    moderateBan(banTargetInput?.value, banTypeSelect?.value || 'ip', true);
+  });
+  bansBtn?.addEventListener('click', () => {
+    fetchBans();
+  });
+  replyClear?.addEventListener('click', () => {
+    clearReply();
+    textInput.focus();
+  });
+  userInput?.addEventListener('change', () => {
+    GM.setValue('bmChatUser', userInput.value.trim());
+  });
+
+  GM.getValue('bmChatUser', '').then((savedUser) => {
+    if (userInput && !userInput.value) {
+      const fallback = document.getElementById('bm-user-name')?.textContent?.trim() || '';
+      userInput.value = savedUser || fallback;
+    }
+  });
+  GM.getValue('bmChatModCode', '').then((savedCode) => {
+    if (modCodeInput && !modCodeInput.value) {
+      modCodeInput.value = savedCode || '';
+      renderModerationControls();
+    }
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (!event.altKey || event.key.toLowerCase() !== 'a') return;
+    if (isChatDisabled()) return;
+    const active = document.activeElement;
+    if (active && active.tagName && ['INPUT', 'TEXTAREA'].includes(active.tagName) && active !== textInput && active !== userInput && active !== modCodeInput) {
+      return;
+    }
+    const chatDetails = document.getElementById('bm-contain-chat');
+    if (chatDetails && chatDetails.tagName === 'DETAILS') {
+      chatDetails.open = true;
+    }
+    if (modCodeInput) {
+      const isHidden = modCodeInput.style.display === 'none';
+      modCodeInput.style.display = isHidden ? '' : 'none';
+      if (isHidden) {
+        modCodeInput.focus();
+      } else {
+        textInput.focus();
+      }
+    } else {
+      textInput.focus();
+    }
+  });
+
+  setChatEnabled(!isChatDisabled());
+}
+
 /** What code to execute instantly in the client (webpage) to spy on fetch calls.
  * This code will execute outside of TamperMonkey's sandbox.
  * @since 0.11.15
@@ -37,7 +1224,7 @@ function inject(callback) {
 inject(() => {
 
   const script = document.currentScript; // Gets the current script HTML Script Element
-  const name = script?.getAttribute('bm-name') || 'Blue Marble'; // Gets the name value that was passed in. Defaults to "Blue Marble" if nothing was found
+  const name = script?.getAttribute('bm-name') || 'Rus Marble'; // Gets the name value that was passed in. Defaults to "Rus Marble" if nothing was found
   const consoleStyle = script?.getAttribute('bm-cStyle') || ''; // Gets the console style value that was passed in. Defaults to no styling if nothing was found
   const fetchedBlobQueue = new Map(); // Blobs being processed
 
@@ -237,9 +1424,21 @@ inject(() => {
   Map.prototype.values = hookedMapValues;
 });
 
-// Imports the CSS file from dist folder on github
-// fetch(CSS_BM_File).then(cssOverlay => cssOverlay.text()).then(GM.addStyle);
-GM.addStyle("<placeholder CSS>");
+// Imports the CSS file (local or remote)
+GM_xmlhttpRequest({
+  method: "GET",
+  url: CSS_BM_File,
+  onload: (response) => {
+    if (response.status >= 200 && response.status < 300) {
+      GM.addStyle(response.responseText);
+    } else {
+      consoleWarn(`%c${name}%c: Failed to load CSS (${response.status}) from ${CSS_BM_File}`, consoleStyle, '');
+    }
+  },
+  onerror: (err) => {
+    consoleWarn(`%c${name}%c: Failed to load CSS from ${CSS_BM_File}`, consoleStyle, '', err);
+  }
+});
 
 // CONSTRUCTORS
 const overlayMain = new Overlay(name, version); // Constructs a new Overlay object for the main overlay
@@ -277,6 +1476,10 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
       'onlyCurrentColorShown': false,
       'themeOverridden': false,
       'currentTheme': '',
+      'layoutTheme': 'classic',
+      'templateDisplay': 'cross',
+      'hideDroplets': false,
+      'hideNextLevel': false,
       'hideStatus': false,
       'isLegacyDisplay': false,
       'showErrorMap': false,
@@ -284,6 +1487,7 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
       'showIntegerZoom': false,
       'enableKeybinds': false,
       'lineTemplateButton': false, // Hidden in settings
+      'chatDisabled': false,
     });
     templateManager.storeUserSettings();
   } else {
@@ -302,6 +1506,9 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   templateManager.importJSON(storageTemplates); // Loads the templates
 
   await buildOverlayMain(); // Builds the main overlay
+  initChat();
+  startTemplateUpdatePolling();
+  startNotificationPolling();
 
   overlayMain.handleDrag('#bm-overlay', '#bm-bar-drag'); // Creates dragging capability on the drag bar for dragging the overlay
 
@@ -440,17 +1647,17 @@ function observeBlack() {
     if (!move) {
       move = document.createElement('button');
       move.id = 'bm-button-move';
-      move.textContent = 'Move ↑';
+      move.textContent = 'Move â†‘';
       move.className = 'btn btn-soft';
       move.onclick = function() {
         const roundedBox = this.parentNode.parentNode.parentNode.parentNode; // Obtains the rounded box
-        const shouldMoveUp = (this.textContent == 'Move ↑');
+        const shouldMoveUp = (this.textContent == 'Move â†‘');
         roundedBox.parentNode.className = roundedBox.parentNode.className.replace(shouldMoveUp ? 'bottom' : 'top', shouldMoveUp ? 'top' : 'bottom'); // Moves the rounded box to the top
         roundedBox.style.borderTopLeftRadius = shouldMoveUp ? '0px' : 'var(--radius-box)';
         roundedBox.style.borderTopRightRadius = shouldMoveUp ? '0px' : 'var(--radius-box)';
         roundedBox.style.borderBottomLeftRadius = shouldMoveUp ? 'var(--radius-box)' : '0px';
         roundedBox.style.borderBottomRightRadius = shouldMoveUp ? 'var(--radius-box)' : '0px';
-        this.textContent = shouldMoveUp ? 'Move ↓' : 'Move ↑';
+        this.textContent = shouldMoveUp ? 'Move â†“' : 'Move â†‘';
       }
 
       // Attempts to find the "Paint Pixel" element for anchoring
@@ -669,13 +1876,13 @@ async function buildOverlayMain() {
   overlayMain.addDiv({'id': 'bm-overlay', 'style': 'top: 10px; right: 75px;'})
     .addDiv({'id': 'bm-contain-header'})
       .addDiv({'id': 'bm-bar-drag'}).buildElement()
-      .addImg({'alt': 'Blue Marble Icon - Click to minimize/maximize', 'src': 'https://raw.githubusercontent.com/SwingTheVine/Wplace-BlueMarble/main/dist/assets/Favicon.png', 'style': 'cursor: pointer;'}, 
+      .addImg({'alt': 'Rus Marble Icon - Click to minimize/maximize', 'src': 'https://upload.wikimedia.org/wikipedia/commons/thumb/f/f3/Flag_of_Russia.svg/960px-Flag_of_Russia.svg.png', 'style': 'cursor: pointer;'}, 
         (instance, img) => {
           /** Click event handler for overlay minimize/maximize functionality.
            * 
            * Toggles between two distinct UI states:
-           * 1. MINIMIZED STATE (60×76px):
-           *    - Shows only the Blue Marble icon and drag bar
+           * 1. MINIMIZED STATE (60Ã—76px):
+           *    - Shows only the Rus Marble icon and drag bar
            *    - Hides all input fields, buttons, and status information
            *    - Applies fixed dimensions for consistent appearance
            *    - Repositions icon with 3px right offset for visual centering
@@ -715,7 +1922,7 @@ async function buildOverlayMain() {
             // Define elements that should be hidden/shown during state transitions
             // Each element is documented with its purpose for maintainability
             const elementsToToggle = [
-              '#bm-overlay h1',                    // Main title "Blue Marble"
+              '#bm-overlay h1',                    // Main title "Rus Marble"
               '#bm-contain-userinfo',              // User information section (username, droplets, level)
               '#bm-overlay hr',                    // Visual separator lines
               '#bm-contain-automation > *:not(#bm-contain-coords)', // Automation section excluding coordinates
@@ -882,8 +2089,8 @@ async function buildOverlayMain() {
             
             // Update alt text to reflect current state for screen readers and tooltips
             img.alt = isMinimized ? 
-              'Blue Marble Icon - Minimized (Click to maximize)' : 
-              'Blue Marble Icon - Maximized (Click to minimize)';
+              'Rus Marble Icon - Minimized (Click to maximize)' : 
+              'Rus Marble Icon - Maximized (Click to minimize)';
             
             // No status message needed - state change is visually obvious to users
           });
@@ -923,12 +2130,20 @@ async function buildOverlayMain() {
       .addP({'id': 'bm-user-suspend-reason', 'textContent': 'Reason: ', 'style': 'display: none;'})
         .addB({'id': 'bm-suspend-reason', 'textContent': 'Unknown'}).buildElement()
       .buildElement()
-      .addP({'textContent': 'Droplets: '})
-        .addB({'id': 'bm-user-droplets'}).buildElement()
-      .buildElement()
-      .addP()
-        .addB({'id': 'bm-user-nextpixel', 'textContent': '--'}).buildElement()
-        .addText(' more pixel')
+        .addP({'id': 'bm-user-droplets-row', 'textContent': 'Droplets: '}, (_, element) => {
+          if (templateManager.isDropletsHidden()) {
+            element.style.display = 'none';
+          }
+        })
+          .addB({'id': 'bm-user-droplets'}).buildElement()
+        .buildElement()
+        .addP({'id': 'bm-user-nextlevel-row'}, (_, element) => {
+          if (templateManager.isNextLevelHidden()) {
+            element.style.display = 'none';
+          }
+        })
+          .addB({'id': 'bm-user-nextpixel', 'textContent': '--'}).buildElement()
+          .addText(' more pixel')
         .addSpan({'id': 'bm-user-nextpixel-plural', 'textContent': 's'}).buildElement()
         .addText(' to Lv. ')
         .addB({'id': 'bm-user-nextlevel', 'textContent': '--'}).buildElement()
@@ -1023,7 +2238,7 @@ async function buildOverlayMain() {
           }
         ).buildElement()
       .buildElement()
-      .addDetails({'id': 'bm-checkbox-container', 'textContent': 'User Settings', 'style': 'max-width: 100%; white-space: nowrap; border: 1px solid rgba(255,255,255,0.1); padding: 4px; border-radius: 4px; margin-top: 4px;'})
+      .addDetails({'id': 'bm-checkbox-container', 'textContent': 'User Settings', 'style': 'max-width: 100%; white-space: nowrap; border: 1px solid var(--bm-border); padding: 4px; border-radius: 4px; margin-top: 4px;'})
         // Color filter UI
         // .addDiv({'style': 'display: flex; flex-direction: column; gap: 4px;'})
         .addDiv({'id': 'bm-user_setting-list', 'style': 'max-height: 125px; overflow-x: hidden; overflow-y: auto; touch-action: pan-x pan-y; display: flex; flex-direction: column; gap: 4px; margin-top: 3px;'})
@@ -1105,6 +2320,27 @@ async function buildOverlayMain() {
               forceRefreshTiles();
             });
           }).buildElement()
+          .addDiv({'className': 'bm-setting-row'})
+            .addSpan({'textContent': 'Layout Theme:'}).buildElement()
+            .addSelect({'id': 'bm-layout-theme'}, (instance, select) => {
+              const currentLayoutTheme = normalizeLayoutTheme(templateManager.getLayoutTheme());
+              Object.entries(layoutThemeOptions).forEach(([value, label]) => {
+                const option = document.createElement('option');
+                option.value = value;
+                option.textContent = label;
+                if (value === currentLayoutTheme) {
+                  option.selected = true;
+                }
+                select.appendChild(option);
+              });
+              select.addEventListener('change', async () => {
+                const nextTheme = normalizeLayoutTheme(select.value);
+                await templateManager.setLayoutTheme(nextTheme);
+                applyLayoutTheme(nextTheme);
+                instance.handleDisplayStatus(`Layout theme set to "${layoutThemeOptions[nextTheme]}".`);
+              });
+            }).buildElement()
+          .buildElement()
           .addCheckbox({'id': 'bm-theme-override-enabled', 'textContent': 'Theme Override: ', 'checked': templateManager.isThemeOverridden()}, (instance, label, checkbox) => {
             // this feature is currently broken by wplace
             // label.style.display = "none";
@@ -1185,17 +2421,33 @@ async function buildOverlayMain() {
               buildEventList();
             });
           }).buildElement()
-          .addCheckbox({'id': 'bm-dot-template', 'textContent': 'Use Dot Template (Original ver.)', 'checked': templateManager.isLegacyDisplay()}, (instance, label, checkbox) => {
-            checkbox.addEventListener('change', () => {
-              templateManager.setLegacyDisplay(checkbox.checked);
-              if (checkbox.checked) {
-                instance.handleDisplayStatus("Switched to the Dot Template Display.");
-              } else {
-                instance.handleDisplayStatus("Switched to the Cross Template Display.");
-              };
-              templateManager.createOverlayOnMap();
-            });
-          }).buildElement()
+          .addDiv({'className': 'bm-setting-row'})
+            .addSpan({'textContent': 'Template Display:'}).buildElement()
+            .addSelect({'id': 'bm-template-display'}, (instance, select) => {
+              const currentDisplay = normalizeTemplateDisplay(templateManager.getTemplateDisplayMode());
+              Object.entries(templateDisplayOptions).forEach(([value, label]) => {
+                const option = document.createElement('option');
+                option.value = value;
+                option.textContent = label;
+                if (value === currentDisplay) {
+                  option.selected = true;
+                }
+                select.appendChild(option);
+              });
+              select.addEventListener('change', async () => {
+                const nextMode = normalizeTemplateDisplay(select.value);
+                await templateManager.setTemplateDisplayMode(nextMode);
+                if (nextMode === 'dot') {
+                  instance.handleDisplayStatus("Switched to the Dot Template Display.");
+                } else if (nextMode.startsWith('cross-z')) {
+                  instance.handleDisplayStatus("Switched to the Z-Cross Template Display.");
+                } else {
+                  instance.handleDisplayStatus("Switched to the Cross Template Display.");
+                }
+                templateManager.createOverlayOnMap();
+              });
+            }).buildElement()
+          .buildElement()
           .addCheckbox({'id': 'bm-show-zoom-buttons', 'textContent': 'Show Integer Zoom Buttons', 'checked': templateManager.areIntegerZoomButtonsShown()}, (instance, label, checkbox) => {
             checkbox.addEventListener('change', () => {
               templateManager.setIntegerZoomButtonsShown(checkbox.checked);
@@ -1217,6 +2469,19 @@ async function buildOverlayMain() {
               } else {
                 instance.handleDisplayStatus("WASD Keybinds are now Disabled.");
               };
+            });
+          }).buildElement()
+          .addCheckbox({'id': 'bm-chat-disabled', 'textContent': 'Disable Chat', 'checked': templateManager.isChatDisabled()}, (instance, label, checkbox) => {
+            checkbox.addEventListener('change', () => {
+              templateManager.setChatDisabled(checkbox.checked);
+              if (checkbox.checked) {
+                instance.handleDisplayStatus("Chat is now Disabled.");
+              } else {
+                instance.handleDisplayStatus("Chat is now Enabled.");
+              }
+              if (typeof window.setChatEnabled === 'function') {
+                window.setChatEnabled(!checkbox.checked);
+              }
             });
           }).buildElement()
           .addCheckbox({'id': 'bm-enable-line-template', 'textContent':  'Shape Templates (Experimental)', 'checked': templateManager.isLineTemplateButtonShown()}, (instance, label, checkbox) => {
@@ -1250,6 +2515,34 @@ async function buildOverlayMain() {
               }
             });
           }).buildElement()
+          .addCheckbox({'id': 'bm-hide-user-droplets', 'textContent': 'Hide Droplets', 'checked': templateManager.isDropletsHidden()}, (instance, label, checkbox) => {
+            checkbox.addEventListener('change', () => {
+              templateManager.setDropletsHidden(checkbox.checked);
+              const dropletsRow = document.getElementById('bm-user-droplets-row');
+              if (dropletsRow) {
+                dropletsRow.style.display = checkbox.checked ? 'none' : '';
+              }
+              if (checkbox.checked) {
+                instance.handleDisplayStatus("Droplets Hidden.");
+              } else {
+                instance.handleDisplayStatus("Droplets Restored.");
+              }
+            });
+          }).buildElement()
+          .addCheckbox({'id': 'bm-hide-user-nextlevel', 'textContent': 'Hide Next Level', 'checked': templateManager.isNextLevelHidden()}, (instance, label, checkbox) => {
+            checkbox.addEventListener('change', () => {
+              templateManager.setNextLevelHidden(checkbox.checked);
+              const nextLevelRow = document.getElementById('bm-user-nextlevel-row');
+              if (nextLevelRow) {
+                nextLevelRow.style.display = checkbox.checked ? 'none' : '';
+              }
+              if (checkbox.checked) {
+                instance.handleDisplayStatus("Next Level Hidden.");
+              } else {
+                instance.handleDisplayStatus("Next Level Restored.");
+              }
+            });
+          }).buildElement()
           .addCheckbox({'id': 'bm-status-hidden', 'textContent': 'Hide Status Display', 'checked': templateManager.isStatusHidden()}, (instance, label, checkbox) => {
             checkbox.addEventListener('change', () => {
               templateManager.setStatusHidden(checkbox.checked);
@@ -1275,7 +2568,7 @@ async function buildOverlayMain() {
           }).buildElement()
         .buildElement()
       .buildElement()
-      .addDetails({'id': 'bm-contain-colorfilter', 'textContent': 'Colors', 'style': 'border: 1px solid rgba(255,255,255,0.1); padding: 4px; border-radius: 4px; margin-top: 4px;'}, (instance, summary, details) => {
+      .addDetails({'id': 'bm-contain-colorfilter', 'textContent': 'Colors', 'style': 'border: 1px solid var(--bm-border); padding: 4px; border-radius: 4px; margin-top: 4px;'}, (instance, summary, details) => {
         details.open = true;
       })
         // Color sorting
@@ -1328,8 +2621,30 @@ async function buildOverlayMain() {
               })
               syncToggleList();
               removeLayer("overlay");
+              templateManager.createOverlayOnMap();
               buildColorFilterList();
               instance.handleDisplayStatus('Disabled all colors');
+              if (templateManager.isErrorMapShown() && templateManager.isErrorMapOnlyEnabledColorsShown()) {
+                forceRefreshTiles();
+              };
+            };
+          }).buildElement()
+          .addButton({'id': 'bm-button-colors-disable-paid', 'textContent': 'Disable Paid'}, (instance, button) => {
+            button.onclick = () => {
+              templateManager.templatesArray.forEach(t => {
+                if (!t?.colorPalette) { return; }
+                Object.entries(t.colorPalette).forEach(([rgb, value]) => {
+                  const meta = rgbToMeta.get(rgb);
+                  const colorId = Number(meta?.id);
+                  if (Number.isFinite(colorId) && colorId >= 32) {
+                    value.enabled = false;
+                  }
+                });
+              });
+              syncToggleList();
+              templateManager.createOverlayOnMap();
+              buildColorFilterList();
+              instance.handleDisplayStatus('Disabled paid colors');
               if (templateManager.isErrorMapShown() && templateManager.isErrorMapOnlyEnabledColorsShown()) {
                 forceRefreshTiles();
               };
@@ -1339,13 +2654,13 @@ async function buildOverlayMain() {
         .addDiv({'id': 'bm-colorfilter-list', 'style': 'max-height: 125px; overflow: auto; touch-action: pan-x pan-y; display: flex; flex-direction: column; gap: 4px;'}).buildElement()
       .buildElement()
       // Template filter UI
-      .addDetails({'id': 'bm-contain-templatefilter', 'textContent': 'Templates', 'style': 'border: 1px solid rgba(255,255,255,0.1); padding: 4px; border-radius: 4px; margin-top: 4px;'}, (instance, summary, details) => {
+      .addDetails({'id': 'bm-contain-templatefilter', 'textContent': 'Templates', 'style': 'border: 1px solid var(--bm-border); padding: 4px; border-radius: 4px; margin-top: 4px;'}, (instance, summary, details) => {
         details.open = true;
       })
         // Template buttons
         .addDiv({'id': 'bm-contain-buttons-template', 'style': 'margin-bottom: 3px;'})
-          .addInputFile({'id': 'bm-input-file-template', 'textContent': 'Select Image', 'accept': 'image/png, image/jpeg, image/webp, image/bmp, image/gif'}) // .buildElement()
-          .addButton({'id': 'bm-button-create', 'textContent': 'Create Template', 'style': 'margin: 0 1ch;'}, (instance, button) => {
+          .addInputFile({'id': 'bm-input-file-template', 'textContent': 'Select Img', 'accept': 'image/png, image/jpeg, image/webp, image/bmp, image/gif'}) // .buildElement()
+          .addButton({'id': 'bm-button-create', 'textContent': 'Create', 'style': 'margin: 0 1ch;'}, (instance, button) => {
             button.onclick = async () => {
               const input = document.querySelector('#bm-input-file-template');
 
@@ -1380,8 +2695,112 @@ async function buildOverlayMain() {
 
               instance.handleDisplayStatus(`Drew to canvas!`);
             }
-          }).buildElement()
-          .addSelect({'id': 'bm-template-anchor'}, (instance, select) => {
+            }).buildElement()
+          .addButton({'id': 'bm-button-sync-templates', 'textContent': '🔄'}, (instance, button) => {
+            button.style.position = 'relative';
+            button.style.overflow = 'visible';
+            const badge = document.createElement('span');
+            badge.id = 'bm-sync-templates-badge';
+            badge.className = 'bm-sync-badge';
+            badge.style.display = 'none';
+            button.appendChild(badge);
+            button.onclick = async () => {
+              try {
+                instance.handleDisplayStatus('Syncing templates from server...');
+                const listResponse = await gmRequest(`${TEMPLATE_SYNC_BASE_URL}/templates`, "json");
+                  const listData = listResponse.response ?? JSON.parse(listResponse.responseText || "{}");
+                  const templateItems = Array.isArray(listData)
+                    ? listData
+                    : (Array.isArray(listData?.templates) ? listData.templates : []);
+                  if (!Array.isArray(templateItems) || templateItems.length === 0) {
+                    instance.handleDisplayStatus('No server templates found.');
+                    return;
+                  }
+                  let importedCount = 0;
+                  for (const entry of templateItems) {
+                    const name = typeof entry === "string" ? entry : entry?.name;
+                    const updatedAt = typeof entry === "object" ? entry?.updated_at : null;
+                    const listOrder = Number.isFinite(Number(entry?.order)) ? Number(entry?.order) : null;
+                    if (!name) { continue; }
+                    const safeName = encodeURIComponent(name);
+                    const existingTemplate = (templateManager.templatesArray ?? []).find(t => {
+                      if (!t) return false;
+                      const sameName = t.displayName === name || t.remoteName === name;
+                      return sameName;
+                    });
+                    const existingPalette = existingTemplate?.colorPalette ? { ...existingTemplate.colorPalette } : null;
+                    const existingUpdatedAt =
+                      templateManager.templatesJSON?.templates?.[existingTemplate?.storageKey]?.remoteUpdatedAt ??
+                      existingTemplate?.remoteUpdatedAt ??
+                      null;
+                      const normalizedExistingUpdatedAt = normalizeUpdatedAt(existingUpdatedAt);
+                      const normalizedUpdatedAt = normalizeUpdatedAt(updatedAt);
+                      if (normalizedExistingUpdatedAt && normalizedUpdatedAt && normalizedExistingUpdatedAt === normalizedUpdatedAt) {
+                        continue;
+                      }
+                    const metaResponse = await gmRequest(`${TEMPLATE_SYNC_BASE_URL}/templates/${safeName}`, "json");
+                  const meta = metaResponse.response ?? JSON.parse(metaResponse.responseText || "{}");
+                  const coords = Array.isArray(meta?.coords) ? meta.coords.map(Number) : null;
+                  if (!coords || coords.length !== 4 || coords.some(n => !Number.isFinite(n))) {
+                    instance.handleDisplayStatus(`Skipped "${name}": invalid coords.`);
+                    continue;
+                  }
+                  const metaUpdatedAt = meta?.updated_at ?? null;
+                    const toTop = meta?.to_top === true;
+                    const toTopAt = meta?.to_top_at ?? null;
+                    const highlighted = meta?.highlighted === true;
+                    const highlightedAt = meta?.highlighted_at ?? null;
+                    const metaOrder = Number(meta?.order);
+                    const order = Number.isFinite(metaOrder) ? metaOrder : listOrder;
+                    if (existingTemplate?.storageKey) {
+                      await templateManager.deleteTemplate(existingTemplate.storageKey);
+                    }
+                    const imageResponse = await gmRequest(`${TEMPLATE_SYNC_BASE_URL}/templates/${safeName}/image`, "blob");
+                    const imageBlob = imageResponse.response;
+                    const file = new File([imageBlob], `${name}.png`, { type: imageBlob?.type || "image/png" });
+                    const created = await templateManager.createTemplate(
+                      file,
+                      name,
+                      coords,
+                      templateManager.getAnchor(),
+                        {
+                          remote: true,
+                          remoteName: name,
+                          remoteCoords: coords,
+                          remoteUpdatedAt: updatedAt || metaUpdatedAt,
+                          remoteToTop: toTop,
+                        remoteToTopAt: toTopAt,
+                        remoteHighlighted: highlighted,
+                        remoteHighlightedAt: highlightedAt,
+                        remoteOrder: Number.isFinite(order) ? order : null,
+                        enabled: false
+                      }
+                    );
+                    if (created) {
+                      if (existingPalette) {
+                        Object.entries(existingPalette).forEach(([rgb, meta]) => {
+                          if (created.colorPalette?.[rgb]) {
+                            created.colorPalette[rgb].enabled = !!meta?.enabled;
+                          }
+                        });
+                      }
+                    }
+                    importedCount += 1;
+                  }
+                syncToggleList();
+                templateManager.createOverlayOnMap();
+                buildTemplateFilterList();
+                buildColorFilterList();
+                instance.handleDisplayStatus(`Synced ${importedCount} template${importedCount === 1 ? '' : 's'}.`);
+                resetTemplateUpdateBadge();
+                checkTemplateUpdates();
+                } catch (err) {
+                  consoleWarn(`%c${name}%c: Failed to sync server templates`, consoleStyle, '', err);
+                  instance.handleDisplayError('Failed to sync server templates.');
+                }
+              };
+            }).buildElement()
+            .addSelect({'id': 'bm-template-anchor'}, (instance, select) => {
             const anchors = {
               "lt": "⟔",
               "mt": "⨪",
@@ -1418,9 +2837,44 @@ async function buildOverlayMain() {
           }).buildElement()
         .buildElement()
         .addDiv({'id': 'bm-templatefilter-list', 'style': 'max-height: 125px; overflow: auto; touch-action: pan-x pan-y; display: flex; flex-direction: column; gap: 4px;'}).buildElement()
-      .buildElement()
+        .buildElement()
+        // Chat UI
+      .addDetails({'id': 'bm-contain-chat', 'textContent': 'Chat', 'style': 'border: 1px solid var(--bm-border); padding: 4px; border-radius: 4px; margin-top: 4px;'}, (instance, summary, details) => {
+          details.open = false;
+        })
+          .addDiv({'id': 'bm-chat-status', 'style': 'display: flex; align-items: center; justify-content: flex-end; font-size: small; margin-bottom: 4px;'})
+            .addSpan({'className': 'bm-chat-status-light', 'title': 'Chat status'}).buildElement()
+          .buildElement()
+          .addDiv({'id': 'bm-chat-mod-tools', 'style': 'display: none; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 4px;'})
+            .addSelect({'id': 'bm-chat-ban-type', 'style': 'width: 8ch;'}, (instance, select) => {
+              const optIp = document.createElement('option');
+              optIp.value = 'ip';
+              optIp.textContent = 'IP';
+              const optDevice = document.createElement('option');
+              optDevice.value = 'device';
+              optDevice.textContent = 'Device';
+              select.appendChild(optIp);
+              select.appendChild(optDevice);
+            }).buildElement()
+            .addInput({'type': 'text', 'id': 'bm-chat-ban-target', 'placeholder': 'IP / device id / msg id', 'maxlength': 64, 'style': 'width: 18ch;'}).buildElement()
+            .addButton({'id': 'bm-chat-ban-btn', 'textContent': 'Ban', 'style': 'font-size: 11px; padding: 0 6px;'}).buildElement()
+            .addButton({'id': 'bm-chat-unban-btn', 'textContent': 'Unban', 'style': 'font-size: 11px; padding: 0 6px;'}).buildElement()
+            .addButton({'id': 'bm-chat-bans-btn', 'textContent': 'Bans', 'style': 'font-size: 11px; padding: 0 6px;'}).buildElement()
+          .buildElement()
+          .addDiv({'id': 'bm-chat-messages', 'style': 'max-height: 120px; overflow-y: auto; border: 1px solid var(--bm-border); padding: 4px; border-radius: 4px; margin-bottom: 4px;'}).buildElement()
+          .addDiv({'id': 'bm-chat-reply', 'style': 'display: none; border-left: 3px solid var(--bm-chat-reply-border); padding: 4px 6px; margin-bottom: 4px; border-radius: 4px; background: var(--bm-chat-reply-bg);'})
+            .addSpan({'id': 'bm-chat-reply-label', 'textContent': 'Replying to'}).buildElement()
+            .addSpan({'id': 'bm-chat-reply-text', 'style': 'display: block; font-size: 11px; color: var(--bm-muted);'}).buildElement()
+            .addButton({'id': 'bm-chat-reply-clear', 'textContent': '✖', 'style': 'float: right; font-size: 10px; padding: 0 4px;'}).buildElement()
+          .buildElement()
+          .addDiv({'id': 'bm-chat-input-row', 'style': 'display: flex; gap: 4px; align-items: center;'})
+            .addInput({'type': 'text', 'id': 'bm-chat-user', 'placeholder': 'User', 'maxlength': 32, 'style': 'width: 8ch;'}).buildElement()
+            .addInput({'type': 'password', 'id': 'bm-chat-modcode', 'placeholder': 'Code', 'maxlength': 64, 'style': 'width: 8ch; display: none;'}).buildElement()
+            .addInput({'type': 'text', 'id': 'bm-chat-text', 'placeholder': 'Message', 'maxlength': 280, 'style': 'flex: 1;'}).buildElement()
+          .buildElement()
+        .buildElement()
       // Event UI
-      .addDetails({'id': 'bm-contain-eventitem', 'textContent': 'Event', 'style': 'border: 1px solid rgba(255,255,255,0.1); padding: 4px; border-radius: 4px; display: none; margin-top: 4px;'}, (instance, summary, details) => {
+      .addDetails({'id': 'bm-contain-eventitem', 'textContent': 'Event', 'style': 'border: 1px solid var(--bm-border); padding: 4px; border-radius: 4px; display: none; margin-top: 4px;'}, (instance, summary, details) => {
         if (templateManager.isEventEnabled()) {
           details.style.display = '';
         }
@@ -1468,7 +2922,7 @@ async function buildOverlayMain() {
           .addButton({'id': 'bm-button-website', 'className': 'bm-help', 'innerHTML': '🌐', 'title': 'Official Blue Marble Website'}, 
             (instance, button) => {
             button.addEventListener('click', () => {
-              window.open('https://bluemarble.lol/', '_blank', 'noopener noreferrer');
+              window.open('https://t.me/ruswplace', '_blank', 'noopener noreferrer');
             });
           }).buildElement()
         .buildElement()
@@ -1478,6 +2932,8 @@ async function buildOverlayMain() {
       .buildElement()
     .buildElement()
   .buildOverlay(document.body);
+
+  applyLayoutTheme(templateManager.getLayoutTheme());
 
   // ------- Helper: Build the color filter list -------
   window.syncToggleList = function syncToggleList() {
@@ -1535,7 +2991,7 @@ async function buildOverlayMain() {
       let swatch = document.createElement('div');
       swatch.style.width = '14px';
       swatch.style.height = '14px';
-      swatch.style.border = '1px solid rgba(255,255,255,0.5)';
+      swatch.style.border = '1px solid var(--bm-border-strong)';
 
       let colorName = '';
       let colorKey = '';
@@ -1654,7 +3110,30 @@ async function buildOverlayMain() {
     }
 
     listContainer.innerHTML = '';
-    const entries = templateManager.templatesArray;
+      const entries = templateManager.templatesArray;
+      const entriesIndexed = entries.map((t, idx) => ({ t, idx }));
+      entriesIndexed.sort((a, b) => {
+        const aStore = templateManager.templatesJSON?.templates?.[a.t.storageKey] ?? {};
+        const bStore = templateManager.templatesJSON?.templates?.[b.t.storageKey] ?? {};
+        const aStoreRemote = aStore.remote === true;
+        const bStoreRemote = bStore.remote === true;
+        const aIsRemote = a.t.isRemote === true || aStoreRemote;
+        const bIsRemote = b.t.isRemote === true || bStoreRemote;
+        const aTopRaw = a.t.remoteToTop ?? aStore.remoteToTop ?? false;
+        const bTopRaw = b.t.remoteToTop ?? bStore.remoteToTop ?? false;
+        const aTop = aTopRaw === true || aTopRaw === 'true';
+        const bTop = bTopRaw === true || bTopRaw === 'true';
+        const aGroup = aTop ? 0 : (aIsRemote ? 2 : 1);
+        const bGroup = bTop ? 0 : (bIsRemote ? 2 : 1);
+        if (aGroup !== bGroup) return aGroup - bGroup;
+        if (aGroup === 1) return a.idx - b.idx;
+        const aOrderRaw = Number.isFinite(a.t.remoteOrder) ? a.t.remoteOrder : Number(aStore.remoteOrder);
+        const bOrderRaw = Number.isFinite(b.t.remoteOrder) ? b.t.remoteOrder : Number(bStore.remoteOrder);
+        const aOrderValue = Number.isFinite(aOrderRaw) ? aOrderRaw : Number.MAX_SAFE_INTEGER;
+        const bOrderValue = Number.isFinite(bOrderRaw) ? bOrderRaw : Number.MAX_SAFE_INTEGER;
+        if (aOrderValue !== bOrderValue) return aOrderValue - bOrderValue;
+        return a.idx - b.idx;
+      });
 
     const combinedTemplate = {};
     for (const stats of templateManager.tileProgress.values()) {
@@ -1667,7 +3146,8 @@ async function buildOverlayMain() {
       })
     };
 
-    for (const template of entries) {
+      for (const entry of entriesIndexed) {
+        const template = entry.t;
       let row = document.createElement('div');
       row.style.display = 'flex';
       row.style.alignItems = 'center';
@@ -1691,37 +3171,81 @@ async function buildOverlayMain() {
         teleportToTileCoords(template.coords.slice(0, 2), template.coords.slice(2, 4));
       }
 
-      let label = document.createElement('span');
-      label.style.fontSize = '12px';
-      const labelText = `${template.requiredPixelCount.toLocaleString()}`;
+        let label = document.createElement('span');
+        label.style.fontSize = '12px';
+        const labelText = `${template.requiredPixelCount.toLocaleString()}`;
 
-      const templateName = template["displayName"];
-      const filledCount = combinedTemplate[template.storageKey]?.painted ?? 0;
-      const filledLabelText = `${filledCount.toLocaleString()}`;
-      const renameElement = document.createElement('span');
-      renameElement.textContent = templateName;
-      renameElement.addEventListener('click', () => {
+        const templateName = template["displayName"];
+        const templateStore = templateManager.templatesJSON?.templates?.[template.storageKey] ?? {};
+        const isRemote = template.isRemote === true || templateStore.remote === true;
+        const isHighlighted = template.remoteHighlighted ?? templateStore.remoteHighlighted ?? false;
+        const filledCount = combinedTemplate[template.storageKey]?.painted ?? 0;
+        const filledLabelText = `${filledCount.toLocaleString()}`;
+        const renameElement = document.createElement('span');
+        renameElement.textContent = templateName;
+        renameElement.className = "bm-templatename";
+        renameElement.style.cursor = isRemote ? 'not-allowed' : 'text';
+        renameElement.title = isRemote ? 'Remote templates cannot be renamed.' : 'Click to rename.';
+        renameElement.addEventListener('click', () => {
+        if (isRemote) {
+          overlayMain.handleDisplayStatus('Remote templates cannot be renamed.');
+          return;
+        }
+        if (renameElement.dataset.editing === 'true') { return; }
+        renameElement.dataset.editing = 'true';
         const currentName = template["displayName"];
-        const newName = prompt("Rename template", currentName);
-        if (newName) {
-          const trimmedName = newName.trim();
-          if (trimmedName === currentName) {
-            return;
-          }
-          template["displayName"] = newName.trim();
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = currentName;
+        input.className = 'bm-template-rename-input';
+        let finished = false;
+        const finish = (shouldSave) => {
+          if (finished) { return; }
+          finished = true;
+          const nextName = input.value.trim();
+          label.replaceChild(renameElement, input);
+          renameElement.dataset.editing = '';
+          if (!shouldSave || !nextName || nextName === currentName) { return; }
+          template["displayName"] = nextName;
+          renameElement.textContent = nextName;
           try {
             const templateJSON = templateManager.templatesJSON?.templates?.[template.storageKey];
             if (templateJSON) {
-              templateJSON.name = newName.trim();
-              // persist immediately
+              templateJSON.name = nextName;
               templateManager.storeTemplates();
             }
-          } catch (_) {};
+          } catch (_) {}
           buildTemplateFilterList();
-        }
+        };
+        label.replaceChild(input, renameElement);
+        input.focus();
+        input.select();
+        input.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            finish(true);
+          } else if (event.key === 'Escape') {
+            event.preventDefault();
+            finish(false);
+          }
+        });
+        input.addEventListener('blur', () => finish(true));
       });
-      renameElement.className = "bm-templatename";
-      label.appendChild(renameElement);
+        if (isRemote) {
+          row.classList.add('bm-template-remote');
+          const badge = document.createElement('span');
+          badge.className = 'bm-remote-badge';
+          badge.textContent = 'REMOTE';
+          label.appendChild(badge);
+        }
+        if (isHighlighted) {
+          row.classList.add('bm-template-highlight');
+          const badge = document.createElement('span');
+          badge.className = 'bm-highlight-badge';
+          badge.textContent = 'HIGHLIGHT';
+          label.appendChild(badge);
+        }
+        label.appendChild(renameElement);
       label.appendChild(document.createTextNode(` • ${filledLabelText} / ${labelText}`));
       // label.textContent = `${templateName} • ${labelText}`;
 

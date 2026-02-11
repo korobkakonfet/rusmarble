@@ -1,4 +1,4 @@
-name: Bug Report
+﻿name: Bug Report
 description: Found a bug? Report it here!
 title: "[BUG] "
 labels: ["bug"]
@@ -42,7 +42,7 @@ body:
     attributes:
       label: Things You Tried
       description: "Describe all of the things you tried."
-      placeholder: "E.g. I tried different templates of different sizes. I tried updating Blue Marble."
+      placeholder: "E.g. I tried different templates of different sizes. I tried updating Rus Marble."
     validations:
       required: false
   - type: textarea
@@ -78,15 +78,15 @@ body:
     id: system-information
     attributes:
       label: System Information
-      description: "Please fill out these details about your OS, Blue Marble version, and what website browser you use. Please fill this out!"
+      description: "Please fill out these details about your OS, Rus Marble version, and what website browser you use. Please fill this out!"
       placeholder: |
         OS: (E.g. Windows)
-        Blue Marble Version: 3.346.0
+        Rus Marble Version: 3.346.0
         Browser: Chrome
         You found an easter egg :3
       value: |
         OS: 
-        Blue Marble Version: 
+        Rus Marble Version: 
         Browser: 
     validations:
       required: true
@@ -99,3 +99,4 @@ body:
     validations:
       required: false
       
+
