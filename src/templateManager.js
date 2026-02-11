@@ -1,4 +1,4 @@
-import Template from "./Template";
+﻿import Template from "./Template";
 import { base64ToUint8, numberToEncoded, cleanUpCanvas, rgbToMeta, sortByOptions, testCanvasSize, getCurrentColor, sleep } from "./utils";
 import { themeList, addTemplateCanvas, removeLayer, doAfterMapFound, forceRefreshTiles } from './utilsMaptiler.js';
 
@@ -24,7 +24,7 @@ import { themeList, addTemplateCanvas, removeLayer, doAfterMapFound, forceRefres
  *     },
  *     "1 $Z": {
  *       "name": "My Template",
- *       "URL": "https://github.com/SwingTheVine/Wplace-BlueMarble/blob/main/dist/assets/Favicon.png",
+ *       "URL": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f3/Flag_of_Russia.svg/960px-Flag_of_Russia.svg.png",
  *       "URLType": "template",
  *       "enabled": false,
  *       "tiles": {
@@ -122,7 +122,7 @@ export default class TemplateManager {
    */
   async createJSON() {
     return {
-      "whoami": this.name.replace(' ', ''), // Name of userscript without spaces
+      "whoami": "BlueMarble", // Use BlueMarble for template compatibility
       "scriptVersion": this.version, // Version of userscript
       "schemaVersion": this.templatesVersion, // Version of JSON schema
       "templates": {} // The templates
@@ -136,7 +136,7 @@ export default class TemplateManager {
    * @param {string} anchor - The anchor of the template
    * @since 0.65.77
    */
-  async createTemplate(file, name, coords, anchor) {
+  async createTemplate(file, name, coords, anchor, options = {}) {
 
     // Creates the JSON object if it does not already exist
     if (!this.templatesJSON) {this.templatesJSON = await this.createJSON(); console.log(`Creating JSON...`);}
@@ -181,14 +181,42 @@ export default class TemplateManager {
     // The child's name is the number of templates already in the list (sort order) plus the encoded player ID
     const storageKey = `${template.sortID} ${template.authorID}`;
     template.storageKey = storageKey;
+    const templateEnabled = options?.enabled ?? true;
     this.templatesJSON.templates[storageKey] = {
       "name": template.displayName, // Display name of template
       "coords": coords.join(', '), // The coords of the template
-      "enabled": true,
+      "enabled": templateEnabled,
       "tiles": templateTilesBuffers, // Stores the chunked tile buffers
       "palette": template.colorPalette, // Persist palette and enabled flags
       "shreadSize": template.shreadSize // Record shread size of the created template
     };
+    template.enabled = templateEnabled;
+    if (options?.remote) {
+      template.isRemote = true;
+      template.remoteName = options.remoteName || template.displayName;
+      template.remoteUpdatedAt = options.remoteUpdatedAt || null;
+      template.remoteFlagsCheckedAt = options.remoteFlagsCheckedAt || null;
+      template.remoteFlagsCheckedAtLocal = options.remoteFlagsCheckedAtLocal || null;
+      template.remoteCoords = Array.isArray(options.remoteCoords)
+        ? options.remoteCoords.map(Number)
+        : null;
+      template.remoteToTop = options.remoteToTop === true;
+      template.remoteToTopAt = options.remoteToTopAt || null;
+      template.remoteHighlighted = options.remoteHighlighted === true;
+      template.remoteHighlightedAt = options.remoteHighlightedAt || null;
+      template.remoteOrder = Number.isFinite(options.remoteOrder) ? options.remoteOrder : null;
+      this.templatesJSON.templates[storageKey].remote = true;
+      this.templatesJSON.templates[storageKey].remoteName = template.remoteName;
+      this.templatesJSON.templates[storageKey].remoteUpdatedAt = template.remoteUpdatedAt;
+      this.templatesJSON.templates[storageKey].remoteFlagsCheckedAt = template.remoteFlagsCheckedAt;
+      this.templatesJSON.templates[storageKey].remoteFlagsCheckedAtLocal = template.remoteFlagsCheckedAtLocal;
+      this.templatesJSON.templates[storageKey].remoteCoords = template.remoteCoords;
+      this.templatesJSON.templates[storageKey].remoteToTop = template.remoteToTop;
+      this.templatesJSON.templates[storageKey].remoteToTopAt = template.remoteToTopAt;
+      this.templatesJSON.templates[storageKey].remoteHighlighted = template.remoteHighlighted;
+      this.templatesJSON.templates[storageKey].remoteHighlightedAt = template.remoteHighlightedAt;
+      this.templatesJSON.templates[storageKey].remoteOrder = template.remoteOrder;
+    }
 
     // this.templatesArray = []; // Remove this to enable multiple templates (2/2)
     this.templatesArray.push(template); // Pushes the Template object instance to the Template Array
@@ -212,6 +240,7 @@ export default class TemplateManager {
     // console.log(JSON.stringify(this.templatesJSON));
 
     await this.storeTemplates();
+    return template;
   }
 
   requestListRebuild() {
@@ -656,6 +685,75 @@ export default class TemplateManager {
    * @since 0.86.1
    */
   async createOverlayOnMap(sortID = null) {
+    if (!this._overlayRebuildState) {
+      this._overlayRebuildState = {
+        timer: null,
+        pendingSortID: undefined,
+        promise: null,
+        resolve: null,
+        reject: null,
+        running: false,
+        needsRun: false
+      };
+    }
+
+    const state = this._overlayRebuildState;
+    const mergeSortId = (current, next) => {
+      if (next === null) return null;
+      if (current === undefined) return next;
+      if (current === null) return null;
+      return current === next ? current : null;
+    };
+
+    state.pendingSortID = mergeSortId(state.pendingSortID, sortID);
+
+    if (state.running) {
+      state.needsRun = true;
+      return state.promise || Promise.resolve();
+    }
+
+    if (state.timer) {
+      clearTimeout(state.timer);
+      state.timer = null;
+    }
+
+    if (!state.promise) {
+      state.promise = new Promise((resolve, reject) => {
+        state.resolve = resolve;
+        state.reject = reject;
+      });
+    }
+
+    state.timer = setTimeout(async () => {
+      state.timer = null;
+      state.running = true;
+      const pending = state.pendingSortID;
+      state.pendingSortID = undefined;
+      try {
+        await this._createOverlayOnMapInternal(pending);
+        state.resolve?.();
+      } catch (err) {
+        state.reject?.(err);
+      } finally {
+        state.promise = null;
+        state.resolve = null;
+        state.reject = null;
+        state.running = false;
+        if (state.needsRun) {
+          state.needsRun = false;
+          this.createOverlayOnMap(state.pendingSortID ?? null);
+        }
+      }
+    }, 100);
+
+    return state.promise;
+  }
+
+  /** Add the template overlay layer to the map (no debounce)
+   * @param {number?} sortID
+   * @since 0.86.1
+   */
+  async _createOverlayOnMapInternal(sortID = null) {
     const timeStart = performance.now();
 
     console.log(`Start creating overlay for template ${sortID}...`, performance.now() - timeStart + ' ms');
@@ -679,14 +777,15 @@ export default class TemplateManager {
         removeLayer("overlay", template.sortID);
         continue;
       };
-      const isLegacyDisplay = this.isLegacyDisplay();
+      const displayMode = this.getTemplateDisplayMode();
+      const drawMultResult = this.getTemplateDrawSize(displayMode);
+      const maskPoints = this.getTemplateMaskPoints(displayMode, drawMultResult, template);
       for (const tileKey of Object.keys(template.chunked)) {
         console.log(`Handling tile chunk ${tileKey}...`, performance.now() - timeStart + ' ms');
         const coords = tileKey.split(','); // [x, y, x, y] Tile/pixel coordinates
 
         const drawMultTemplate = template.shreadSize;
         const drawMultCenterTemplate = (template.shreadSize - 1) >> 1;
-        const drawMultResult = isLegacyDisplay ? 3 : this.drawMult;
       
         const templateTileBitmap = await template.getChunked(tileKey, currentMemorySavingMode);
         const originalWidth = templateTileBitmap.width / template.shreadSize;
@@ -728,7 +827,6 @@ export default class TemplateManager {
 
             const image = resultContext.getImageData(0, 0, resultWidth, resultHeight);
             const imageData = image.data;
-            const maskPoints = isLegacyDisplay ? [[1, 1]] : template.customMaskPoints(drawMultResult);
             for (const [offsetX, offsetY] of maskPoints) {
               for (
                 let yt = drawMultCenterTemplate, yr = offsetY;
@@ -802,23 +900,23 @@ export default class TemplateManager {
     console.log(json);
 
     // If the passed in JSON is a Blue Marble template object...
-    if (json?.whoami == 'BlueMarble') {
+    if (json?.whoami == 'BlueMarble' || json?.whoami == 'RusMarble') {
       this.templatesJSON = json;
-      this.#parseBlueMarble(json); // ...parse the template object as Blue Marble
+      this.#parseRusMarble(json); // ...parse the template object as Rus Marble
     }
   }
 
-  /** Parses the Blue Marble JSON object
+  /** Parses the Rus Marble JSON object
    * @param {string} json - The JSON string to parse
    * @since 0.72.13
    */
-  async #parseBlueMarble(json) {
+  async #parseRusMarble(json) {
 
-    console.log(`Parsing BlueMarble...`);
+    console.log(`Parsing RusMarble...`);
 
     const templates = json.templates;
 
-    console.log(`BlueMarble length: ${Object.keys(templates).length}`);
+    console.log(`RusMarble length: ${Object.keys(templates).length}`);
 
     const currentMemorySavingMode = this.isMemorySavingModeOn(); // To make sure that we do not free the object if it is stored due to race conditions.
 
@@ -907,8 +1005,19 @@ export default class TemplateManager {
           template.shreadSize = templateValue.shreadSize ?? this.drawMult; // Copy to template's shread Size
           template.chunked = templateTiles;
           template.chunkedBuffer = templateTilesBuffer;
-          template.requiredPixelCount = requiredPixelCount;
-          template.enabled = templateValue.enabled ?? true;
+            template.requiredPixelCount = requiredPixelCount;
+            template.enabled = templateValue.enabled ?? true;
+            template.isRemote = templateValue.remote === true;
+            template.remoteName = templateValue.remoteName ?? null;
+            template.remoteUpdatedAt = templateValue.remoteUpdatedAt ?? null;
+            template.remoteFlagsCheckedAt = templateValue.remoteFlagsCheckedAt ?? null;
+            template.remoteFlagsCheckedAtLocal = templateValue.remoteFlagsCheckedAtLocal ?? null;
+            template.remoteCoords = templateValue.remoteCoords ?? null;
+            template.remoteToTop = templateValue.remoteToTop === true;
+            template.remoteToTopAt = templateValue.remoteToTopAt ?? null;
+            template.remoteHighlighted = templateValue.remoteHighlighted === true;
+            template.remoteHighlightedAt = templateValue.remoteHighlightedAt ?? null;
+            template.remoteOrder = templateValue.remoteOrder ?? null;
           // Construct colorPalette from paletteMap
           const paletteObj = {};
           for (const [key, count] of paletteMap.entries()) { paletteObj[key] = { count, enabled: true }; }
@@ -1417,6 +1526,23 @@ export default class TemplateManager {
     return true;
   }
 
+  /** A utility to return the current layout theme.
+   * @returns {string}
+   * @since 0.85.47
+   */
+  getLayoutTheme() {
+    return String(this.userSettings?.layoutTheme ?? 'classic').toLowerCase();
+  }
+
+  /** Sets the current layout theme to a value.
+   * @param {string} value - The value
+   * @since 0.85.47
+   */
+  async setLayoutTheme(value) {
+    this.userSettings.layoutTheme = String(value ?? 'classic').toLowerCase();
+    await this.storeUserSettings();
+  }
+
   /** A utility to check if the status textbox is hidden.
    * @returns {boolean}
    * @since 0.85.41
@@ -1434,12 +1560,134 @@ export default class TemplateManager {
     await this.storeUserSettings();
   }
 
-  /** A utility to check if it uses the 3x3 template display
+  /** A utility to check if droplets are hidden
+   * @returns {boolean}
+   * @since 0.90.0
+   */
+  isDropletsHidden() {
+    return this.userSettings?.hideDroplets ?? false;
+  }
+
+  /** Sets the hideDroplets to a value.
+   * @param {boolean} value - The value
+   * @since 0.90.0
+   */
+  async setDropletsHidden(value) {
+    this.userSettings.hideDroplets = value;
+    await this.storeUserSettings();
+  }
+
+  /** A utility to check if next level progress is hidden
+   * @returns {boolean}
+   * @since 0.90.0
+   */
+  isNextLevelHidden() {
+    return this.userSettings?.hideNextLevel ?? false;
+  }
+
+  /** Sets the hideNextLevel to a value.
+   * @param {boolean} value - The value
+   * @since 0.90.0
+   */
+  async setNextLevelHidden(value) {
+    this.userSettings.hideNextLevel = value;
+    await this.storeUserSettings();
+  }
+
+  /** Returns the template display mode.
+   * @returns {string}
+   * @since 0.90.0
+   */
+  getTemplateDisplayMode() {
+    const raw = String(this.userSettings?.templateDisplay ?? '').toLowerCase();
+    if (raw === 'cross-z') return 'cross-z-9';
+    if (raw === 'dot' || raw === 'cross' || raw === 'cross-z-9' || raw === 'cross-z-11') return raw;
+    const legacy = this.userSettings?.legacyDisplay ?? this.userSettings?.isLegacyDisplay ?? false;
+    return legacy ? 'dot' : 'cross';
+  }
+
+  /** Returns the draw size for the given template display mode.
+   * @param {string} mode - The display mode
+   * @returns {number}
+   * @since 0.90.0
+   */
+  getTemplateDrawSize(mode) {
+    if (mode === 'dot') return 3;
+    if (mode === 'cross-z-11') return 11;
+    if (mode === 'cross-z-9') return 9;
+    return this.drawMult;
+  }
+
+  /** Sets the template display mode.
+   * @param {string} value - The value
+   * @since 0.90.0
+   */
+  async setTemplateDisplayMode(value) {
+    const raw = String(value ?? '').toLowerCase();
+    const mode = (raw === 'dot' || raw === 'cross' || raw === 'cross-z-9' || raw === 'cross-z-11')
+      ? raw
+      : 'cross';
+    this.userSettings.templateDisplay = mode;
+    const isDot = mode === 'dot';
+    this.userSettings.legacyDisplay = isDot;
+    this.userSettings.isLegacyDisplay = isDot;
+    await this.storeUserSettings();
+  }
+
+  /** Returns the mask points for the current template display mode.
+   * @param {string} mode - The display mode
+   * @param {number} size - The mask size
+   * @param {Template} template - The template instance
+   * @returns {Array<Array<number>>}
+   * @since 0.90.0
+   */
+  getTemplateMaskPoints(mode, size, template) {
+    if (mode === 'dot') {
+      const center = (size - 1) >> 1;
+      return [[center, center]];
+    }
+    if (mode.startsWith('cross-z')) {
+      const points = [];
+      const inset = Math.max(1, Math.floor(size / 5));
+      const min = inset;
+      const max = size - 1 - inset;
+      if (min > max) {
+        const center = (size - 1) >> 1;
+        return [[center, center]];
+      }
+      const bandSize = max - min + 1;
+      const edgeThickness = Math.min(bandSize, bandSize >= 5 ? 2 : 1);
+      const diagThickness = Math.min(bandSize, bandSize >= 5 ? 3 : 2);
+      for (let y = min; y <= max; y++) {
+        for (let x = min; x <= max; x++) {
+          const isTop = y >= min && y <= min + edgeThickness - 1;
+          const isBottom = y <= max && y >= max - edgeThickness + 1;
+          let isDiagonal = false;
+          const diag = min + max - y;
+          const offsetStart = -Math.floor(diagThickness / 2);
+          const offsetEnd = Math.ceil(diagThickness / 2) - 1;
+          for (let offset = offsetStart; offset <= offsetEnd; offset++) {
+            if (x === diag + offset) {
+              isDiagonal = true;
+              break;
+            }
+          }
+          if (isTop || isBottom || isDiagonal) {
+            points.push([x, y]);
+          }
+        }
+      }
+      return points;
+    }
+    return template.customMaskPoints(size);
+  }
+
+  /** A utility to check if it uses the dot template display (legacy).
    * @returns {boolean}
    * @since 0.85.46
    */
   isLegacyDisplay() {
-    return this.userSettings?.legacyDisplay ?? false;
+    return this.getTemplateDisplayMode() === 'dot';
   }
 
   /** Sets the legacyDisplay to a value.
@@ -1447,8 +1695,7 @@ export default class TemplateManager {
    * @since 0.85.46
    */
   async setLegacyDisplay(value) {
-    this.userSettings.legacyDisplay = value;
-    await this.storeUserSettings();
+    await this.setTemplateDisplayMode(value ? 'dot' : 'cross');
   }
 
   /** A utility to determine whether the error map should be shown
@@ -1516,6 +1763,23 @@ export default class TemplateManager {
    */
   async setKeybindsEnabled(value) {
     this.userSettings.enableKeybinds = value;
+    await this.storeUserSettings();
+  }
+
+  /** A utility to check if chat is disabled.
+   * @returns {boolean}
+   * @since 0.88.1
+   */
+  isChatDisabled() {
+    return this.userSettings?.chatDisabled ?? false;
+  }
+
+  /** Sets the chatDisabled flag.
+   * @param {boolean} value - The value
+   * @since 0.88.1
+   */
+  async setChatDisabled(value) {
+    this.userSettings.chatDisabled = value;
     await this.storeUserSettings();
   }
 
@@ -1590,3 +1854,4 @@ export default class TemplateManager {
     this.completedColorsBitmapHi = 0;
   }
 }
+

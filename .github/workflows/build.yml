@@ -1,4 +1,4 @@
-name: Bump, Build, Release
+﻿name: Bump, Build, Release
 
 on:
   push:
@@ -128,7 +128,7 @@ jobs:
           git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
           git checkout auto || git checkout -b auto
           git add dist/*
-          git add src/BlueMarble.meta.js
+          git add src/RusMarble.meta.js
           git add package.json
           git add docs/README.md
           git commit -m "Bumped version; ${{ steps.get-commit-message.outputs.TITLE }}" -m "${{ steps.get-commit-message.outputs.BODY }}" || echo "No changes to commit"
@@ -161,11 +161,11 @@ jobs:
       - name: Update Resource Link SHA
         run: |
           echo "Auto SHA: $AUTO_SHA"
-          sed -i "/@icon/ s#/[a-f0-9]\{40\}/#/${AUTO_SHA}/#g" dist/BlueMarble.user.js src/BlueMarble.meta.js
-          sed -i "/@resource/ s#/[a-f0-9]\{40\}/#/${AUTO_SHA}/#g" dist/BlueMarble.user.js src/BlueMarble.meta.js
+          sed -i "/@icon/ s#/[a-f0-9]\{40\}/#/${AUTO_SHA}/#g" dist/RusMarble.user.js src/RusMarble.meta.js
+          sed -i "/@resource/ s#/[a-f0-9]\{40\}/#/${AUTO_SHA}/#g" dist/RusMarble.user.js src/RusMarble.meta.js
           echo "Updated resourceLinkSHA:"
-          grep "@icon" dist/BlueMarble.user.js src/BlueMarble.meta.js
-          # grep "@resource" dist/BlueMarble.user.js src/BlueMarble.meta.js
+          grep "@icon" dist/RusMarble.user.js src/RusMarble.meta.js
+          # grep "@resource" dist/RusMarble.user.js src/RusMarble.meta.js
         env:
           AUTO_SHA: ${{ env.AUTO_SHA }}
 
@@ -174,8 +174,8 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
-          git add dist/BlueMarble.user.js
-          git add src/BlueMarble.meta.js
+          git add dist/RusMarble.user.js
+          git add src/RusMarble.meta.js
           git commit -m "Merge version; ${{ needs.build.outputs.TITLE }}" -m "${{ needs.build.outputs.BODY }}" || echo "No changes to commit"
           git push
 
@@ -230,3 +230,4 @@ jobs:
           git add docs
           git commit -m "Update wiki via JSDoc" || echo "No changes to commit"
           git push origin wiki
+

@@ -1,4 +1,4 @@
-Preview Images of This Fork:
+﻿Preview Images of This Fork:
 
 | Template | Overlay |
 |-|-|
@@ -10,14 +10,14 @@ Preview Images of This Fork:
 
 More Information Regarding this Fork **[Here](#regarding-this-fork)**.
 
-<strong>One-click install:</strong> Click this link to Install Blue Marble directly: <a href="https://raw.githubusercontent.com/t-wy/Wplace-BlueMarble-Userscripts/custom-improve/dist/BlueMarble.user.js" target="_blank" rel="noopener noreferrer"><strong>Install Blue Marble</strong></a>
+<strong>One-click install:</strong> Click this link to Install Rus Marble directly: <a href="https://raw.githubusercontent.com/t-wy/Wplace-RusMarble-Userscripts/custom-improve/dist/RusMarble.user.js" target="_blank" rel="noopener noreferrer"><strong>Install Rus Marble</strong></a>
 
-**[Bookmarklet version](/dist/BlueMarble.bookmarklet.min.js)** is also available.
+**[Bookmarklet version](/dist/RusMarble.bookmarklet.min.js)** is also available.
 To use it, copy the content and paste it in the URL field when creating a bookmark.
 
 <table>
   <tr>
-    <td><a href="#blue-marble">Blue Marble</a></td>
+    <td><a href="#rus-marble">Rus Marble</a></td>
     <td valign="top" rowspan="99"><a href="https://discord.gg/tpeBPy46hf"><img alt="Discord Banner" src="https://discord.com/api/guilds/796124137042608188/widget.png?style=banner4"></a></td>
   </tr>
   <tr>
@@ -48,10 +48,10 @@ To use it, copy the content and paste it in the URL field when creating a bookma
     <td>&emsp;<a href="#faq">FAQ</a></td>
   </tr>
   <tr>
-    <td>&emsp;&emsp;<a href="#is-blue-marble-malware">Is Blue Marble malware?</a></td>
+    <td>&emsp;&emsp;<a href="#is-rus-marble-malware">Is Rus Marble malware?</a></td>
   </tr>
   <tr>
-    <td>&emsp;&emsp;<a href="#how-can-blue-marble-place-pixels-for-me">How can Blue Marble place pixels for me?</a></td>
+    <td>&emsp;&emsp;<a href="#how-can-rus-marble-place-pixels-for-me">How can Rus Marble place pixels for me?</a></td>
   </tr>
   <tr>
     <td>&emsp;&emsp;<a href="#how-do-i-hide-the-overlay">How do I hide the overlay?</a></td>
@@ -61,24 +61,24 @@ To use it, copy the content and paste it in the URL field when creating a bookma
   </tr>
 </table>
 
-<h1>Blue Marble</h1>
+<h1>Rus Marble</h1>
 <a href="https://status.wplace.lol" target="_blank" rel="noopener noreferrer"><img alt="Wplace Status" src="https://status.wplace.lol/badge/_/status?labelColor=5f5f5f&color=&style=flat&label=Wplace%20Status"></a>
 <a href="" target="_blank" rel="noopener noreferrer"><img alt="Latest Version" src="https://img.shields.io/badge/Latest_Version-0.87.4-lightblue?style=flat"></a>
-<a href="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/releases" target="_blank" rel="noopener noreferrer"><img alt="Latest Release" src="https://img.shields.io/github/v/release/t-wy/Wplace-BlueMarble-Userscripts?sort=semver&style=flat&label=Latest%20Release&color=blue"></a>
-<a href="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/blob/main/LICENSE.txt" target="_blank" rel="noopener noreferrer"><img alt="Software License: MPL-2.0" src="https://img.shields.io/badge/Software_License-MPL--2.0-slateblue?style=flat"></a>
+<a href="https://github.com/t-wy/Wplace-RusMarble-Userscripts/releases" target="_blank" rel="noopener noreferrer"><img alt="Latest Release" src="https://img.shields.io/github/v/release/t-wy/Wplace-RusMarble-Userscripts?sort=semver&style=flat&label=Latest%20Release&color=blue"></a>
+<a href="https://github.com/t-wy/Wplace-RusMarble-Userscripts/blob/main/LICENSE.txt" target="_blank" rel="noopener noreferrer"><img alt="Software License: MPL-2.0" src="https://img.shields.io/badge/Software_License-MPL--2.0-slateblue?style=flat"></a>
 <a href="https://discord.gg/tpeBPy46hf" target="_blank" rel="noopener noreferrer"><img alt="Contact Me" src="https://img.shields.io/badge/Contact_Me-gray?style=flat&logo=Discord&logoColor=white&logoSize=auto&labelColor=cornflowerblue"></a>
-<a href="https://bluemarble.lol/" target="_blank" rel="noopener noreferrer"><img alt="Blue Marble Website" src="https://img.shields.io/badge/Blue_Marble_Website-Camille_Daguin-blue?style=flat&logo=globe&logoColor=white"></a>
+<a href="https://RusMarble.lol/" target="_blank" rel="noopener noreferrer"><img alt="Rus Marble Website" src="https://img.shields.io/badge/Blue_Marble_Website-Camille_Daguin-blue?style=flat&logo=globe&logoColor=white"></a>
 <a href="" target="_blank" rel="noopener noreferrer"><img alt="WakaTime" src="https://img.shields.io/badge/Coding_Time-124hrs_4mins-blue?style=flat&logo=wakatime&logoColor=black&logoSize=auto&labelColor=white"></a>
 <a href="" target="_blank" rel="noopener noreferrer"><img alt="Total Patches" src="https://img.shields.io/badge/Total_Patches-503-black?style=flat"></a>
-<a href="" target="_blank" rel="noopener noreferrer"><img alt="Total Lines of Code" src="https://tokei.rs/b1/github/t-wy/Wplace-BlueMarble-Userscripts?category=code"></a>
-<a href="" target="_blank" rel="noopener noreferrer"><img alt="Total Comments" src="https://tokei.rs/b1/github/t-wy/Wplace-BlueMarble-Userscripts?category=comments"></a>
+<a href="" target="_blank" rel="noopener noreferrer"><img alt="Total Lines of Code" src="https://tokei.rs/b1/github/t-wy/Wplace-RusMarble-Userscripts?category=code"></a>
+<a href="" target="_blank" rel="noopener noreferrer"><img alt="Total Comments" src="https://tokei.rs/b1/github/t-wy/Wplace-RusMarble-Userscripts?category=comments"></a>
 <a href="" target="_blank" rel="noopener noreferrer"><img alt="Compression" src="https://img.shields.io/badge/Compression-68.08%25-blue"></a>
-<a href="" target="_blank" rel="noopener noreferrer"><img alt="Repo Size" src="https://img.shields.io/github/repo-size/t-wy/Wplace-BlueMarble-Userscripts"></a>
+<a href="" target="_blank" rel="noopener noreferrer"><img alt="Repo Size" src="https://img.shields.io/github/repo-size/t-wy/Wplace-RusMarble-Userscripts"></a>
 <a href="" target="_blank" rel="noopener noreferrer"><img alt="Visitors" src="https://img.shields.io/badge/Visitors-439_667-gainsboro?style=flat"></a>
-<a href="" target="_blank" rel="noopener noreferrer"><img alt="Downloads" src="https://img.shields.io/github/downloads/t-wy/Wplace-BlueMarble-Userscripts/total.svg"></a>
-<a href="" target="_blank" rel="noopener noreferrer"><img alt="Build" src="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/actions/workflows/build.yml/badge.svg"></a>
-<a href="" target="_blank" rel="noopener noreferrer"><img alt="Pages" src="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/actions/workflows/pages/pages-build-deployment/badge.svg?branch=wiki"></a>
-<a href="" target="_blank" rel="noopener noreferrer"><img alt="CodeQL" src="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/actions/workflows/github-code-scanning/codeql/badge.svg"></a>
+<a href="" target="_blank" rel="noopener noreferrer"><img alt="Downloads" src="https://img.shields.io/github/downloads/t-wy/Wplace-RusMarble-Userscripts/total.svg"></a>
+<a href="" target="_blank" rel="noopener noreferrer"><img alt="Build" src="https://github.com/t-wy/Wplace-RusMarble-Userscripts/actions/workflows/build.yml/badge.svg"></a>
+<a href="" target="_blank" rel="noopener noreferrer"><img alt="Pages" src="https://github.com/t-wy/Wplace-RusMarble-Userscripts/actions/workflows/pages/pages-build-deployment/badge.svg?branch=wiki"></a>
+<a href="" target="_blank" rel="noopener noreferrer"><img alt="CodeQL" src="https://github.com/t-wy/Wplace-RusMarble-Userscripts/actions/workflows/github-code-scanning/codeql/badge.svg"></a>
 <a href="https://www.bestpractices.dev/projects/11067" target="_blank" rel="noopener noreferrer"><img alt="OpenSSF Best Practices" src="https://www.bestpractices.dev/projects/11067/badge"></a>
 
 <h2>Regarding this fork</h2>
@@ -87,17 +87,17 @@ To use it, copy the content and paste it in the URL field when creating a bookma
     For users who do not want to purchase the TamperMonkey App from the App Store, which is a paid app unlike other browser platforms, the Userscripts app seems to be a free alternative as a userscript manager.
   </p>
   <p>
-    However, the supported GM API by Userscripts is much smaller than what TamperMonkey supports, especially for old synchronous APIs that Blue Marble uses that have been dropped by Greasemonkey in Greasemonkey 4.0+ that has to be replaced by alternatives:
+    However, the supported GM API by Userscripts is much smaller than what TamperMonkey supports, especially for old synchronous APIs that Rus Marble uses that have been dropped by Greasemonkey in Greasemonkey 4.0+ that has to be replaced by alternatives:
   </p>
 
   <ul>
-    <li>GM_addStyle → GM.addStyle</li>
-    <li>GM_getValue → GM.getValue</li>
-    <li>GM_getResourceText → Replaced (GM.getResourceText does not exist)</li>
+    <li>GM_addStyle â†’ GM.addStyle</li>
+    <li>GM_getValue â†’ GM.getValue</li>
+    <li>GM_getResourceText â†’ Replaced (GM.getResourceText does not exist)</li>
   </ul>
 
   <p>
-    Check the <a href="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/tree/custom-improve">Custom-Improve Branch</a> for extra implemented features and improvements that are not yet in the original repository: 
+    Check the <a href="https://github.com/t-wy/Wplace-RusMarble-Userscripts/tree/custom-improve">Custom-Improve Branch</a> for extra implemented features and improvements that are not yet in the original repository: 
   </p>
 
   <ul>
@@ -120,7 +120,7 @@ To use it, copy the content and paste it in the URL field when creating a bookma
     <li>A button to teleport to the top-left corner of the selected template. (v0.85.12)</li>
     <li>Option to hide locked colors (colors that are not unlocked) from the color list. (v0.85.17)
       <ul>
-        <li>This option is hidden if all colors have been unlocked as per <a href="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/pull/14">PR #14</a> (<a href="https://github.com/Commenter25">@Commenter25</a>). (v0.87.1)</li>
+        <li>This option is hidden if all colors have been unlocked as per <a href="https://github.com/t-wy/Wplace-RusMarble-Userscripts/pull/14">PR #14</a> (<a href="https://github.com/Commenter25">@Commenter25</a>). (v0.87.1)</li>
       </ul>
     </li>
     <li>Provide the bookmarklet version. (v0.85.22)</li>
@@ -138,7 +138,7 @@ To use it, copy the content and paste it in the URL field when creating a bookma
     <li>Switching between Wplace's builtin themes. (v0.85.40)</li>
     <li>Testing the error map feature (Red: Wrong, Gray: Unfilled, Green: Correct). (v0.85.46)
       <ul>
-        <li>Allow only to show enabled colors on the error map as per <a href="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/issues/11">Issue #11</a> (<a href="https://github.com/ajbjc">@ajbjc</a>). (v0.86.14)</li>
+        <li>Allow only to show enabled colors on the error map as per <a href="https://github.com/t-wy/Wplace-RusMarble-Userscripts/issues/11">Issue #11</a> (<a href="https://github.com/ajbjc">@ajbjc</a>). (v0.86.14)</li>
         <li>Make use of the opacity toggle to increase the contrast between the error map and the disabled colors.</li>
       </ul>
     </li>
@@ -148,14 +148,14 @@ To use it, copy the content and paste it in the URL field when creating a bookma
     <li>
     Allow smooth diagonal map scrolling via keyboard using arrow keys (<kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd>). (v0.86.5)
       <ul>
-        <li>Implemented by <a href="https://github.com/due2e">@due2e</a> as per <a href="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/pull/7">PR #7</a>.</li>
-        <li>Notice that wplace has its default key bindings for axis-aligned panning via <kbd>↑</kbd> <kbd>←</kbd> <kbd>↓</kbd> <kbd>→</kbd> (and rotation / tilt with <kbd>Shift</kbd> key combined)</li>
+        <li>Implemented by <a href="https://github.com/due2e">@due2e</a> as per <a href="https://github.com/t-wy/Wplace-RusMarble-Userscripts/pull/7">PR #7</a>.</li>
+        <li>Notice that wplace has its default key bindings for axis-aligned panning via <kbd>â†‘</kbd> <kbd>â†</kbd> <kbd>â†“</kbd> <kbd>â†’</kbd> (and rotation / tilt with <kbd>Shift</kbd> key combined)</li>
       </ul>
     </li>
     <li>Show suspension countdown and reason if it exists. (v0.86.6)</li>
-    <li>Display extra zoom ratio Buttons to allow screenshots to have exactly the same pixel size for each painted pixel, or the minimum zoom possible before the artwork disappears (Addresses <a href="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/issues/8">#8</a>). (v0.86.10)
+    <li>Display extra zoom ratio Buttons to allow screenshots to have exactly the same pixel size for each painted pixel, or the minimum zoom possible before the artwork disappears (Addresses <a href="https://github.com/t-wy/Wplace-RusMarble-Userscripts/issues/8">#8</a>). (v0.86.10)
       <ul>
-        <li>Extended by <a href="https://github.com/Commenter25">@Commenter25</a> as per <a href="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/pull/13">PR #13</a>. (v0.86.15)</li>
+        <li>Extended by <a href="https://github.com/Commenter25">@Commenter25</a> as per <a href="https://github.com/t-wy/Wplace-RusMarble-Userscripts/pull/13">PR #13</a>. (v0.86.15)</li>
       </ul>
     </li>
     <li>Allow creating a line / circle template of the currently selected color by picking two coordinates of opposite corners (One from the textboxes, another from the pixel you pick from the map before clicking the "Share" button) (v0.86.13)
@@ -163,12 +163,12 @@ To use it, copy the content and paste it in the URL field when creating a bookma
         <li>For circles, the textbox coordinates refer to the center, and the currently selected point refers to a point on the circle that defines the radius. (v0.86.16)</li>
       </ul>
     </li>
-    <li>Add an option to allow only currently enabled colors to be included in the error map. (Addresses <a href="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/issues/11">#11</a>). (v0.86.14)</li>
-    <li>Fix some boundaries issues from Blue Marble upstream and Wplace. (v0.86.16)
+    <li>Add an option to allow only currently enabled colors to be included in the error map. (Addresses <a href="https://github.com/t-wy/Wplace-RusMarble-Userscripts/issues/11">#11</a>). (v0.86.14)</li>
+    <li>Fix some boundaries issues from Rus Marble upstream and Wplace. (v0.86.16)
       <ul>
-        <li>Blue Marble: Template creation that crosses the Tl X: 2047 - 0 boundary not displaying from Tile X = 0.</li>
-        <li>Blue Marble: The (Tl X, Tl Y, Px X, Px Y) not updating when picking a pixel from Tile X = 2047 while the Map Center is at Tile X = 0.</li>
-        <li>Blue Marble & Wplace: The Pin button copies the faulty (Tl X, Tl Y, Px X, Px Y) from the pixel info request (i.e. Tl X and Px X being negative) when picking a pixel from Tile X = 2047 while the Map Center is at Tile X = 0.</li>
+        <li>Rus Marble: Template creation that crosses the Tl X: 2047 - 0 boundary not displaying from Tile X = 0.</li>
+        <li>Rus Marble: The (Tl X, Tl Y, Px X, Px Y) not updating when picking a pixel from Tile X = 2047 while the Map Center is at Tile X = 0.</li>
+        <li>Rus Marble & Wplace: The Pin button copies the faulty (Tl X, Tl Y, Px X, Px Y) from the pixel info request (i.e. Tl X and Px X being negative) when picking a pixel from Tile X = 2047 while the Map Center is at Tile X = 0.</li>
         <li>Wplace: Pixel Info not displaying when picking a pixel from Tile X = 0 when the Map Center is at Tile X = 2047.</li>
       </ul>
     </li>
@@ -180,53 +180,53 @@ To use it, copy the content and paste it in the URL field when creating a bookma
   Press the arrows to reveal the option you want.
   <details>
     <summary>
-      <b>I want to download Blue Marble.</b> <sup>(Click to Expand)</sup>
+      <b>I want to download Rus Marble.</b> <sup>(Click to Expand)</sup>
     </summary>
     <a href="#installation-instructions">Click here</a> to view the installation instructions.
   </details>
   <details>
     <summary>
-      <b>I want to ask questions about Blue Marble.</b> <sup>(Click to Expand)</sup>
+      <b>I want to ask questions about Rus Marble.</b> <sup>(Click to Expand)</sup>
     </summary>
-    <a href="https://discord.gg/tpeBPy46hf" target="_blank" rel="noopener noreferrer">Click here</a> for the Discord server invite to the Blue Marble support server.
+    <a href="https://discord.gg/tpeBPy46hf" target="_blank" rel="noopener noreferrer">Click here</a> for the Discord server invite to the Rus Marble support server.
     <br>
-    <a href="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/discussions/categories/q-a">Click here</a> for the GitHub help & question page for Blue Marble.
+    <a href="https://github.com/t-wy/Wplace-RusMarble-Userscripts/discussions/categories/q-a">Click here</a> for the GitHub help & question page for Rus Marble.
   </details>
   <details>
     <summary>
       <b>I want to report a bug.</b> <sup>(Click to Expand)</sup>
     </summary>
-    <a href="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/issues/new/choose">Click here</a> to report a bug, then choose the "Bug Report" option.
+    <a href="https://github.com/t-wy/Wplace-RusMarble-Userscripts/issues/new/choose">Click here</a> to report a bug, then choose the "Bug Report" option.
   </details>
   <details>
     <summary>
       <b>I want to suggest a feature.</b> <sup>(Click to Expand)</sup>
     </summary>
-    <a href="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/issues/new/choose">Click here</a> to suggest a feature, then choose the Feature Request" option.
+    <a href="https://github.com/t-wy/Wplace-RusMarble-Userscripts/issues/new/choose">Click here</a> to suggest a feature, then choose the Feature Request" option.
   </details>
   <details>
     <summary>
       <b>I want to contribute.</b> <sup>(Click to Expand)</sup>
     </summary>
-    <a href="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/blob/main/docs/CONTRIBUTING.md">Click here</a> to read the contributing guidelines.
+    <a href="https://github.com/t-wy/Wplace-RusMarble-Userscripts/blob/main/docs/CONTRIBUTING.md">Click here</a> to read the contributing guidelines.
   </details>
   <details>
     <summary>
       <b>I want to report a vulnerability.</b> <sup>(Click to Expand)</sup>
     </summary>
-    <a href="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/security">Click here</a> to submit a vulnerability report.
+    <a href="https://github.com/t-wy/Wplace-RusMarble-Userscripts/security">Click here</a> to submit a vulnerability report.
   </details>
   <details>
     <summary>
       <b>I want to visit the website.</b> <sup>(Click to Expand)</sup>
     </summary>
-    <a href="https://bluemarble.lol/" target="_blank" rel="noopener noreferrer">Click here</a> to visit the official Blue Marble website.
+    <a href="https://RusMarble.lol/" target="_blank" rel="noopener noreferrer">Click here</a> to visit the official Rus Marble website.
   </details>
 </p>
 
 <h2>Overview</h2>
 <p>
-  Welcome to Blue Marble! Blue Marble is a userscript for the website <a href="https://wplace.live/" target="_blank" rel="noopener noreferrer">wplace.live</a>. The purpose of Blue Marble is to allow you to take an image, and layer it onto the canvas! That way, you can easily trace the image of your art, without having to look back and forth between multiple tabs/monitors. In addition, Blue Marble supports some neat extra features such as: 
+  Welcome to Rus Marble! Rus Marble is a userscript for the website <a href="https://wplace.live/" target="_blank" rel="noopener noreferrer">wplace.live</a>. The purpose of Rus Marble is to allow you to take an image, and layer it onto the canvas! That way, you can easily trace the image of your art, without having to look back and forth between multiple tabs/monitors. In addition, Rus Marble supports some neat extra features such as: 
   <ul>
     <li>Displaying the number of pixels you need to level up</li>
     <li>Displaying a simple coordinate system (tile coordinats & pixel coordinates)</li>
@@ -234,17 +234,17 @@ To use it, copy the content and paste it in the URL field when creating a bookma
     <li>Allowing you to use the eyedropper on the template image, provided the colors are correct</li>
     <li>...and more!</li>
   </ul>
-  If you like this userscript, please ⭐ the repository! For more information and updates, visit the <a href="https://bluemarble.lol/" target="_blank" rel="noopener noreferrer">Blue Marble website</a>. If you wish to contribute to Blue Marble, check out the <a href="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/blob/main/docs/CONTRIBUTING.md" target="_blank" rel="noopener noreferrer">CONTRIBUTING.md</a> file in <code>docs/</code>.
+  If you like this userscript, please â­ the repository! For more information and updates, visit the <a href="https://RusMarble.lol/" target="_blank" rel="noopener noreferrer">Rus Marble website</a>. If you wish to contribute to Rus Marble, check out the <a href="https://github.com/t-wy/Wplace-RusMarble-Userscripts/blob/main/docs/CONTRIBUTING.md" target="_blank" rel="noopener noreferrer">CONTRIBUTING.md</a> file in <code>docs/</code>.
 
-  <img alt="Showcase image of Blue Marble template" src="./assets/Showcase1.png">
+  <img alt="Showcase image of Rus Marble template" src="./assets/Showcase1.png">
 
   <h3>Installation Instructions</h3>
   <a href="" target="_blank" rel="noopener noreferrer"><img alt="Supported Browsers" src="https://img.shields.io/badge/Supported%20Browsers-Chrome%20%7C%20Firefox%2A%20%7C%20Safari%20%7C%20Edge%20%7C%20Brave-orange?style=flat"></a>
   <a href="" target="_blank" rel="noopener noreferrer"><img alt="Unupported Browsers" src="https://img.shields.io/badge/Unsupported%20Browsers-Firefox%2A%20%7C%20Kiwi%20%7C%20Vivaldi-red?style=flat"></a>
   <p>
-    Blue Marble has been verified to work on mobile devices. Blue Marble was designed on Chrome, but Blue Marble might work on "unsupported" browsers not listed above. Some versions/forks of Firefox work. Some versions/forks of Firefox do not work.
+    Rus Marble has been verified to work on mobile devices. Rus Marble was designed on Chrome, but Rus Marble might work on "unsupported" browsers not listed above. Some versions/forks of Firefox work. Some versions/forks of Firefox do not work.
     <br>
-    Installation instructions for Blue Marble are below. Click the arrows to expand the instructions you want to see. Blue text is a link.
+    Installation instructions for Rus Marble are below. Click the arrows to expand the instructions you want to see. Blue text is a link.
     <details>
       <summary>
         <b>Install Chrome</b> <sup>(Click to expand)</sup>
@@ -253,16 +253,16 @@ To use it, copy the content and paste it in the URL field when creating a bookma
       <ol>
         <li>Install the <a href="https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo" target="_blank" rel="noopener noreferrer">TamperMonkey</a> extension for Chrome.
         <br>
-        <img alt="Click the 'Add extension' button" src="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/blob/main/docs/assets/ComputerChromeInstall1.png"></li>
+        <img alt="Click the 'Add extension' button" src="https://github.com/t-wy/Wplace-RusMarble-Userscripts/blob/main/docs/assets/ComputerChromeInstall1.png"></li>
         <li>Right-click the extension.
         <br>
-        <img alt="Enter the 'Manage Extension' menu" src="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/blob/main/docs/assets/ComputerChromeInstall2.png"></li>
+        <img alt="Enter the 'Manage Extension' menu" src="https://github.com/t-wy/Wplace-RusMarble-Userscripts/blob/main/docs/assets/ComputerChromeInstall2.png"></li>
         <li>Left-click "Manage Extension."</li>
         <li>Enable "Developer Mode."
         <br>
-        <img alt="Enable 'Developer Mode' and 'Allow user scripts'" src="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/blob/main/docs/assets/ComputerChromeInstall3.png"></li>
+        <img alt="Enable 'Developer Mode' and 'Allow user scripts'" src="https://github.com/t-wy/Wplace-RusMarble-Userscripts/blob/main/docs/assets/ComputerChromeInstall3.png"></li>
         <li>Enable "Allow user scripts."</li>
-        <li><strong>One-click install:</strong> Click this link to Install Blue Marble directly: <a href="https://raw.githubusercontent.com/t-wy/Wplace-BlueMarble-Userscripts/custom-improve/dist/BlueMarble.user.js" target="_blank" rel="noopener noreferrer"><strong>Install Blue Marble</strong></a>
+        <li><strong>One-click install:</strong> Click this link to Install Rus Marble directly: <a href="https://raw.githubusercontent.com/t-wy/Wplace-RusMarble-Userscripts/custom-improve/dist/RusMarble.user.js" target="_blank" rel="noopener noreferrer"><strong>Install Rus Marble</strong></a>
         <br>
         TamperMonkey will automatically detect the userscript and prompt you to Install it.</li>
         <li>Refresh the <a href="https://wplace.live/" target="_blank" rel="noopener noreferrer">wplace.live</a> webpage.</li>
@@ -275,27 +275,27 @@ To use it, copy the content and paste it in the URL field when creating a bookma
       <ol>
         <li>Install the <a href="https://microsoftedge.microsoft.com/addons/detail/iikmkjmpaadaobahmlepeloendndfphd" target="_blank" rel="noopener noreferrer">TamperMonkey</a> plugin for Microsoft Edge.
         <br>
-        <img alt="Click the 'Get' button" src="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/blob/main/docs/assets/ComputerEdgeInstall1.png"></li>
+        <img alt="Click the 'Get' button" src="https://github.com/t-wy/Wplace-RusMarble-Userscripts/blob/main/docs/assets/ComputerEdgeInstall1.png"></li>
         <li>Right-click the extension.
         <br>
-        <img alt="Enter the 'Manage Extension' menu" src="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/blob/main/docs/assets/ComputerEdgeInstall2.png"></li>
+        <img alt="Enter the 'Manage Extension' menu" src="https://github.com/t-wy/Wplace-RusMarble-Userscripts/blob/main/docs/assets/ComputerEdgeInstall2.png"></li>
         <li>Left-click "Manage Extension."</li>
         <li>Enable "Developer Mode."
         <br>
-        <img alt="Enable 'Developer Mode'" src="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/blob/main/docs/assets/ComputerEdgeInstall3.png"></li>
-        <li>Download the <a href="https://raw.githubusercontent.com/t-wy/Wplace-BlueMarble-Userscripts/custom-improve/dist/BlueMarble.user.js" target="_blank" rel="noopener noreferrer">BlueMarble.user.js</a> file.</li>
+        <img alt="Enable 'Developer Mode'" src="https://github.com/t-wy/Wplace-RusMarble-Userscripts/blob/main/docs/assets/ComputerEdgeInstall3.png"></li>
+        <li>Download the <a href="https://raw.githubusercontent.com/t-wy/Wplace-RusMarble-Userscripts/custom-improve/dist/RusMarble.user.js" target="_blank" rel="noopener noreferrer">RusMarble.user.js</a> file.</li>
         <li>Open the TamperMonkey Dashboard.
         <br>
-        <img alt="Enter the TamperMonkey 'Dashboard'" src="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/blob/main/docs/assets/ComputerEdgeInstall4.png"></li>
-        <li>Drag the <code>BlueMarble.user.js</code> file inside the dashboard of TamperMonkey.
+        <img alt="Enter the TamperMonkey 'Dashboard'" src="https://github.com/t-wy/Wplace-RusMarble-Userscripts/blob/main/docs/assets/ComputerEdgeInstall4.png"></li>
+        <li>Drag the <code>RusMarble.user.js</code> file inside the dashboard of TamperMonkey.
         <br>
-        <img alt="Drag the userscript into the dashboard" src="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/blob/main/docs/assets/ComputerChromeInstall5.png"></li>
-        <li>Click the "Install" button to Install Blue Marble.
+        <img alt="Drag the userscript into the dashboard" src="https://github.com/t-wy/Wplace-RusMarble-Userscripts/blob/main/docs/assets/ComputerChromeInstall5.png"></li>
+        <li>Click the "Install" button to Install Rus Marble.
         <br>
-        <img alt="Click the 'Install' button" src="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/blob/main/docs/assets/ComputerChromeInstall6.png"></li>
-        <li>Enable Blue Marble inside the TamperMonkey dashboard.
+        <img alt="Click the 'Install' button" src="https://github.com/t-wy/Wplace-RusMarble-Userscripts/blob/main/docs/assets/ComputerChromeInstall6.png"></li>
+        <li>Enable Rus Marble inside the TamperMonkey dashboard.
         <br>
-        <img alt="Enable Blue Marble" src="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/blob/main/docs/assets/ComputerChromeInstall7.png"></li>
+        <img alt="Enable Rus Marble" src="https://github.com/t-wy/Wplace-RusMarble-Userscripts/blob/main/docs/assets/ComputerChromeInstall7.png"></li>
         <li>Refresh the <a href="https://wplace.live/" target="_blank" rel="noopener noreferrer">wplace.live</a> webpage.</li>
       </ol>
     </details>
@@ -306,8 +306,8 @@ To use it, copy the content and paste it in the URL field when creating a bookma
       <ol>
         <li>Install the <a href="https://addons.mozilla.org/en-US/firefox/addon/tampermonkey/" target="_blank" rel="noopener noreferrer">TamperMonkey</a> plugin for Firefox.
         <br>
-        <img alt="Click the 'Add to Firefox' button" src="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/blob/main/docs/assets/ComputerFireFoxInstall1.png"></li>
-        <li><strong>One-click install:</strong> Click this link to Install Blue Marble directly: <a href="https://raw.githubusercontent.com/t-wy/Wplace-BlueMarble-Userscripts/custom-improve/dist/BlueMarble.user.js" target="_blank" rel="noopener noreferrer"><strong>Install Blue Marble</strong></a>
+        <img alt="Click the 'Add to Firefox' button" src="https://github.com/t-wy/Wplace-RusMarble-Userscripts/blob/main/docs/assets/ComputerFireFoxInstall1.png"></li>
+        <li><strong>One-click install:</strong> Click this link to Install Rus Marble directly: <a href="https://raw.githubusercontent.com/t-wy/Wplace-RusMarble-Userscripts/custom-improve/dist/RusMarble.user.js" target="_blank" rel="noopener noreferrer"><strong>Install Rus Marble</strong></a>
         <br>
         TamperMonkey will automatically detect the userscript and prompt you to install it.</li>
         <li>Refresh the <a href="https://wplace.live/" target="_blank" rel="noopener noreferrer">wplace.live</a> webpage.</li>
@@ -322,7 +322,7 @@ To use it, copy the content and paste it in the URL field when creating a bookma
         <br>
         Make sure that appropriate permissions have been given to the App and Safari is configured to enable the extension.</li>
         <br>
-        <li>Download the Blue Marble script and save to the Save Location as specified by the App: <a href="https://raw.githubusercontent.com/t-wy/Wplace-BlueMarble-Userscripts/custom-improve/dist/BlueMarble.user.js" target="_blank" rel="noopener noreferrer"><strong>Download Blue Marble</strong></a>
+        <li>Download the Rus Marble script and save to the Save Location as specified by the App: <a href="https://raw.githubusercontent.com/t-wy/Wplace-RusMarble-Userscripts/custom-improve/dist/RusMarble.user.js" target="_blank" rel="noopener noreferrer"><strong>Download Rus Marble</strong></a>
         <br>
         Userscripts will automatically detect the userscript.</li>
         <li>Refresh the <a href="https://wplace.live/" target="_blank" rel="noopener noreferrer">wplace.live</a> webpage.</li>
@@ -333,11 +333,11 @@ To use it, copy the content and paste it in the URL field when creating a bookma
 
   <h3>Template Instructions</h3>
   <p>
-    Blue Marble will display your template as the same size. If your image is 500 pixels tall and 300 pixels wide, the template will be 500 pixels tall and 300 pixels wide. Here is the instructions to display a template image on the canvas:
+    Rus Marble will display your template as the same size. If your image is 500 pixels tall and 300 pixels wide, the template will be 500 pixels tall and 300 pixels wide. Here is the instructions to display a template image on the canvas:
     <ol>
       <li>Find the pixel of the top left corner. Fill in <code>Tl X</code>, <code>Tl Y</code>, <code>Px X</code>, and <code>Px Y</code> with the coordinates. You can use the "Pin" icon to auto-fill the coordinates after clicking the pixel.
       <br>
-      <img alt="Find template coordinates" src="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/blob/main/docs/assets/TemplateCoordinates1.png"></li>
+      <img alt="Find template coordinates" src="https://github.com/t-wy/Wplace-RusMarble-Userscripts/blob/main/docs/assets/TemplateCoordinates1.png"></li>
       <li>Upload a PNG or WEBP image.</li>
       <li>Click the "Create" button.</li>
       <li>If your template still does not show, try clicking the "Enable" button.</li>
@@ -346,14 +346,14 @@ To use it, copy the content and paste it in the URL field when creating a bookma
 
   <h3>Script Settings</h3>
   <p>
-    There are many settings available for the Blue Marble userscript! Through these settings, you can control how the script behaves.
+    There are many settings available for the Rus Marble userscript! Through these settings, you can control how the script behaves.
   </p>
 
   <h3>Template Settings</h3>
   <p>
     <h4>Transparent Pixels</h4>
     <p>
-      Templates for Blue Marble work slightly different from normal. Since there is a "Transparent" color, and transparent pixels in templates are typically ignored, your template should have a custom color to signify "Transparent" colored pixels.
+      Templates for Rus Marble work slightly different from normal. Since there is a "Transparent" color, and transparent pixels in templates are typically ignored, your template should have a custom color to signify "Transparent" colored pixels.
       <ul>
         <li>If you want a specific pixel to be any color, it should be transparent in your template.</li>
         <li>If you want a specific pixel to be the "Transparent" color on the Wplace palette, it should have the <code>#deface</code> hex color.</li>
@@ -363,9 +363,9 @@ To use it, copy the content and paste it in the URL field when creating a bookma
     <p>
       <h5>Tile Coordinates</h5>
       <p>
-        The coordinate system for wplace.live is unique. Instead of all pixels having a global coordinate number (x, y), the coordinate number is relative to the tile. This means you need to know the tile number and the coordinate number to do anything. In Blue Marble, the tile coordinates and the pixel coordinates are displayed when you click on a pixel. These are the coordinates you should use for aligning a template.
+        The coordinate system for wplace.live is unique. Instead of all pixels having a global coordinate number (x, y), the coordinate number is relative to the tile. This means you need to know the tile number and the coordinate number to do anything. In Rus Marble, the tile coordinates and the pixel coordinates are displayed when you click on a pixel. These are the coordinates you should use for aligning a template.
         <br>
-        <img alt="Where to find tile coordinates" src="https://github.com/t-wy/Wplace-BlueMarble-Userscripts/blob/main/docs/assets/TemplateCoordinatesDisplay.png">
+        <img alt="Where to find tile coordinates" src="https://github.com/t-wy/Wplace-RusMarble-Userscripts/blob/main/docs/assets/TemplateCoordinatesDisplay.png">
       </p>
       <h5>Template Coordinates</h5>
       <p>
@@ -387,17 +387,17 @@ To use it, copy the content and paste it in the URL field when creating a bookma
 
 <h2>Licenses</h2>
 <p>
-  (Below, all mentions of the "userscript" refer to the "Blue Marble" userscript made by SwingTheVine) <br>
-  Most of this userscript is licensed under the <code>Mozilla Public License Version 2.0</code> (MPL-2.0). All software, code, and libraries in this repository are licensed under the MPL-2.0 license. However, the "Blue Marble" image in this userscript is owned by NASA and is licensed under the <code>Creative Commons 0 1.0 Universal</code> (CC0 1.0) license.
+  (Below, all mentions of the "userscript" refer to the "Rus Marble" userscript made by SwingTheVine) <br>
+  Most of this userscript is licensed under the <code>Mozilla Public License Version 2.0</code> (MPL-2.0). All software, code, and libraries in this repository are licensed under the MPL-2.0 license. However, the "Rus Marble" image in this userscript is owned by NASA and is licensed under the <code>Creative Commons 0 1.0 Universal</code> (CC0 1.0) license.
 </p>
 
 <h2>FAQ</h2>
 <p>
-  <h3>Is Blue Marble malware?</h3>
-  <p><b>A:</b> Blue Marble does not contain malicious code. The Blue Marble code can be found in the <code>src/</code> folder. If you worry about Blue Marble being malware, you can read the code, then bundle it yourself using the tools in <code>build/</code>.
+  <h3>Is Rus Marble malware?</h3>
+  <p><b>A:</b> Rus Marble does not contain malicious code. The Rus Marble code can be found in the <code>src/</code> folder. If you worry about Rus Marble being malware, you can read the code, then bundle it yourself using the tools in <code>build/</code>.
 
-  <h3>How can Blue Marble place pixels for me?</h3>
-  <p><b>A:</b> Unfortunately, Blue Marble will not support the automatic placement of pixels without user interaction because it is not allowed by Wplace.
+  <h3>How can Rus Marble place pixels for me?</h3>
+  <p><b>A:</b> Unfortunately, Rus Marble will not support the automatic placement of pixels without user interaction because it is not allowed by Wplace.
 
   <h3>How do I hide the overlay?</h3>
   <p><b>A:</b> Turn the userscript off and refresh the page.</p>
@@ -411,3 +411,4 @@ To use it, copy the content and paste it in the URL field when creating a bookma
   <h3>Why do game notifications appear on top of the overlay?</h3>
   <p><b>A:</b> Game notifications only appear when they need immediate attention. Therefore, they have priority over the overlay (which typically needs no attention).</p>
 </p>
+

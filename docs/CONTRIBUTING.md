@@ -1,4 +1,4 @@
-<table>
+﻿<table>
   <tr>
     <td><a href="#contributing">Contributing</a></td>
     <td valign="top" rowspan="99"><a href="https://discord.gg/tpeBPy46hf"><img alt="Discord Banner" src="https://discord.com/api/guilds/796124137042608188/widget.png?style=banner4"></a></td>
@@ -48,11 +48,11 @@
 </table>
 
 <h1>Contributing</h1>
-<a href="https://github.com/SwingTheVine/Wplace-BlueMarble/blob/main/LICENSE.txt" target="_blank" rel="noopener noreferrer"><img alt="Software License: MPL-2.0" src="https://img.shields.io/badge/Software_License-MPL--2.0-slateblue?style=flat"></a>
+<a href="https://github.com/SwingTheVine/Wplace-RusMarble/blob/main/LICENSE.txt" target="_blank" rel="noopener noreferrer"><img alt="Software License: MPL-2.0" src="https://img.shields.io/badge/Software_License-MPL--2.0-slateblue?style=flat"></a>
 <p>
-  Thank you for wanting to contribute to the userscript "Blue Marble"! It means a lot to me that someone likes my project enough to want to help it grow. If you haven't already done so, consider joining our Discord. You can ask questions about the userscript there and receive feedback. You can also visit the <a href="https://bluemarble.lol/" target="_blank" rel="noopener noreferrer">official Blue Marble website</a> for more information.
+  Thank you for wanting to contribute to the userscript "Rus Marble"! It means a lot to me that someone likes my project enough to want to help it grow. If you haven't already done so, consider joining our Discord. You can ask questions about the userscript there and receive feedback. You can also visit the <a href="https://RusMarble.lol/" target="_blank" rel="noopener noreferrer">official Rus Marble website</a> for more information.
   <br>
-  <b>Note</b>: If you are using AI, and you want to tell the AI how the codebase files are related to each-other, go to the <code>Class diagram of relationships for Blue Marble</code> diagram in the chart section of this file. Copy the chart, and give it to the AI.
+  <b>Note</b>: If you are using AI, and you want to tell the AI how the codebase files are related to each-other, go to the <code>Class diagram of relationships for Rus Marble</code> diagram in the chart section of this file. Copy the chart, and give it to the AI.
   <br>
   <b>Note</b>: If you are contributing to the documentation of this project, make your fork from the <code>documentation</code> branch. If you are contributing to the code/programming of this project, make your fork from the <code>code</code> branch. If you fork main, and make a PR from <code>main</code> -> <code>main</code> your PR might be rejected. This is because <code>main</code> is not up-to-date, and your changes might conflict with up-to-date changes.
 </p>
@@ -60,10 +60,10 @@
 <h2>Summary</h2>
 <p>
   <ul>
-    <li>I don't want to waste your time, so double check with me before starting a big change like adding a new feature. For example, imagine you spend 50 hours making a bot that automatically places pixels, then your pull request was rejected because a bot that automatically places pixles does not align with the "Mission" of Blue Marble. That would be sad :(</li>
+    <li>I don't want to waste your time, so double check with me before starting a big change like adding a new feature. For example, imagine you spend 50 hours making a bot that automatically places pixels, then your pull request was rejected because a bot that automatically places pixles does not align with the "Mission" of Rus Marble. That would be sad :(</li>
     <li>Follow the style of the project. E.g., if all overlays are made by calling <code>Overlay()</code>, and you want to make a new overlay, you should probably call <code>Overlay()</code> as well.</li>
     <li>Low quality code will be rejected.</li>
-    <li>You can find documentation for Blue Marble <a href="https://swingthevine.github.io/Wplace-BlueMarble/index.html" target="_blank" rel="noopener noreferrer">here</a>.</li>
+    <li>You can find documentation for Rus Marble <a href="https://swingthevine.github.io/Wplace-RusMarble/index.html" target="_blank" rel="noopener noreferrer">here</a>.</li>
     <li>Don't fork the <code>main</code> branch! Fork either <code>code</code> or <code>documentation</code>.</li>
     <li>If you are adding a new feature, and it is feasable to stick your feature inside a function, then use a function. This will make your code conflict less with other people's code. Make your code <a href="https://en.wikipedia.org/wiki/Modular_programming" target="_blank" rel="noopener noreferrer">modular</a>.</li>
   </ul>
@@ -83,7 +83,7 @@
 <h2>What Can I Contribute?</h2>
 <h3>Programming</h3>
   <p>
-    Most of the work to be done in this userscript is related to programming. It is helpful to have a background in programming, but not required. If you are looking to learn JavaScript and its syntax, check out this <a href="https://roadmap.sh/javascript" target="_blank" rel="noopener noreferrer">roadmap for learning JavaScript</a>. We strongly recommend that you understand functions, methods, classes, and Object-Oriented-Programming if you plan to implement a brand new feature. More technical knowledge like method chaining and lambda expressions are useful but not required. You can find the documentation for Blue Marble <a href="https://swingthevine.github.io/Wplace-BlueMarble/index.html" target="_blank" rel="noopener noreferrer">here</a>. Make your code modular when possible. In other words, you should "blackbox" your code by putting it in a function when possible. For example, if you are adding a color filter to remove colors from being displayed on the template, the function should pass in the template information and tile information, and output the filtered template/tile information. This way, other people's code can't interfere with the color filter. For example:
+    Most of the work to be done in this userscript is related to programming. It is helpful to have a background in programming, but not required. If you are looking to learn JavaScript and its syntax, check out this <a href="https://roadmap.sh/javascript" target="_blank" rel="noopener noreferrer">roadmap for learning JavaScript</a>. We strongly recommend that you understand functions, methods, classes, and Object-Oriented-Programming if you plan to implement a brand new feature. More technical knowledge like method chaining and lambda expressions are useful but not required. You can find the documentation for Rus Marble <a href="https://swingthevine.github.io/Wplace-RusMarble/index.html" target="_blank" rel="noopener noreferrer">here</a>. Make your code modular when possible. In other words, you should "blackbox" your code by putting it in a function when possible. For example, if you are adding a color filter to remove colors from being displayed on the template, the function should pass in the template information and tile information, and output the filtered template/tile information. This way, other people's code can't interfere with the color filter. For example:
     <br>
     <ol>
       <li>The template image is generated and the tile information is retrieved.</li>
@@ -103,7 +103,7 @@
 
 <h2>What Can I Not Do?</h2>
 <p>
-  Please do not use <a href="https://github.com/SwingTheVine/Wplace-BlueMarble/issues" target="_blank" rel="noopener noreferrer">GitHub Issues</a> for asking support questions (e.g. "How do I install this?" or "What does <code>cssMangler</code> do?"). We use the GitHub issue tracker for bug reports and feature requests. If you are having trouble and need help, ask on our <a href="https://discord.gg/tpeBPy46hf" target="_blank" rel="noopener noreferrer">Discord</a>. <b>However, you <i>should</i> make a feature request on our issue tracker before starting work on your contribution.</b> Nothing sucks more than working hard on a high-quality contribution just for it to be rejected because it does not align with the mission of the mod. Ask first!
+  Please do not use <a href="https://github.com/SwingTheVine/Wplace-RusMarble/issues" target="_blank" rel="noopener noreferrer">GitHub Issues</a> for asking support questions (e.g. "How do I install this?" or "What does <code>cssMangler</code> do?"). We use the GitHub issue tracker for bug reports and feature requests. If you are having trouble and need help, ask on our <a href="https://discord.gg/tpeBPy46hf" target="_blank" rel="noopener noreferrer">Discord</a>. <b>However, you <i>should</i> make a feature request on our issue tracker before starting work on your contribution.</b> Nothing sucks more than working hard on a high-quality contribution just for it to be rejected because it does not align with the mission of the mod. Ask first!
 </p>
 <p>
   Please contribute in good faith. We will reject pull requests with bad code, comments, or pull requests that damage the mod. 
@@ -111,7 +111,7 @@
 
 <h2>Guidelines</h2>
 <ul>
-  <li>Always submit a <a href="https://github.com/SwingTheVine/Wplace-BlueMarble/issues/new/choose" target="_blank" rel="noopener noreferrer">feature request</a> and receive authorization to work on your contribution <i>before</i> you start working on your contribution. This will save you time if we end up rejecting the contribution. Small contributions (like fixing spelling errors) don't need a feature request.</li>
+  <li>Always submit a <a href="https://github.com/SwingTheVine/Wplace-RusMarble/issues/new/choose" target="_blank" rel="noopener noreferrer">feature request</a> and receive authorization to work on your contribution <i>before</i> you start working on your contribution. This will save you time if we end up rejecting the contribution. Small contributions (like fixing spelling errors) don't need a feature request.</li>
   <li>Follow the <a href="https://github.com/SwingTheVine/.github/blob/main/CODE_OF_CONDUCT.md" target="_blank" rel="noopener noreferrer">Code of Conduct</a>. This includes both your contributions and the way you interact with this community.</li>
   <li>Always write a clear message that explains the changes. "Added some things" does <i>not</i> explain what was changed.</li>
   <li>Different feature, different pull request. If you submit a pull request for templates and localization (i18n) together, and we want to reject the localization, your template code is rejected along with the localization since they are the same pull request. They should be separate pull requests since they are separate features.</li>
@@ -138,8 +138,8 @@
 <h2>How To Contribute</h2>
 <p>
   <ol>
-    <li>Read all of the <a href="https://github.com/SwingTheVine/Wplace-BlueMarble/blob/main/docs/CONTRIBUTING.md" target="_blank" rel="noopener noreferrer">contributing guidelines</a>.</li>
-    <li>If you would like to contribute, submit a request <a href="https://github.com/SwingTheVine/Wplace-BlueMarble/issues/new/choose" target="_blank" rel="noopener noreferrer">here</a>.</li>
+    <li>Read all of the <a href="https://github.com/SwingTheVine/Wplace-RusMarble/blob/main/docs/CONTRIBUTING.md" target="_blank" rel="noopener noreferrer">contributing guidelines</a>.</li>
+    <li>If you would like to contribute, submit a request <a href="https://github.com/SwingTheVine/Wplace-RusMarble/issues/new/choose" target="_blank" rel="noopener noreferrer">here</a>.</li>
     <li>If you have received authorization to start working on your contribution, set up the development environment on your device.</li>
     <li>Fork the project.</li>
     <li>Download your fork to the development environment.</li>
@@ -152,22 +152,22 @@
 
 <h2>Production Enviroment</h2>
 <p>
-  Here lies information that may be of interest to those who wish to modify Blue Marble.
+  Here lies information that may be of interest to those who wish to modify Rus Marble.
 
   <h3>Npm Run</h3>
   <p>
-    Running <code>npm run build</code> will compile Blue Marble. The compiled files can be found in the <code>dist/</code> directory. Running <code>npm run patch</code> will increment the patch version, and compile Blue Marble.
+    Running <code>npm run build</code> will compile Rus Marble. The compiled files can be found in the <code>dist/</code> directory. Running <code>npm run patch</code> will increment the patch version, and compile Rus Marble.
   </p>
 
   <h3>Charts</h3>
   <p>
-    Use the arrow and zoom buttons to navigate the charts. Use the ↔️ button to go fullscreen. Use the 🔄 button to reset. All buttons can be found on the chart. Use the "two squares" icon to copy the chart. If you need assistance reading the chart, copy the chart into an AI using the "two squares" button on the chart.
+    Use the arrow and zoom buttons to navigate the charts. Use the â†”ï¸ button to go fullscreen. Use the ðŸ”„ button to reset. All buttons can be found on the chart. Use the "two squares" icon to copy the chart. If you need assistance reading the chart, copy the chart into an AI using the "two squares" button on the chart.
   </p>
 </p>
 
 <!-- https://mermaid.js.org/syntax/classDiagram.html -->
 
-Class diagram of relationships for Blue Marble:
+Class diagram of relationships for Rus Marble:
 (last updated 0.74.0)
 ```mermaid
 ---
@@ -207,7 +207,7 @@ classDiagram
     +disableTemplate()
     +drawTemplateOnTile()
     +importJSON()
-    +parseBlueMarble()
+    +parseRusMarble()
     +setTemplatesShouldBeDrawn()
   }
   class Template {
@@ -238,7 +238,7 @@ classDiagram
   Template ..> utils : calls uint8ToBase64()
 ```
 
-Class diagram of relationships for Blue Marble's compiler/builder:
+Class diagram of relationships for Rus Marble's compiler/builder:
 (last updated 0.74.0)
 ```mermaid
 ---
@@ -284,16 +284,16 @@ classDiagram
       +minify()
     }
 
-    class `dist/BlueMarble.user.js` {
+    class `dist/RusMarble.user.js` {
     }
 
-    class `dist/BlueMarble.user.css` {
+    class `dist/RusMarble.user.css` {
     }
 
-    class `dist/BlueMarble.user.css.map.json` {
+    class `dist/RusMarble.user.css.map.json` {
     }
 
-    class `src/BlueMarble.meta.js` {
+    class `src/RusMarble.meta.js` {
     }
 
     class `src/main.js` {
@@ -307,28 +307,28 @@ classDiagram
   `build.js` ..> terser : requires
   `build.js` ..> `utils.js` : calls consoleStyle()
   `build.js` ..> `update-version.js` : executes
-  `build.js` ..> `src/BlueMarble.meta.js` : reads
+  `build.js` ..> `src/RusMarble.meta.js` : reads
   `build.js` ..> esbuild : calls build()
-  `build.js` ..> `dist/BlueMarble.user.css` : writes
+  `build.js` ..> `dist/RusMarble.user.css` : writes
   esbuild ..> `src/main.js` : reads
-  `build.js` ..> `dist/BlueMarble.user.js` : writes
-  terser ..> `dist/BlueMarble.user.js` : reads & writes
+  `build.js` ..> `dist/RusMarble.user.js` : writes
+  terser ..> `dist/RusMarble.user.js` : reads & writes
   `build.js` ..> `cssMangler.js` : calls manglerSelectors()
-  `cssMangler.js` ..> `dist/BlueMarble.user.css.map.json` : reads
-  `cssMangler.js` ..> `dist/BlueMarble.user.js` : reads & writes
-  `cssMangler.js` ..> `dist/BlueMarble.user.css` : reads & writes
+  `cssMangler.js` ..> `dist/RusMarble.user.css.map.json` : reads
+  `cssMangler.js` ..> `dist/RusMarble.user.js` : reads & writes
+  `cssMangler.js` ..> `dist/RusMarble.user.css` : reads & writes
   `build.js` <.. `cssMangler.js` : returns mapCSS
-  `build.js` ..> `dist/BlueMarble.user.css.map.json` : writes mapCSS
+  `build.js` ..> `dist/RusMarble.user.css.map.json` : writes mapCSS
   `patch.js` ..> `docs/README.md` : reads & writes
   `patch.js` ..> `utils.js` : calls consoleStyle()
   `update-version.js` ..> `package.json` : reads
-  `update-version.js` ..> `src/BlueMarble.meta.js` : reads & writes
+  `update-version.js` ..> `src/RusMarble.meta.js` : reads & writes
   `update-version.js` ..> `utils.js` : calls consoleStyle()
 ```
 
 <h2>Development Environment</h2>
 <p>
-  This is what SwingTheVine uses to program Blue Marble. You don't have to use the exact same thing. This is provided for reference.
+  This is what SwingTheVine uses to program Rus Marble. You don't have to use the exact same thing. This is provided for reference.
 
   <h3>IDE</h3>
   Visual Studio Code<br>
@@ -349,3 +349,4 @@ classDiagram
   Graphics Card: <code>NVIDIA GeForce GTX 1660 Ti (6 GB)</code><br>
   System Type: <code>64-bit operating system</code>
 </p>
+

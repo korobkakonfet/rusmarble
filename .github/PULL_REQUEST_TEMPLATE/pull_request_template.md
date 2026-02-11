@@ -1,4 +1,4 @@
-# Pull Request
+﻿# Pull Request
 Fill out the following details to submit your PR.
 
 ## Summary
@@ -25,7 +25,8 @@ Select the type of change your PR is:
 - [ ] This PR follows the Code of Conduct.
 - [ ] This PR follows the project's style of coding and documentation.
 - [ ] Documentation related to this PR has been updated.
-- [ ] Blue Marble has been verified to work correctly for this PR.
+- [ ] Rus Marble has been verified to work correctly for this PR.
 
 ## Additional Notes
 Anything else reviewers should know?
+
