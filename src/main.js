@@ -2338,7 +2338,7 @@ async function buildOverlayMain() {
               swatch.style.borderColor = "gold";
               swatch.style.boxShadow = "0 0 2px yellow";
             }
-            colorName = `#${tMeta.id} ${displayName}`;
+            colorName = `${displayName}`;
             colorKey = `${r},${g},${b}`;
           }
         } catch (ignored) {}
