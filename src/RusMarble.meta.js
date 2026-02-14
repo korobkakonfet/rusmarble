@@ -16,8 +16,7 @@
 // @run-at       document-start
 // @connect      localhost
 // @connect      localhost:8003
-// @connect      165.232.117.221
-// @connect      165.232.117.221:8003
+// @connect      wplace.zaebal.me
 // @connect      telemetry.thebluecorner.net
 // @noframes
 // ==/UserScript==
