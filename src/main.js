@@ -1173,6 +1173,7 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
       'currentTheme': '',
       'layoutTheme': 'classic',
       'templateDisplay': 'cross',
+      'templateListRemaining': true,
       'hideDroplets': false,
       'hideNextLevel': false,
       'hideStatus': false,
@@ -1999,6 +2000,12 @@ async function buildOverlayMain() {
               }
             });
           }).buildElement()
+          .addCheckbox({'id': 'bm-template-list-remaining', 'textContent': 'Show Remaining Count', 'checked': templateManager.isTemplateListRemainingEnabled()}, (instance, label, checkbox) => {
+            checkbox.addEventListener('change', () => {
+              templateManager.setTemplateListRemainingEnabled(checkbox.checked);
+              buildTemplateFilterList();
+            });
+          }).buildElement()
           .addCheckbox({'id': 'bm-show-error-map', 'textContent': 'Show Error Map', 'checked': templateManager.isErrorMapShown()}, (instance, label, checkbox) => {
             checkbox.addEventListener('change', () => {
               templateManager.setErrorMapShown(checkbox.checked);
@@ -2788,9 +2795,13 @@ async function buildOverlayMain() {
         return a.idx - b.idx;
       });
 
+    const templateEnabledState = Object.fromEntries(
+      (templateManager.templatesArray ?? []).map(t => [t.storageKey, t.enabled ?? true])
+    );
     const combinedTemplate = {};
     for (const stats of templateManager.tileProgress.values()) {
       Object.entries(stats.template).forEach(([storageKey, content]) => {
+        if (templateEnabledState[storageKey] === false) return; // skip only when explicitly disabled
         if (combinedTemplate[storageKey] === undefined) {
           combinedTemplate[storageKey] = Object.fromEntries(Object.entries(content));
         } else {
@@ -2826,7 +2837,12 @@ async function buildOverlayMain() {
 
         let label = document.createElement('span');
         label.style.fontSize = '12px';
-        const labelText = `${template.requiredPixelCount.toLocaleString()}`;
+        const paletteTotal = template?.colorPalette
+          ? Object.values(template.colorPalette).reduce((sum, meta) => sum + (Number(meta?.count) || 0), 0)
+          : 0;
+        const totalCount =
+          Number(template.requiredPixelCount ?? template.pixelCount ?? paletteTotal) || 0;
+        const totalLabelText = totalCount.toLocaleString();
 
         const templateName = template["displayName"];
         const templateStore = templateManager.templatesJSON?.templates?.[template.storageKey] ?? {};
@@ -2834,6 +2850,9 @@ async function buildOverlayMain() {
         const isHighlighted = normalizeFlag(template.remoteHighlighted) || normalizeFlag(templateStore.remoteHighlighted);
         const filledCount = combinedTemplate[template.storageKey]?.painted ?? 0;
         const filledLabelText = `${filledCount.toLocaleString()}`;
+        const remainingCount = Math.max(0, totalCount - filledCount);
+        const remainingLabelText = `${remainingCount.toLocaleString()}`;
+        const showRemaining = templateManager.isTemplateListRemainingEnabled();
         const renameElement = document.createElement('span');
         renameElement.textContent = templateName;
         renameElement.className = "bm-templatename";
@@ -2894,9 +2913,13 @@ async function buildOverlayMain() {
         if (isHighlighted) {
           row.classList.add('bm-template-highlight');
         }
-        label.appendChild(renameElement);
-      label.appendChild(document.createTextNode(` • ${filledLabelText} / ${labelText}`));
-      // label.textContent = `${templateName} • ${labelText}`;
+      label.appendChild(renameElement);
+      const countSpan = document.createElement('span');
+      countSpan.className = 'bm-template-count';
+      countSpan.textContent = showRemaining
+        ? ` left ${remainingLabelText}`
+        : ` • ${filledLabelText} / ${totalLabelText}`;
+      label.appendChild(countSpan);
 
       const toggle = document.createElement('input');
       toggle.type = 'checkbox';

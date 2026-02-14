@@ -1,4 +1,4 @@
-import Template from "./Template";
+﻿import Template from "./Template";
 import { base64ToUint8, numberToEncoded, cleanUpCanvas, rgbToMeta, sortByOptions, testCanvasSize, getCurrentColor, sleep } from "./utils";
 import { themeList, addTemplateCanvas, removeLayer, doAfterMapFound, forceRefreshTiles, coordsGeoCoordsToTileCoords, getMapBounds } from './utilsMaptiler.js';
 
@@ -325,7 +325,7 @@ export default class TemplateManager {
    * @param {Array<number>} tileCoords - The tile coordinates [x, y]
    * @since 0.65.77
    */
-  async countTemplateStatus(tileBlob, tileCoords) {
+  async countTemplateStatus(tileBlob, tileCoords, options = null) {
     const timeStart = performance.now();
     const tilePrefixSet = options?.tilePrefixes ?? null;
     
@@ -670,8 +670,11 @@ export default class TemplateManager {
     const wrongStr = new Intl.NumberFormat().format(totalRequired - aggPainted); // Used to be aggWrong, but that is bugged
 
     this.overlay.handleDisplayStatus(
-      `Displaying ${enabledTemplateCount} template${enabledTemplateCount == 1 ? '' : 's'}.\nPainted ${paintedStr} / ${requiredStr} � Wrong ${wrongStr}`
+      `Displaying ${enabledTemplateCount} template${enabledTemplateCount == 1 ? '' : 's'}.\nPainted ${paintedStr} / ${requiredStr} • Wrong ${wrongStr}`
     );
+    if (typeof window !== 'undefined' && typeof window.buildTemplateFilterList === 'function') {
+      try { window.buildTemplateFilterList(); } catch (_) {}
+    }
 
     console.log('Cleaning up...', performance.now() - timeStart + ' ms');
 
@@ -1453,6 +1456,24 @@ export default class TemplateManager {
     await this.storeUserSettings();
   }
 
+  
+  /** A utility to check if template list should show remaining count.
+   * @returns {boolean}
+   * @since 0.90.0
+   */
+  isTemplateListRemainingEnabled() {
+    return this.userSettings?.templateListRemaining ?? true;
+  }
+
+  /** Sets the template list remaining count display toggle.
+   * @param {boolean} value - The value
+   * @since 0.90.0
+   */
+  async setTemplateListRemainingEnabled(value) {
+    this.userSettings.templateListRemaining = value;
+    await this.storeUserSettings();
+  }
+
   /** A utility to check if completed colors are set to be hidden.
    * @returns {boolean}
    * @since 0.85.27
@@ -2030,6 +2051,12 @@ export default class TemplateManager {
     this.completedColorsBitmapHi = 0;
   }
 }
+
+
+
+
+
+
 
 
 

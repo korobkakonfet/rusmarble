@@ -701,6 +701,13 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   padding: 2px 4px;
 }
 
+.bm-template-count {
+  font-size: 9px;
+  color: var(--bm-muted);
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
+
 #bm-chat-messages {
   font-size: 12px;
 }
