@@ -27,6 +27,38 @@ const safeCall = (fn) => {
 };
 
 const normalizeFlag = (value) => value === true || value === 'true' || value === 1 || value === '1';
+const SYNC_TIMEOUT_MS = 5000;
+
+const withTimeout = (promise, label) => new Promise((resolve, reject) => {
+  const timer = setTimeout(() => {
+    reject(new Error(`${label} timed out after ${SYNC_TIMEOUT_MS}ms`));
+  }, SYNC_TIMEOUT_MS);
+  promise.then((result) => {
+    clearTimeout(timer);
+    resolve(result);
+  }).catch((err) => {
+    clearTimeout(timer);
+    reject(err);
+  });
+});
+
+const getResponseData = (response, label) => {
+  if (!response) {
+    throw new Error(`${label} failed: empty response`);
+  }
+  if (response.response !== undefined && response.response !== null) {
+    return response.response;
+  }
+  const text = response.responseText || '';
+  if (!text) {
+    throw new Error(`${label} failed: empty response body`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    throw new Error(`${label} failed: invalid JSON`);
+  }
+};
 
 export function createTemplateSync({
   name,
@@ -45,6 +77,21 @@ export function createTemplateSync({
   autoSyncBuildTemplateFilterList,
   autoSyncBuildColorFilterList,
 } = {}) {
+  const logSync = (message, options = {}) => {
+    const { level = 'log', statusHandler = autoSyncOnStatus, err = null } = options;
+    const fullMessage = `Template Sync: ${message}`;
+    if (level === 'warn') {
+      consoleWarn(`%c${name}%c: ${fullMessage}`, consoleStyle, '', err ?? '');
+    } else {
+      consoleLog(`%c${name}%c: ${fullMessage}`, consoleStyle, '');
+    }
+    if (typeof statusHandler === 'function') {
+      try { statusHandler(fullMessage); } catch (_) {}
+    }
+  };
+  const gmRequestWithTimeout = (url, responseType, label) =>
+    withTimeout(gmRequest(url, responseType), label ?? `Request ${url}`);
+
   const waitForImport = async () => {
     if (!templateManager?.importPromise) return;
     try {
@@ -90,6 +137,9 @@ export function createTemplateSync({
       const templateName = template.remoteName || template.displayName;
       return !!templateName && !serverNames.has(templateName);
     });
+    if (missing.length) {
+      logSync(`Pruning ${missing.length} remote template${missing.length === 1 ? '' : 's'} missing from server list...`);
+    }
     for (const template of missing) {
       const templateName = template.remoteName || template.displayName || template.storageKey;
       consoleLog(
@@ -107,6 +157,7 @@ export function createTemplateSync({
     if (!Array.isArray(templateItems) || templateItems.length === 0) return;
     templateFlagSyncInFlight = true;
     try {
+      logSync('Syncing remote template flags...');
       let anyChanged = false;
       for (const entry of templateItems) {
         const entryMeta = typeof entry === "object" && entry !== null ? entry : null;
@@ -145,8 +196,12 @@ export function createTemplateSync({
             );
           }
           const safeName = encodeURIComponent(name);
-          const metaResponse = await gmRequest(`${templateSyncBaseUrl}/templates/${safeName}`, "json");
-          return metaResponse.response ?? JSON.parse(metaResponse.responseText || "{}");
+          const metaResponse = await gmRequestWithTimeout(
+            `${templateSyncBaseUrl}/templates/${safeName}`,
+            "json",
+            `Template meta "${name}"`
+          );
+          return getResponseData(metaResponse, `Template meta "${name}"`) ?? {};
         };
 
         const entryHasMeta = !!entryMeta && (
@@ -303,9 +358,10 @@ export function createTemplateSync({
       if (anyChanged) {
         await templateManager.storeTemplates();
         safeCall(buildTemplateFilterList);
+        logSync('Remote template flags updated.');
       }
     } catch (_) {
-      // Ignore polling errors to avoid noisy UI
+      logSync('Remote template flag sync failed.', { level: 'warn', err: _ });
     } finally {
       templateFlagSyncInFlight = false;
     }
@@ -315,10 +371,15 @@ export function createTemplateSync({
     if (templateUpdatePollInFlight) return;
     templateUpdatePollInFlight = true;
     try {
+      logSync('Checking server for template updates...');
       await waitForImport();
       await dedupeRemoteTemplatesOnce();
-      const listResponse = await gmRequest(`${templateSyncBaseUrl}/templates`, "json");
-      const listData = listResponse.response ?? JSON.parse(listResponse.responseText || "{}");
+      const listResponse = await gmRequestWithTimeout(
+        `${templateSyncBaseUrl}/templates`,
+        "json",
+        'Template list (poll)'
+      );
+      const listData = getResponseData(listResponse, 'Template list (poll)') ?? {};
       const templateItems = Array.isArray(listData)
         ? listData
         : (Array.isArray(listData?.['templates']) ? listData['templates'] : []);
@@ -400,8 +461,9 @@ export function createTemplateSync({
         templateUpdatePendingCount = changedCount;
         setTemplateUpdateBadge(changedCount);
       }
+      logSync(`Template update check finished. Pending updates: ${changedCount}.`);
     } catch (err) {
-      // Ignore polling errors to avoid noisy UI
+      logSync('Template update check failed.', { level: 'warn', err });
     } finally {
       templateUpdatePollInFlight = false;
     }
@@ -425,7 +487,9 @@ export function createTemplateSync({
     buildTemplateFilterList: buildTemplateFilterListOverride,
     buildColorFilterList: buildColorFilterListOverride,
   } = {}) => {
+    const statusHandler = typeof onStatus === 'function' ? onStatus : autoSyncOnStatus;
     try {
+      logSync('Starting template sync...', { statusHandler });
       await waitForImport();
       await dedupeRemoteTemplatesOnce();
       const assertResponseOk = (response, label) => {
@@ -437,15 +501,20 @@ export function createTemplateSync({
           throw new Error(`${label} failed: empty response`);
         }
       };
-      if (typeof onStatus === 'function') onStatus('Syncing templates from server...');
-      const listResponse = await gmRequest(`${templateSyncBaseUrl}/templates`, "json");
+      if (typeof statusHandler === 'function') statusHandler('Syncing templates from server...');
+      const listResponse = await gmRequestWithTimeout(
+        `${templateSyncBaseUrl}/templates`,
+        "json",
+        'Template list'
+      );
       assertResponseOk(listResponse, 'Template list');
-      const listData = listResponse.response ?? JSON.parse(listResponse.responseText || "{}");
+      const listData = getResponseData(listResponse, 'Template list') ?? {};
       const templateItems = Array.isArray(listData)
         ? listData
         : (Array.isArray(listData?.['templates']) ? listData['templates'] : []);
       if (!Array.isArray(templateItems) || templateItems.length === 0) {
-        if (typeof onStatus === 'function') onStatus('No server templates found.');
+        if (typeof statusHandler === 'function') statusHandler('No server templates found.');
+        logSync('No server templates found.', { statusHandler });
         return 0;
       }
       let importedCount = 0;
@@ -487,12 +556,18 @@ export function createTemplateSync({
         if (normalizedExistingUpdatedAt && normalizedUpdatedAt && normalizedExistingUpdatedAt === normalizedUpdatedAt) {
           continue;
         }
-        const metaResponse = await gmRequest(`${templateSyncBaseUrl}/templates/${safeName}`, "json");
+        logSync(`Fetching template meta for "${name}"...`, { statusHandler });
+        const metaResponse = await gmRequestWithTimeout(
+          `${templateSyncBaseUrl}/templates/${safeName}`,
+          "json",
+          `Template meta "${name}"`
+        );
         assertResponseOk(metaResponse, `Template meta "${name}"`);
-        const meta = metaResponse.response ?? JSON.parse(metaResponse.responseText || "{}");
+        const meta = getResponseData(metaResponse, `Template meta "${name}"`) ?? {};
         const coords = Array.isArray(meta?.['coords']) ? meta['coords'].map(Number) : null;
         if (!coords || coords.length !== 4 || coords.some(n => !Number.isFinite(n))) {
-          if (typeof onStatus === 'function') onStatus(`Skipped "${name}": invalid coords.`);
+          if (typeof statusHandler === 'function') statusHandler(`Skipped "${name}": invalid coords.`);
+          logSync(`Skipped "${name}": invalid coords.`, { statusHandler });
           continue;
         }
         const metaUpdatedAt = meta?.['updated_at'] ?? null;
@@ -507,7 +582,12 @@ export function createTemplateSync({
             await templateManager.deleteTemplate(template.storageKey);
           }
         }
-        const imageResponse = await gmRequest(`${templateSyncBaseUrl}/templates/${safeName}/image`, "blob");
+        logSync(`Fetching template image for "${name}"...`, { statusHandler });
+        const imageResponse = await gmRequestWithTimeout(
+          `${templateSyncBaseUrl}/templates/${safeName}/image`,
+          "blob",
+          `Template image "${name}"`
+        );
         assertResponseOk(imageResponse, `Template image "${name}"`);
         const imageBlob = imageResponse.response;
         if (!imageBlob) {
@@ -547,14 +627,15 @@ export function createTemplateSync({
       templateManager.createOverlayOnMap();
       safeCall(buildTemplateFilterListOverride ?? buildTemplateFilterList);
       safeCall(buildColorFilterListOverride);
-      if (typeof onStatus === 'function') {
-        onStatus(`Synced ${importedCount} template${importedCount === 1 ? '' : 's'}.`);
+      if (typeof statusHandler === 'function') {
+        statusHandler(`Synced ${importedCount} template${importedCount === 1 ? '' : 's'}.`);
       }
+      logSync(`Sync finished. Imported ${importedCount} template${importedCount === 1 ? '' : 's'}.`, { statusHandler });
       resetTemplateUpdateBadge();
       checkTemplateUpdates();
       return importedCount;
     } catch (err) {
-      consoleWarn(`%c${name}%c: Failed to sync server templates`, consoleStyle, '', err);
+      logSync('Failed to sync server templates.', { level: 'warn', err, statusHandler });
       const errorMessage = err?.message
         ? `Failed to sync server templates: ${err.message}`
         : 'Failed to sync server templates.';

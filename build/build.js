@@ -28,8 +28,10 @@ const localCssUrl = 'http://localhost:8000/dist/RusMarble.user.css';
 const prodCssUrl = 'https://raw.githubusercontent.com/korobkakonfet/rusmarble/refs/heads/custom-improve/dist/RusMarble.user.css';
 const cssBmFile = process.env.CSS_BM_FILE ?? (isGitHub ? prodCssUrl : localCssUrl);
 const localTemplateSyncUrl = 'http://localhost:8003';
-const prodTemplateSyncUrl = 'http://165.232.117.221:8003';
+const prodTemplateSyncUrl = 'https://wplace.zaebal.me';
 const templateSyncBaseUrl = process.env.TEMPLATE_SYNC_BASE_URL ?? (isGitHub ? prodTemplateSyncUrl : localTemplateSyncUrl);
+const prodChatWsUrl = 'wss://wplace.zaebal.me/ws/chat';
+const chatWsUrl = process.env.CHAT_WS_URL ?? (isGitHub ? prodChatWsUrl : '');
 
 console.log(`${consoleStyle.BLUE}Starting build...${consoleStyle.RESET}`);
 
@@ -85,6 +87,7 @@ const resultEsbuild = await esbuild.build({
   define: {
     __CSS_BM_FILE__: JSON.stringify(cssBmFile),
     __TEMPLATE_SYNC_BASE_URL__: JSON.stringify(templateSyncBaseUrl),
+    __CHAT_WS_URL__: JSON.stringify(chatWsUrl),
     __INLINE_CSS__: JSON.stringify(inlineCss)
   },
   format: 'iife', // What format the bundler bundles the code into

@@ -20,7 +20,9 @@ const CSS_BM_File = typeof __CSS_BM_FILE__ !== 'undefined' && __CSS_BM_FILE__
 const TEMPLATE_SYNC_BASE_URL = typeof __TEMPLATE_SYNC_BASE_URL__ !== 'undefined' && __TEMPLATE_SYNC_BASE_URL__
   ? __TEMPLATE_SYNC_BASE_URL__
   : "http://localhost:8003";
-const CHAT_WS_URL = `${TEMPLATE_SYNC_BASE_URL.replace(/^http(s?):\/\//, (_, secure) => (secure ? 'wss://' : 'ws://'))}/ws/chat`;
+const CHAT_WS_URL = typeof __CHAT_WS_URL__ !== 'undefined' && __CHAT_WS_URL__
+  ? __CHAT_WS_URL__
+  : `${TEMPLATE_SYNC_BASE_URL.replace(/^http(s?):\/\//, (_, secure) => (secure ? 'wss://' : 'ws://'))}/ws/chat`;
 const TEMPLATE_UPDATE_POLL_MS = 5000;
 const REMOTE_FLAGS_REFRESH_MS = 60000;
 const NOTIFICATION_POLL_MS = 3000;
@@ -2492,9 +2494,6 @@ async function buildOverlayMain() {
       .addDetails({'id': 'bm-contain-chat', 'textContent': 'Chat', 'style': 'border: 1px solid var(--bm-border); padding: 4px; border-radius: 4px; margin-top: 4px;'}, (instance, summary, details) => {
           details.open = false;
         })
-          .addDiv({'id': 'bm-chat-status', 'style': 'display: flex; align-items: center; justify-content: flex-end; font-size: small; margin-bottom: 4px;'})
-            .addSpan({'className': 'bm-chat-status-light', 'title': 'Chat status'}).buildElement()
-          .buildElement()
           .addDiv({'id': 'bm-chat-mod-tools', 'style': 'display: none; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 4px;'})
             .addSelect({'id': 'bm-chat-ban-type', 'style': 'width: 8ch;'}, (instance, select) => {
               const optIp = document.createElement('option');
