@@ -701,17 +701,6 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   padding: 2px 4px;
 }
 
-.bm-template-highlight .bm-highlight-badge {
-  display: inline-block;
-  font-size: 10px;
-  color: var(--bm-highlight-text);
-  border: 1px solid var(--bm-highlight-text-border);
-  border-radius: 10px;
-  padding: 0 4px;
-  margin-right: 4px;
-  letter-spacing: 0.08em;
-}
-
 #bm-chat-messages {
   font-size: 12px;
 }

@@ -2893,10 +2893,6 @@ async function buildOverlayMain() {
         }
         if (isHighlighted) {
           row.classList.add('bm-template-highlight');
-          const badge = document.createElement('span');
-          badge.className = 'bm-highlight-badge';
-          badge.textContent = 'HIGHLIGHT';
-          label.appendChild(badge);
         }
         label.appendChild(renameElement);
       label.appendChild(document.createTextNode(` • ${filledLabelText} / ${labelText}`));
