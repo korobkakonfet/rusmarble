@@ -24,6 +24,12 @@ const isGitHub = !!process.env?.GITHUB_ACTIONS; // Is this running in a GitHub A
 // const isGitHub = true;
 const isDebug = !isGitHub;
 // const isDebug = false;
+const localCssUrl = 'http://localhost:8000/dist/RusMarble.user.css';
+const prodCssUrl = 'https://raw.githubusercontent.com/korobkakonfet/rusmarble/refs/heads/custom-improve/dist/RusMarble.user.css';
+const cssBmFile = process.env.CSS_BM_FILE ?? (isGitHub ? prodCssUrl : localCssUrl);
+const localTemplateSyncUrl = 'http://localhost:8003';
+const prodTemplateSyncUrl = 'http://165.232.117.221:8003';
+const templateSyncBaseUrl = process.env.TEMPLATE_SYNC_BASE_URL ?? (isGitHub ? prodTemplateSyncUrl : localTemplateSyncUrl);
 
 console.log(`${consoleStyle.BLUE}Starting build...${consoleStyle.RESET}`);
 
@@ -69,12 +75,18 @@ await esbuild.build({
 if (blueMetaContent) {
   fs.copyFileSync('dist/RusMarble.user.css', 'dist/BlueMarble.user.css');
 }
+const inlineCss = fs.readFileSync('dist/RusMarble.user.css', 'utf8');
 
 // Compiles the JS files
 const resultEsbuild = await esbuild.build({
   entryPoints: ['src/main.js'], // "Infect" the files from this point (it spreads from this "patient 0")
   bundle: true, // Should the code be bundled?
   outfile: 'dist/RusMarble.user.js', // The file the bundled code is exported to
+  define: {
+    __CSS_BM_FILE__: JSON.stringify(cssBmFile),
+    __TEMPLATE_SYNC_BASE_URL__: JSON.stringify(templateSyncBaseUrl),
+    __INLINE_CSS__: JSON.stringify(inlineCss)
+  },
   format: 'iife', // What format the bundler bundles the code into
   target: 'es2020', // What is the minimum version/year that should be supported? When omited, it attempts to support backwards compatability with legacy browsers
   platform: 'browser', // The platform the bundled code will be operating on

@@ -1,6 +1,9 @@
-﻿import Template from "./Template";
+import Template from "./Template";
 import { base64ToUint8, numberToEncoded, cleanUpCanvas, rgbToMeta, sortByOptions, testCanvasSize, getCurrentColor, sleep } from "./utils";
 import { themeList, addTemplateCanvas, removeLayer, doAfterMapFound, forceRefreshTiles } from './utilsMaptiler.js';
+
+const normalizeFlagValue = (value) => value === true || value === 'true' || value === 1 || value === '1';
+
 
 /** Manages the template system.
  * This class handles all external requests for template modification, creation, and analysis.
@@ -74,6 +77,7 @@ export default class TemplateManager {
     this.userSettings = {}; // User settings
     this.hideLockedColors = false; 
     this.largestSeenSortID = 0; // Even a safer approach: recording the largest storage Keys that have been used in this session. Don't remove anything here.
+    this.importPromise = Promise.resolve();
   }
 
   /** Retrieves the pixel art canvas.
@@ -200,9 +204,9 @@ export default class TemplateManager {
       template.remoteCoords = Array.isArray(options.remoteCoords)
         ? options.remoteCoords.map(Number)
         : null;
-      template.remoteToTop = options.remoteToTop === true;
+      template.remoteToTop = normalizeFlagValue(options.remoteToTop);
       template.remoteToTopAt = options.remoteToTopAt || null;
-      template.remoteHighlighted = options.remoteHighlighted === true;
+      template.remoteHighlighted = normalizeFlagValue(options.remoteHighlighted);
       template.remoteHighlightedAt = options.remoteHighlightedAt || null;
       template.remoteOrder = Number.isFinite(options.remoteOrder) ? options.remoteOrder : null;
       this.templatesJSON.templates[storageKey].remote = true;
@@ -571,6 +575,7 @@ export default class TemplateManager {
                   paletteStats[key].examplesEnabled.push(example);
                 }
               } else {
+                const exampleMax = (this.userSettings?. ?? false) ? 1 << 20 : 10000;
                 // missing count >= 1
                 paletteStats[key].missing++;
                 // if (paletteStats[key].examples.length < exampleMax) {
@@ -664,7 +669,7 @@ export default class TemplateManager {
     const wrongStr = new Intl.NumberFormat().format(totalRequired - aggPainted); // Used to be aggWrong, but that is bugged
 
     this.overlay.handleDisplayStatus(
-      `Displaying ${enabledTemplateCount} template${enabledTemplateCount == 1 ? '' : 's'}.\nPainted ${paintedStr} / ${requiredStr} • Wrong ${wrongStr}`
+      `Displaying ${enabledTemplateCount} template${enabledTemplateCount == 1 ? '' : 's'}.\nPainted ${paintedStr} / ${requiredStr} � Wrong ${wrongStr}`
     );
 
     console.log('Cleaning up...', performance.now() - timeStart + ' ms');
@@ -902,7 +907,10 @@ export default class TemplateManager {
     // If the passed in JSON is a Blue Marble template object...
     if (json?.whoami == 'BlueMarble' || json?.whoami == 'RusMarble') {
       this.templatesJSON = json;
-      this.#parseRusMarble(json); // ...parse the template object as Rus Marble
+      this.importPromise = this.#parseRusMarble(json)
+        .catch((err) => {
+          console.warn('Failed to import templates', err);
+        });
     }
   }
 
@@ -1013,9 +1021,9 @@ export default class TemplateManager {
             template.remoteFlagsCheckedAt = templateValue.remoteFlagsCheckedAt ?? null;
             template.remoteFlagsCheckedAtLocal = templateValue.remoteFlagsCheckedAtLocal ?? null;
             template.remoteCoords = templateValue.remoteCoords ?? null;
-            template.remoteToTop = templateValue.remoteToTop === true;
+            template.remoteToTop = normalizeFlagValue(templateValue.remoteToTop);
             template.remoteToTopAt = templateValue.remoteToTopAt ?? null;
-            template.remoteHighlighted = templateValue.remoteHighlighted === true;
+            template.remoteHighlighted = normalizeFlagValue(templateValue.remoteHighlighted);
             template.remoteHighlightedAt = templateValue.remoteHighlightedAt ?? null;
             template.remoteOrder = templateValue.remoteOrder ?? null;
           // Construct colorPalette from paletteMap
@@ -1800,6 +1808,40 @@ export default class TemplateManager {
     await this.storeUserSettings();
   }
 
+  /** Whether the Ruspixel flag background is enabled for pixel info.
+   * @returns {boolean}
+   * @since 0.87.6
+   */
+  isRuspixelFlagEnabled() {
+    return this.userSettings?.ruspixelFlagEnabled ?? true;
+  }
+
+  /** Sets the ruspixelFlagEnabled flag.
+   * @param {boolean} value - The value
+   * @since 0.87.6
+   */
+  async setRuspixelFlagEnabled(value) {
+    this.userSettings.ruspixelFlagEnabled = value;
+    await this.storeUserSettings();
+  }
+
+  /** Whether auto-sync for remote templates is enabled.
+   * @returns {boolean}
+   * @since 0.87.6
+   */
+  isTemplateAutoSyncEnabled() {
+    return this.userSettings?.autoSyncTemplates ?? false;
+  }
+
+  /** Sets auto-sync for remote templates.
+   * @param {boolean} value - The value
+   * @since 0.87.6
+   */
+  async setTemplateAutoSyncEnabled(value) {
+    this.userSettings.autoSyncTemplates = value;
+    await this.storeUserSettings();
+  }
+
   /** Sets the `extraColorsBitmap` to an updated mask, refresh the color filter if changed.
    * @param {number} value - The value to set the mask to
    * @since 0.85.17
@@ -1854,4 +1896,6 @@ export default class TemplateManager {
     this.completedColorsBitmapHi = 0;
   }
 }
+
+
 

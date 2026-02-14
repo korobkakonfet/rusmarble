@@ -333,9 +333,59 @@ export default class ApiManager {
       attachCopyHandler(displayCoords2);
     }
 
+    this.updatePixelInfoAllianceBackground();
     this.#maybeTriggerEasterEgg();
     this.updateAddLineTemplateButton();
     this.updateAddCircleTemplateButton();
+  }
+
+  /** Updates the pixel info window background when the painter alliance is Ruspixel.
+   *
+   * @since 0.87.6
+  */
+  updatePixelInfoAllianceBackground() {
+    if (this.templateManager?.isRuspixelFlagEnabled && !this.templateManager.isRuspixelFlagEnabled()) {
+      const closeButton = this.getCloseButton();
+      const infoRoot =
+        closeButton?.parentElement?.parentElement ||
+        closeButton?.closest('dialog') ||
+        closeButton?.closest('.modal') ||
+        closeButton?.parentElement;
+      const infoCard =
+        closeButton?.closest('.rounded-t-box') ||
+        infoRoot?.querySelector('.rounded-t-box');
+      if (infoCard) {
+        infoCard.classList.remove('bm-ruspixel-flag');
+      }
+      if (infoRoot) {
+        infoRoot.querySelectorAll('.bm-ruspixel-flag-text').forEach(el => el.classList.remove('bm-ruspixel-flag-text'));
+      }
+      return;
+    }
+    const closeButton = this.getCloseButton();
+    if (!closeButton) return;
+    const infoRoot =
+      closeButton.parentElement?.parentElement ||
+      closeButton.closest('dialog') ||
+      closeButton.closest('.modal') ||
+      closeButton.parentElement;
+    if (!infoRoot) return;
+    const infoCard =
+      closeButton.closest('.rounded-t-box') ||
+      infoRoot.querySelector('.rounded-t-box');
+    if (!infoCard) return;
+    const allianceButton = Array.from(infoRoot.querySelectorAll('button'))
+      .find(button => {
+        if (!button.classList.contains('btn')) return false;
+        if (button.classList.contains('btn-circle')) return false;
+        return /\bruspixel\b/i.test(button.textContent || '');
+      });
+    const isRuspixel = !!allianceButton;
+    infoCard.classList.toggle('bm-ruspixel-flag', isRuspixel);
+    infoRoot.querySelectorAll('.bm-ruspixel-flag-text').forEach(el => el.classList.remove('bm-ruspixel-flag-text'));
+    if (isRuspixel) {
+      allianceButton.classList.add('bm-ruspixel-flag-text');
+    }
   }
 
   #maybeTriggerEasterEgg() {
