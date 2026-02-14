@@ -1,6 +1,6 @@
 import Template from "./Template";
 import { base64ToUint8, numberToEncoded, cleanUpCanvas, rgbToMeta, sortByOptions, testCanvasSize, getCurrentColor, sleep } from "./utils";
-import { themeList, addTemplateCanvas, removeLayer, doAfterMapFound, forceRefreshTiles } from './utilsMaptiler.js';
+import { themeList, addTemplateCanvas, removeLayer, doAfterMapFound, forceRefreshTiles, coordsGeoCoordsToTileCoords, getMapBounds } from './utilsMaptiler.js';
 
 const normalizeFlagValue = (value) => value === true || value === 'true' || value === 1 || value === '1';
 
@@ -327,6 +327,7 @@ export default class TemplateManager {
    */
   async countTemplateStatus(tileBlob, tileCoords) {
     const timeStart = performance.now();
+    const tilePrefixSet = options?.tilePrefixes ?? null;
     
     // Format tile coordinates with proper padding for consistent lookup
     const tileCoordsPadded = tileCoords[0].toString().padStart(4, '0') + ',' + tileCoords[1].toString().padStart(4, '0');
@@ -685,15 +686,16 @@ export default class TemplateManager {
     return tileBlob;
   }
 
-  /** Add the template overlay layer to the map
+    /** Add the template overlay layer to the map
    * @param {number?} sortID
    * @since 0.86.1
    */
-  async createOverlayOnMap(sortID = null) {
+  async createOverlayOnMap(sortID = null, options = null) {
     if (!this._overlayRebuildState) {
       this._overlayRebuildState = {
         timer: null,
         pendingSortID: undefined,
+        pendingOptions: null,
         promise: null,
         resolve: null,
         reject: null,
@@ -703,6 +705,21 @@ export default class TemplateManager {
     }
 
     const state = this._overlayRebuildState;
+    let normalizedOptions = options ? { ...options } : null;
+    if (normalizedOptions?.visibleFirst && !normalizedOptions.tilePrefixes) {
+      const visiblePrefixes = this.getVisibleTilePrefixes();
+      if (visiblePrefixes && visiblePrefixes.size) {
+        normalizedOptions.tilePrefixes = visiblePrefixes;
+        normalizedOptions.followUpFull = true;
+        if (normalizedOptions.immediate === undefined) normalizedOptions.immediate = true;
+      } else {
+        normalizedOptions = null;
+      }
+    }
+    if (normalizedOptions?.tilePrefixes && !(normalizedOptions.tilePrefixes instanceof Set)) {
+      normalizedOptions.tilePrefixes = new Set(normalizedOptions.tilePrefixes);
+    }
+
     const mergeSortId = (current, next) => {
       if (next === null) return null;
       if (current === undefined) return next;
@@ -711,6 +728,7 @@ export default class TemplateManager {
     };
 
     state.pendingSortID = mergeSortId(state.pendingSortID, sortID);
+    state.pendingOptions = normalizedOptions;
 
     if (state.running) {
       state.needsRun = true;
@@ -733,9 +751,12 @@ export default class TemplateManager {
       state.timer = null;
       state.running = true;
       const pending = state.pendingSortID;
+      const pendingOptions = state.pendingOptions;
+      const followUpFull = !!(pendingOptions?.followUpFull && pendingOptions?.tilePrefixes);
       state.pendingSortID = undefined;
+      state.pendingOptions = null;
       try {
-        await this._createOverlayOnMapInternal(pending);
+        await this._createOverlayOnMapInternal(pending, pendingOptions);
         state.resolve?.();
       } catch (err) {
         state.reject?.(err);
@@ -746,20 +767,31 @@ export default class TemplateManager {
         state.running = false;
         if (state.needsRun) {
           state.needsRun = false;
-          this.createOverlayOnMap(state.pendingSortID ?? null);
+          this.createOverlayOnMap(state.pendingSortID ?? null, state.pendingOptions ?? null);
+        } else if (followUpFull) {
+          this.createOverlayOnMap(pending ?? null);
         }
       }
-    }, 100);
+    }, normalizedOptions?.immediate ? 0 : 100);
 
     return state.promise;
+  }
+
+  /** Add the template overlay layer to the map for visible tiles first, then full.
+   * @param {number?} sortID
+   * @since 0.90.0
+   */
+  async createOverlayOnMapVisibleFirst(sortID = null) {
+    return this.createOverlayOnMap(sortID, { visibleFirst: true, followUpFull: true, immediate: true });
   }
 
   /** Add the template overlay layer to the map (no debounce)
    * @param {number?} sortID
    * @since 0.86.1
    */
-  async _createOverlayOnMapInternal(sortID = null) {
+  async _createOverlayOnMapInternal(sortID = null, options = null) {
     const timeStart = performance.now();
+    const tilePrefixSet = options?.tilePrefixes ?? null;
 
     console.log(`Start creating overlay for template ${sortID}...`, performance.now() - timeStart + ' ms');
 
@@ -785,7 +817,11 @@ export default class TemplateManager {
       const displayMode = this.getTemplateDisplayMode();
       const drawMultResult = this.getTemplateDrawSize(displayMode);
       const maskPoints = this.getTemplateMaskPoints(displayMode, drawMultResult, template);
-      for (const tileKey of Object.keys(template.chunked)) {
+      const tileKeys = this._getTemplateTileKeys(template, tilePrefixSet);
+      if (!tileKeys.length) {
+        continue;
+      }
+      for (const tileKey of tileKeys) {
         console.log(`Handling tile chunk ${tileKey}...`, performance.now() - timeStart + ' ms');
         const coords = tileKey.split(','); // [x, y, x, y] Tile/pixel coordinates
 
@@ -812,7 +848,7 @@ export default class TemplateManager {
 
         try {
           // If none of the template colors are disabled, then draw the image normally
-          if (!hasColorDisabled && drawMultTemplate === drawMultResult) {
+          if (!hasColorDisabled && drawMultTemplate === drawMultResult && displayMode !== 'fill') {
             // the template has the same zoom as the tile
             // just copy the bitmap
             resultContext.drawImage(templateTileBitmap, 0, 0);
@@ -1182,6 +1218,95 @@ export default class TemplateManager {
     return displayedColors.join(';') + '||' + involvedTemplates.map(t => t.storageKey + "," + t.storageTimeString + "," + (+(t.enabled ?? true))).join(';');
   }
 
+  /** Returns tile prefixes for currently visible map bounds (with padding).
+   * @param {number} pad - Tiles to pad around the viewport.
+   * @returns {Set<string> | null}
+   * @since 0.90.0
+   */
+  getVisibleTilePrefixes(pad = 1) {
+    const bounds = getMapBounds?.();
+    if (!bounds || !bounds.sw || !bounds.ne) return null;
+    const sw = bounds.sw;
+    const ne = bounds.ne;
+    if (!Array.isArray(sw) || !Array.isArray(ne)) return null;
+    const [tileSW] = coordsGeoCoordsToTileCoords(sw[0], sw[1], true);
+    const [tileNE] = coordsGeoCoordsToTileCoords(ne[0], ne[1], true);
+    if (!tileSW || !tileNE) return null;
+
+    let minY = Math.min(tileSW[1], tileNE[1]);
+    let maxY = Math.max(tileSW[1], tileNE[1]);
+    minY = Math.max(0, minY - pad);
+    maxY = Math.min(2047, maxY + pad);
+
+    const ranges = [];
+    const westLng = sw[1];
+    const eastLng = ne[1];
+    if (westLng <= eastLng) {
+      let minX = Math.min(tileSW[0], tileNE[0]);
+      let maxX = Math.max(tileSW[0], tileNE[0]);
+      minX = Math.max(0, minX - pad);
+      maxX = Math.min(2047, maxX + pad);
+      ranges.push([minX, maxX]);
+    } else {
+      let minX1 = Math.max(0, tileSW[0] - pad);
+      let maxX1 = 2047;
+      let minX2 = 0;
+      let maxX2 = Math.min(2047, tileNE[0] + pad);
+      ranges.push([minX1, maxX1], [minX2, maxX2]);
+    }
+
+    const maxTiles = 6000;
+    let totalTiles = 0;
+    for (const [minX, maxX] of ranges) {
+      totalTiles += (maxX - minX + 1) * (maxY - minY + 1);
+      if (!Number.isFinite(totalTiles) || totalTiles > maxTiles) return null;
+    }
+
+    const result = new Set();
+    for (const [minX, maxX] of ranges) {
+      for (let y = minY; y <= maxY; y++) {
+        const yStr = y.toString().padStart(4, '0');
+        for (let x = minX; x <= maxX; x++) {
+          result.add(`${x.toString().padStart(4, '0')},${yStr}`);
+        }
+      }
+    }
+    return result;
+  }
+
+  _getTileKeysByPrefixMap(template) {
+    const version = template.storageTimeString;
+    if (template._tileKeysByPrefix && template._tileKeysByPrefixVersion === version) {
+      return template._tileKeysByPrefix;
+    }
+    const map = new Map();
+    for (const key of Object.keys(template.chunked)) {
+      const prefix = key.split(',').slice(0, 2).join(',');
+      let list = map.get(prefix);
+      if (!list) {
+        list = [];
+        map.set(prefix, list);
+      }
+      list.push(key);
+    }
+    template._tileKeysByPrefix = map;
+    template._tileKeysByPrefixVersion = version;
+    return map;
+  }
+
+  _getTemplateTileKeys(template, prefixSet) {
+    const keys = Object.keys(template.chunked);
+    if (!prefixSet || prefixSet.size === 0) return keys;
+    const prefixMap = this._getTileKeysByPrefixMap(template);
+    const result = [];
+    for (const prefix of prefixSet) {
+      const list = prefixMap.get(prefix);
+      if (list && list.length) {
+        result.push(...list);
+      }
+    }
+    return result;
+  }
   /** Gets the overall color progress in all template tiles
    * @since 0.86.4
    */
@@ -1609,7 +1734,7 @@ export default class TemplateManager {
   getTemplateDisplayMode() {
     const raw = String(this.userSettings?.templateDisplay ?? '').toLowerCase();
     if (raw === 'cross-z') return 'cross-z-9';
-    if (raw === 'dot' || raw === 'cross' || raw === 'cross-z-9' || raw === 'cross-z-11') return raw;
+    if (raw === 'dot' || raw === 'fill' || raw === 'cross' || raw === 'cross-z-9' || raw === 'cross-z-11') return raw;
     const legacy = this.userSettings?.legacyDisplay ?? this.userSettings?.isLegacyDisplay ?? false;
     return legacy ? 'dot' : 'cross';
   }
@@ -1632,7 +1757,7 @@ export default class TemplateManager {
    */
   async setTemplateDisplayMode(value) {
     const raw = String(value ?? '').toLowerCase();
-    const mode = (raw === 'dot' || raw === 'cross' || raw === 'cross-z-9' || raw === 'cross-z-11')
+    const mode = (raw === 'dot' || raw === 'fill' || raw === 'cross' || raw === 'cross-z-9' || raw === 'cross-z-11')
       ? raw
       : 'cross';
     this.userSettings.templateDisplay = mode;
@@ -1653,6 +1778,15 @@ export default class TemplateManager {
     if (mode === 'dot') {
       const center = (size - 1) >> 1;
       return [[center, center]];
+    }
+    if (mode === 'fill') {
+      const points = [];
+      for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+          points.push([x, y]);
+        }
+      }
+      return points;
     }
     if (mode.startsWith('cross-z')) {
       const points = [];

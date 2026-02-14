@@ -146,6 +146,20 @@ export function getPixelPerWplacePixel() {
   });
 }
 
+/** Get the current map bounds.
+ * @returns {{sw: number[], ne: number[]} | null}
+ * @since 0.90.0
+ */
+export function getMapBounds() {
+  return controlMapTiler(map => {
+    const bounds = map["getBounds"]?.();
+    if (!bounds) return null;
+    const sw = bounds.getSouthWest ? bounds.getSouthWest() : bounds._sw;
+    const ne = bounds.getNorthEast ? bounds.getNorthEast() : bounds._ne;
+    if (!sw || !ne) return null;
+    return { sw: [sw.lat, sw.lng], ne: [ne.lat, ne.lng] };
+  });
+}
 export var bmCanvas = {
 
 }; // sourceID => coords
@@ -661,3 +675,6 @@ export function getCurrentTileSize() {
   }
   return tileSize;
 }
+
+
+

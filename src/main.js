@@ -39,6 +39,7 @@ const layoutThemeOptions = {
 };
 const templateDisplayOptions = {
   "cross": "Cross",
+  "fill": "Fill",
   "cross-z-9": "Cross (Z, 9x9)",
   "cross-z-11": "Cross (Z, 11x11)",
   "dot": "Dot (Original)"
@@ -1180,7 +1181,7 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
       'lineTemplateButton': false, // Hidden in settings
       'ruspixelFlagEnabled': true,
       'autoSyncTemplates': false,
-      'chatDisabled': false,
+      'chatDisabled': true,
     });
     templateManager.storeUserSettings();
   } else {
@@ -1999,6 +2000,8 @@ async function buildOverlayMain() {
                 await templateManager.setTemplateDisplayMode(nextMode);
                 if (nextMode === 'dot') {
                   instance.handleDisplayStatus("Switched to the Dot Template Display.");
+                } else if (nextMode === 'fill') {
+                  instance.handleDisplayStatus("Switched to the Fill Template Display.");
                 } else if (nextMode.startsWith('cross-z')) {
                   instance.handleDisplayStatus("Switched to the Z-Cross Template Display.");
                 } else {
@@ -2186,7 +2189,7 @@ async function buildOverlayMain() {
                 Object.values(t.colorPalette).forEach(v => v.enabled = true);
               })
               syncToggleList();
-              templateManager.createOverlayOnMap();
+              templateManager.createOverlayOnMapVisibleFirst();
               buildColorFilterList();
               instance.handleDisplayStatus('Enabled all colors');
               if (templateManager.isErrorMapShown() && templateManager.isErrorMapOnlyEnabledColorsShown()) {
@@ -2202,7 +2205,7 @@ async function buildOverlayMain() {
               })
               syncToggleList();
               removeLayer("overlay");
-              templateManager.createOverlayOnMap();
+              templateManager.createOverlayOnMapVisibleFirst();
               buildColorFilterList();
               instance.handleDisplayStatus('Disabled all colors');
               if (templateManager.isErrorMapShown() && templateManager.isErrorMapOnlyEnabledColorsShown()) {
@@ -2223,7 +2226,7 @@ async function buildOverlayMain() {
                 });
               });
               syncToggleList();
-              templateManager.createOverlayOnMap();
+              templateManager.createOverlayOnMapVisibleFirst();
               buildColorFilterList();
               instance.handleDisplayStatus('Disabled paid colors');
               if (templateManager.isErrorMapShown() && templateManager.isErrorMapOnlyEnabledColorsShown()) {
@@ -2435,7 +2438,7 @@ async function buildOverlayMain() {
   applyLayoutTheme(templateManager.getLayoutTheme());
 
   // ------- Helper: Build the color filter list -------
-  window.syncToggleList = function syncToggleList() {
+  const syncToggleList = () => {
     try {
       (templateManager.templatesArray ?? []).forEach(t => {
         const key = t.storageKey;
@@ -2448,9 +2451,10 @@ async function buildOverlayMain() {
       // persist immediately
       templateManager.storeTemplates();
     } catch (_) {};
-  }
+  };
+  window.syncToggleList = syncToggleList;
 
-  window.buildColorFilterList = function buildColorFilterList() {
+  const buildColorFilterList = () => {
     const listContainer = document.querySelector('#bm-colorfilter-list');
     const toggleStatus = templateManager.getPaletteToggledStatus();
     const hideCompleted = templateManager.areCompletedColorsHidden();
@@ -2575,7 +2579,7 @@ async function buildOverlayMain() {
         })
         overlayMain.handleDisplayStatus(`${toggle.checked ? 'Enabled' : 'Disabled'} ${rgb}`);
         syncToggleList();
-        templateManager.createOverlayOnMap();
+        templateManager.createOverlayOnMapVisibleFirst();
         if (templateManager.isErrorMapShown() && templateManager.isErrorMapOnlyEnabledColorsShown()) {
           forceRefreshTiles();
         };
@@ -2599,8 +2603,9 @@ async function buildOverlayMain() {
       }
     }
   };
+  window.buildColorFilterList = buildColorFilterList;
 
-  window.buildTemplateFilterList = function buildTemplateFilterList() {
+  const buildTemplateFilterList = () => {
     const listContainer = document.querySelector('#bm-templatefilter-list');
     consoleLog(templateManager);
     if (templateManager.templatesArray?.length === 0) {
@@ -2777,8 +2782,9 @@ async function buildOverlayMain() {
       listContainer.appendChild(row);
     }
   };
+  window.buildTemplateFilterList = buildTemplateFilterList;
 
-  window.buildEventList = function buildEventList() {
+  const buildEventList = () => {
     const listContainer = document.querySelector('#bm-eventitem-list');
     const showClaimed = templateManager.isEventClaimedShown();
     const showUnavailable = templateManager.isEventUnavailableShown();
@@ -2899,17 +2905,19 @@ async function buildOverlayMain() {
     });
 
   };
+  window.buildEventList = buildEventList;
 
-  window.forceUpdateTheme = function forceUpdateTheme() {
+  const forceUpdateTheme = () => {
     if (templateManager.isThemeOverridden()) {
       setTheme(templateManager.getCurrentTheme());
     } else {
       setTheme(Object.keys(themeList)[0]);
     }
   };
+  window.forceUpdateTheme = forceUpdateTheme;
 
   // a workaround to force Map.prototype to be called
-  window.forceClickCenter = function forceClickCenter() {
+  const forceClickCenter = () => {
     if (!isMapTilerLoaded()) {
       if (!forceClickCenter.clickCount) forceClickCenter.clickCount = 0;
       // Try at most 10 times
@@ -2932,7 +2940,8 @@ async function buildOverlayMain() {
       };
       setTimeout(forceClickCenter, 100);
     };
-  }
+  };
+  window.forceClickCenter = forceClickCenter;
 
   // Listen for template creation/import completion to (re)build palette list
   window.addEventListener('message', (event) => {
