@@ -28,6 +28,8 @@ const TEMPLATE_UPDATE_POLL_MS = 5000;
 const REMOTE_FLAGS_REFRESH_MS = 60000;
 const NOTIFICATION_POLL_MS = 3000;
 const NOTIFICATION_ROTATE_MS = 10000;
+const CHAT_MAX_USER_LEN = 12;
+const CHAT_MAX_TEXT_LEN = 100;
 let chatSocket = null;
 let chatInitialized = false;
 const layoutThemeOptions = {
@@ -449,13 +451,28 @@ function initChat() {
   };
 
   const getModCode = () => modCodeInput?.value?.trim() || '';
+  const getUserName = () => normalizeUser(userInput?.value || document.getElementById('bm-user-name')?.textContent);
+  const getDeviceId = () => {
+    try {
+      return localStorage.getItem('device_id') || '';
+    } catch (_) {
+      return '';
+    }
+  };
+  const getAuthToken = () => {
+    try {
+      return localStorage.getItem('auth_token') || '';
+    } catch (_) {
+      return '';
+    }
+  };
   const clipText = (value, max = 120) => {
     const text = String(value ?? '');
     if (text.length <= max) return text;
     return `${text.slice(0, max - 3)}...`;
   };
   const normalizeUser = (value) => {
-    const name = String(value ?? '').trim();
+    const name = String(value ?? '').trim().slice(0, CHAT_MAX_USER_LEN);
     return name || 'anon';
   };
   const prunePendingReplies = (now = Date.now()) => {
@@ -681,8 +698,17 @@ function initChat() {
   };
 
   const appendMessage = (payload) => {
+    // Normalize user field from possible server keys for compatibility; prefer non-anon usernames when provided
+    const candidateUser = payload?.user ?? payload?.username ?? payload?.name ?? payload?.Lt;
+    const fallbackUser = payload?.username ?? payload?.name ?? payload?.Lt;
+    const resolvedUser = (candidateUser && candidateUser !== 'anon')
+      ? candidateUser
+      : (fallbackUser && fallbackUser !== 'anon')
+        ? fallbackUser
+        : 'anon';
+    payload.user = normalizeUser(resolvedUser);
     applyPendingReply(payload);
-    const user = payload?.user || 'anon';
+    const user = payload.user;
     const text = payload?.text || '';
     const ts = payload?.ts ? new Date(payload.ts) : new Date();
     const line = document.createElement('div');
@@ -761,7 +787,23 @@ function initChat() {
       return;
     }
     setStatus('connecting');
-    chatSocket = new WebSocket(CHAT_WS_URL);
+    const buildChatUrl = () => {
+      try {
+        const url = new URL(CHAT_WS_URL);
+        url.searchParams.set('user', getUserName());
+        const deviceId = getDeviceId();
+        if (deviceId) {
+          url.searchParams.set('device_id', deviceId);
+        }
+        return url.toString();
+      } catch (_) {
+        const sep = CHAT_WS_URL.includes('?') ? '&' : '?';
+        const deviceId = getDeviceId();
+        const extra = deviceId ? `&device_id=${encodeURIComponent(deviceId)}` : '';
+        return `${CHAT_WS_URL}${sep}user=${encodeURIComponent(getUserName())}${extra}`;
+      }
+    };
+    chatSocket = new WebSocket(buildChatUrl());
     chatSocket.onopen = () => {
       reconnectAttempts = 0;
       setStatus('connected');
@@ -786,14 +828,32 @@ function initChat() {
   };
 
   const sendMessage = () => {
-    const text = textInput.value.trim();
+    let text = textInput.value.trim();
     if (!text) return;
-    const user = userInput?.value?.trim() || 'anon';
+    if (text.length > CHAT_MAX_TEXT_LEN) {
+      text = text.slice(0, CHAT_MAX_TEXT_LEN);
+      textInput.value = text;
+    }
+    const user = getUserName();
+    if (userInput && userInput.value.trim() !== user) {
+      userInput.value = user;
+    }
     if (!chatSocket || chatSocket.readyState !== WebSocket.OPEN) {
       setStatus('disconnected');
       return;
     }
-    const payload = { user, text };
+    const device_id = getDeviceId();
+    const auth_token = getAuthToken();
+    const payload = {
+      type: 'chat',
+      text,
+      user,
+      username: user,
+      name: user,
+      Lt: user,
+      ...(device_id ? { device_id } : {}),
+      ...(auth_token ? { auth_token } : {})
+    };
     if (replyToId) {
       payload.reply_to = replyToId;
       queuePendingReply(user, text, replyToId);
@@ -847,20 +907,28 @@ function initChat() {
     textInput.focus();
   });
   userInput?.addEventListener('change', () => {
-    GM.setValue('bmChatUser', userInput.value.trim());
+    const user = getUserName();
+    userInput.value = user;
+    GM.setValue('bmChatUser', user);
+    // Reconnect to apply new username via query params; server doesn't support identify frames
+    try { chatSocket?.close(); } catch (_) {}
+    connect();
   });
 
-  GM.getValue('bmChatUser', '').then((savedUser) => {
+  Promise.all([
+    GM.getValue('bmChatUser', '').catch(() => ''),
+    GM.getValue('bmChatModCode', '').catch(() => '')
+  ]).then(([savedUser, savedCode]) => {
     if (userInput && !userInput.value) {
       const fallback = document.getElementById('bm-user-name')?.textContent?.trim() || '';
-      userInput.value = savedUser || fallback;
+      userInput.value = normalizeUser(savedUser || fallback);
     }
-  });
-  GM.getValue('bmChatModCode', '').then((savedCode) => {
     if (modCodeInput && !modCodeInput.value) {
       modCodeInput.value = savedCode || '';
       renderModerationControls();
     }
+  }).finally(() => {
+    setChatEnabled(!isChatDisabled());
   });
 
   document.addEventListener('keydown', (event) => {
@@ -886,8 +954,6 @@ function initChat() {
       textInput.focus();
     }
   });
-
-  setChatEnabled(!isChatDisabled());
 }
 
 /** What code to execute instantly in the client (webpage) to spy on fetch calls.
@@ -2187,9 +2253,9 @@ async function buildOverlayMain() {
             .addButton({'id': 'bm-chat-reply-clear', 'textContent': '✖', 'style': 'float: right; font-size: 10px; padding: 0 4px;'}).buildElement()
           .buildElement()
           .addDiv({'id': 'bm-chat-input-row', 'style': 'display: flex; gap: 4px; align-items: center;'})
-            .addInput({'type': 'text', 'id': 'bm-chat-user', 'placeholder': 'User', 'maxlength': 32, 'style': 'width: 8ch;'}).buildElement()
+            .addInput({'type': 'text', 'id': 'bm-chat-user', 'placeholder': 'User', 'maxlength': CHAT_MAX_USER_LEN, 'style': 'width: 12ch;'}).buildElement()
             .addInput({'type': 'password', 'id': 'bm-chat-modcode', 'placeholder': 'Code', 'maxlength': 64, 'style': 'width: 8ch; display: none;'}).buildElement()
-            .addInput({'type': 'text', 'id': 'bm-chat-text', 'placeholder': 'Message', 'maxlength': 280, 'style': 'flex: 1;'}).buildElement()
+            .addInput({'type': 'text', 'id': 'bm-chat-text', 'placeholder': 'Message', 'maxlength': CHAT_MAX_TEXT_LEN, 'style': 'flex: 1;'}).buildElement()
           .buildElement()
         .buildElement()
       // Event UI
