@@ -685,12 +685,12 @@ span.bm-templatename:hover, a.bm-templatename:focus {
 
 .bm-template-remote .bm-remote-badge {
   display: inline-block;
-  font-size: 10px;
+  font-size: 8px;
   color: var(--bm-accent);
   border: 1px solid var(--bm-accent-soft);
-  border-radius: 10px;
-  padding: 0 4px;
-  margin-right: 4px;
+  border-radius: 8px;
+  padding: 0 3px;
+  margin-right: 3px;
   letter-spacing: 0.08em;
 }
 

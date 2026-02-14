@@ -1,6 +1,6 @@
 {
   "name": "wplace-RusMarble",
-  "version": "0.87.4",
+  "version": "0.87.6",
   "type": "module",
   "homepage": "https://t.me/ruswplace",
   "repository": {
@@ -18,4 +18,3 @@
     "terser": "^5.43.1"
   }
 }
-
