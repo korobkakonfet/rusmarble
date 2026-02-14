@@ -6,6 +6,7 @@ import Overlay from './Overlay.js';
 // import Observers from './observers.js';
 import ApiManager from './apiManager.js';
 import TemplateManager from './templateManager.js';
+import { createTemplateSync, normalizeRemoteOrder } from './templateSync.js';
 import { consoleLog, consoleWarn, selectAllCoordinateInputs, rgbToMeta, getOverlayCoords, sortByOptions, getCurrentColor } from './utils.js';
 import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getCurrentTileSize} from './utilsMaptiler.js';
 // import { getCenterGeoCoords, addTemplate } from './utilsMaptiler.js';
@@ -13,9 +14,12 @@ import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, removeLa
 const name = GM_info.script.name.toString(); // Name of userscript
 const version = GM_info.script.version.toString(); // Version of userscript
 const consoleStyle = 'color: cornflowerblue;'; // The styling for the console logs
-// const CSS_BM_File = "https://raw.githubusercontent.com/t-wy/Wplace-RusMarble-Userscripts/refs/heads/custom-improve/dist/RusMarble.user.css";
-const CSS_BM_File = "http://localhost:8000/dist/RusMarble.user.css";
-const TEMPLATE_SYNC_BASE_URL = "http://localhost:8003";
+const CSS_BM_File = typeof __CSS_BM_FILE__ !== 'undefined' && __CSS_BM_FILE__
+  ? __CSS_BM_FILE__
+  : "http://localhost:8000/dist/RusMarble.user.css";
+const TEMPLATE_SYNC_BASE_URL = typeof __TEMPLATE_SYNC_BASE_URL__ !== 'undefined' && __TEMPLATE_SYNC_BASE_URL__
+  ? __TEMPLATE_SYNC_BASE_URL__
+  : "http://localhost:8003";
 const CHAT_WS_URL = `${TEMPLATE_SYNC_BASE_URL.replace(/^http(s?):\/\//, (_, secure) => (secure ? 'wss://' : 'ws://'))}/ws/chat`;
 const TEMPLATE_UPDATE_POLL_MS = 5000;
 const REMOTE_FLAGS_REFRESH_MS = 60000;
@@ -24,20 +28,20 @@ const NOTIFICATION_ROTATE_MS = 10000;
 let chatSocket = null;
 let chatInitialized = false;
 const layoutThemeOptions = {
-  classic: 'Classic',
-  white: 'White',
-  pink: 'Pink',
-  blue: 'Blue',
-  black: 'Black',
-  mint: 'Mint',
-  imperial: 'Russian Imperial',
-  tricolor: 'Russian Tricolor'
+  "classic": "Classic",
+  "white": "White",
+  "pink": "Pink",
+  "blue": "Blue",
+  "black": "Black",
+  "mint": "Mint",
+  "imperial": "Russian Imperial",
+  "tricolor": "Russian Tricolor"
 };
 const templateDisplayOptions = {
-  cross: 'Cross',
-  'cross-z-9': 'Cross (Z, 9x9)',
-  'cross-z-11': 'Cross (Z, 11x11)',
-  dot: 'Dot (Original)'
+  "cross": "Cross",
+  "cross-z-9": "Cross (Z, 9x9)",
+  "cross-z-11": "Cross (Z, 11x11)",
+  "dot": "Dot (Original)"
 };
 
 const normalizeLayoutTheme = (value) => {
@@ -50,21 +54,19 @@ const normalizeTemplateDisplay = (value) => {
   return templateDisplayOptions[key] ? key : 'cross';
 };
 
-const normalizeUpdatedAt = (value) => {
-  if (value === undefined || value === null) return null;
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? `n:${value}` : null;
-  }
-  const text = String(value).trim();
-  if (!text) return null;
-  if (/^\d+$/.test(text)) {
-    return `n:${Number(text)}`;
-  }
-  const parsed = Date.parse(text);
-  if (!Number.isNaN(parsed)) {
-    return `n:${parsed}`;
-  }
-  return `s:${text}`;
+const normalizeFlag = (value) => value === true || value === 'true' || value === 1 || value === '1';
+
+const waitForBody = () => {
+  if (document.body) return Promise.resolve();
+  return new Promise((resolve) => {
+    const observer = new MutationObserver(() => {
+      if (document.body) {
+        observer.disconnect();
+        resolve();
+      }
+    });
+    observer.observe(document.documentElement, { childList: true });
+  });
 };
 
 const applyLayoutTheme = (value) => {
@@ -104,340 +106,6 @@ function gmRequest(url, responseType = "json") {
   });
 }
 
-let templateUpdatePollId = null;
-let templateUpdatePollInFlight = false;
-let templateUpdatePendingCount = 0;
-let templateFlagSyncInFlight = false;
-
-  function setTemplateUpdateBadge(count) {
-    const badge = document.getElementById('bm-sync-templates-badge');
-    if (!badge) return;
-    if (count > 0) {
-      badge.textContent = count > 99 ? '99+' : String(count);
-      badge.style.display = 'inline-flex';
-  } else {
-    badge.textContent = '';
-    badge.style.display = 'none';
-    }
-  }
-
-  async function pruneMissingRemoteTemplates(templateItems) {
-    if (!Array.isArray(templateItems)) return;
-    const serverNames = new Set(
-      templateItems
-        .map(entry => (typeof entry === 'string' ? entry : entry?.name))
-        .filter(name => name)
-    );
-    const missing = (templateManager.templatesArray ?? []).filter(template => {
-      if (!template) return false;
-      const store = templateManager.templatesJSON?.templates?.[template.storageKey];
-      const isRemote = template.isRemote === true || store?.remote === true;
-      if (!isRemote) return false;
-      const templateName = template.remoteName || template.displayName;
-      return !!templateName && !serverNames.has(templateName);
-    });
-    for (const template of missing) {
-      const templateName = template.remoteName || template.displayName || template.storageKey;
-      consoleLog(
-        `%c${name}%c: Remote template "%s" missing from server list. Deleting local copy.`,
-        consoleStyle,
-        '',
-        templateName
-      );
-      await templateManager.deleteTemplate(template.storageKey);
-    }
-  }
-
-  async function checkTemplateUpdates() {
-    if (templateUpdatePollInFlight) return;
-    templateUpdatePollInFlight = true;
-    try {
-      const listResponse = await gmRequest(`${TEMPLATE_SYNC_BASE_URL}/templates`, "json");
-      const listData = listResponse.response ?? JSON.parse(listResponse.responseText || "{}");
-      const templateItems = Array.isArray(listData)
-        ? listData
-        : (Array.isArray(listData?.templates) ? listData.templates : []);
-      await syncRemoteTemplateFlags(templateItems);
-      await pruneMissingRemoteTemplates(templateItems);
-      let changedCount = 0;
-      if (Array.isArray(templateItems)) {
-        for (const entry of templateItems) {
-          const templateName = typeof entry === "string" ? entry : entry?.name;
-          const updatedAt = typeof entry === "object" ? entry?.updated_at : null;
-        if (!templateName) { continue; }
-        const existingTemplate = (templateManager.templatesArray ?? []).find(t => {
-          if (!t) return false;
-          return t.displayName === templateName || t.remoteName === templateName;
-        });
-          const existingUpdatedAt =
-            templateManager.templatesJSON?.templates?.[existingTemplate?.storageKey]?.remoteUpdatedAt ??
-            existingTemplate?.remoteUpdatedAt ??
-            null;
-          const flagsAppliedAt =
-            templateManager.templatesJSON?.templates?.[existingTemplate?.storageKey]?.remoteFlagsAppliedAt ??
-            existingTemplate?.remoteFlagsAppliedAt ??
-            null;
-          const normalizedUpdatedAt = normalizeUpdatedAt(updatedAt);
-          const normalizedExistingUpdatedAt = normalizeUpdatedAt(existingUpdatedAt);
-          const normalizedFlagsAppliedAt = normalizeUpdatedAt(flagsAppliedAt);
-          if (normalizedUpdatedAt && normalizedFlagsAppliedAt && normalizedUpdatedAt === normalizedFlagsAppliedAt) {
-            continue;
-          }
-          const isMissingLocal = !existingTemplate;
-          const isChanged = isMissingLocal || (normalizedUpdatedAt && normalizedUpdatedAt !== normalizedExistingUpdatedAt);
-          if (isChanged) {
-            const updateReasons = [];
-            if (isMissingLocal) { updateReasons.push('missing-local'); }
-            if (normalizedUpdatedAt && normalizedUpdatedAt !== normalizedExistingUpdatedAt) { updateReasons.push('updated_at-changed'); }
-            const reasonText = updateReasons.length ? updateReasons.join(', ') : 'unknown';
-            console.log(
-              `%c${name}%c: Template update flagged for "%s" (reason: %s). updated_at=%s, local_updated_at=%s, flags_applied_at=%s`,
-              consoleStyle,
-              '',
-              templateName,
-              reasonText,
-              updatedAt,
-              existingUpdatedAt,
-              flagsAppliedAt
-            );
-            changedCount += 1;
-          }
-      }
-    }
-    if (changedCount !== templateUpdatePendingCount) {
-      templateUpdatePendingCount = changedCount;
-      setTemplateUpdateBadge(changedCount);
-    }
-  } catch (err) {
-    // Ignore polling errors to avoid noisy UI
-  } finally {
-    templateUpdatePollInFlight = false;
-  }
-}
-
-  async function syncRemoteTemplateFlags(templateItems) {
-    if (templateFlagSyncInFlight) return;
-    if (!Array.isArray(templateItems) || templateItems.length === 0) return;
-    templateFlagSyncInFlight = true;
-    try {
-      let anyChanged = false;
-      for (const entry of templateItems) {
-        const name = typeof entry === "string" ? entry : entry?.name;
-        if (!name) { continue; }
-        const existingTemplate = (templateManager.templatesArray ?? []).find(t => {
-          if (!t) return false;
-          const sameName = t.displayName === name || t.remoteName === name;
-          return sameName;
-        });
-        if (!existingTemplate) { continue; }
-        const store = templateManager.templatesJSON?.templates?.[existingTemplate.storageKey];
-        const isRemote = existingTemplate.isRemote === true || store?.remote === true;
-        if (!isRemote) { continue; }
-        const storedRemoteCoords = Array.isArray(store?.remoteCoords)
-          ? store.remoteCoords
-          : (Array.isArray(existingTemplate.remoteCoords) ? existingTemplate.remoteCoords : null);
-
-        const entryMeta = entry && typeof entry === "object" ? entry : null;
-        const entryUpdatedAt = entryMeta?.updated_at ?? null;
-        const prevFlagsCheckedAt =
-          store?.remoteFlagsCheckedAt ??
-          existingTemplate.remoteFlagsCheckedAt ??
-          null;
-        const normalizedEntryUpdatedAt = normalizeUpdatedAt(entryUpdatedAt);
-        const normalizedPrevFlagsCheckedAt = normalizeUpdatedAt(prevFlagsCheckedAt);
-
-        const fetchMeta = async (reason) => {
-          if (reason) {
-            consoleLog(
-              `%c${name}%c: Fetching template meta for "%s" (reason: %s)`,
-              consoleStyle,
-              '',
-              name,
-              reason
-            );
-          }
-          const safeName = encodeURIComponent(name);
-          const metaResponse = await gmRequest(`${TEMPLATE_SYNC_BASE_URL}/templates/${safeName}`, "json");
-          return metaResponse.response ?? JSON.parse(metaResponse.responseText || "{}");
-        };
-
-        const entryHasMeta = !!entryMeta && (
-          entryMeta?.to_top !== undefined ||
-          entryMeta?.to_top_at !== undefined ||
-          entryMeta?.highlighted !== undefined ||
-          entryMeta?.highlighted_at !== undefined ||
-          entryMeta?.order !== undefined
-        );
-        const lastFlagsCheckedMs =
-          store?.remoteFlagsCheckedAtLocal ??
-          existingTemplate.remoteFlagsCheckedAtLocal ??
-          0;
-        const shouldThrottle = !entryHasMeta
-          && lastFlagsCheckedMs
-          && (Date.now() - lastFlagsCheckedMs) < REMOTE_FLAGS_REFRESH_MS;
-        if (shouldThrottle) {
-          continue;
-        }
-        if (!entryHasMeta && normalizedEntryUpdatedAt && normalizedPrevFlagsCheckedAt && normalizedEntryUpdatedAt === normalizedPrevFlagsCheckedAt) {
-          continue;
-        }
-        let meta = entryHasMeta ? entryMeta : await fetchMeta('list entry missing flags/coords');
-        let metaFetched = !entryHasMeta;
-
-      const prevToTop = existingTemplate.remoteToTop ?? store?.remoteToTop ?? false;
-      const prevToTopAt = existingTemplate.remoteToTopAt ?? store?.remoteToTopAt ?? null;
-      const prevHighlighted = existingTemplate.remoteHighlighted ?? store?.remoteHighlighted ?? false;
-      const prevHighlightedAt = existingTemplate.remoteHighlightedAt ?? store?.remoteHighlightedAt ?? null;
-      const prevOrderRaw = Number.isFinite(existingTemplate.remoteOrder)
-        ? existingTemplate.remoteOrder
-        : Number(store?.remoteOrder);
-      const prevOrder = Number.isFinite(prevOrderRaw) ? prevOrderRaw : null;
-
-      const readMeta = (metaValue) => {
-        const hasToTop = !!metaValue && Object.prototype.hasOwnProperty.call(metaValue, 'to_top');
-        const hasToTopAt = !!metaValue && Object.prototype.hasOwnProperty.call(metaValue, 'to_top_at');
-        const hasHighlighted = !!metaValue && Object.prototype.hasOwnProperty.call(metaValue, 'highlighted');
-        const hasHighlightedAt = !!metaValue && Object.prototype.hasOwnProperty.call(metaValue, 'highlighted_at');
-        const hasOrder = !!metaValue && Object.prototype.hasOwnProperty.call(metaValue, 'order');
-        const nextToTop = hasToTop ? metaValue.to_top === true : prevToTop;
-        const nextToTopAt = hasToTopAt ? metaValue.to_top_at ?? null : (hasToTop ? null : prevToTopAt);
-        const nextHighlighted = hasHighlighted ? metaValue.highlighted === true : prevHighlighted;
-        const nextHighlightedAt = hasHighlightedAt ? metaValue.highlighted_at ?? null : (hasHighlighted ? null : prevHighlightedAt);
-        const nextUpdatedAt = metaValue?.updated_at ?? entryMeta?.updated_at ?? null;
-        const nextOrderRaw = hasOrder ? Number(metaValue?.order) : prevOrder;
-        const nextOrder = Number.isFinite(nextOrderRaw) ? nextOrderRaw : null;
-        const coordsMeta = Array.isArray(metaValue?.coords) ? metaValue.coords.map(Number) : null;
-        return { nextToTop, nextToTopAt, nextHighlighted, nextHighlightedAt, nextUpdatedAt, nextOrder, coordsMeta };
-      };
-
-        let {
-          nextToTop,
-          nextToTopAt,
-          nextHighlighted,
-          nextHighlightedAt,
-          nextUpdatedAt,
-          nextOrder,
-          coordsMeta
-        } = readMeta(meta);
-        if (!coordsMeta && Array.isArray(storedRemoteCoords) && storedRemoteCoords.length === 4) {
-          coordsMeta = storedRemoteCoords.map(Number);
-        }
-
-      let flagsChanged =
-        prevToTop !== nextToTop ||
-        prevToTopAt !== nextToTopAt ||
-        prevHighlighted !== nextHighlighted ||
-        prevHighlightedAt !== nextHighlightedAt ||
-        prevOrder !== nextOrder;
-
-        if (flagsChanged && nextUpdatedAt && !coordsMeta && !metaFetched) {
-          meta = await fetchMeta('flags changed; coords missing in list meta');
-          metaFetched = true;
-        ({
-          nextToTop,
-          nextToTopAt,
-          nextHighlighted,
-          nextHighlightedAt,
-          nextUpdatedAt,
-          nextOrder,
-          coordsMeta
-        } = readMeta(meta));
-        flagsChanged =
-          prevToTop !== nextToTop ||
-          prevToTopAt !== nextToTopAt ||
-          prevHighlighted !== nextHighlighted ||
-          prevHighlightedAt !== nextHighlightedAt ||
-          prevOrder !== nextOrder;
-        }
-
-        if (Array.isArray(coordsMeta) && coordsMeta.length === 4) {
-          const normalizedCoords = coordsMeta.map(Number);
-          const prevRemoteCoords = Array.isArray(existingTemplate.remoteCoords)
-            ? existingTemplate.remoteCoords
-            : (Array.isArray(store?.remoteCoords) ? store.remoteCoords : null);
-          const coordsChanged = !prevRemoteCoords
-            || prevRemoteCoords.length !== 4
-            || prevRemoteCoords.some((value, index) => Number(value) !== normalizedCoords[index]);
-          if (coordsChanged) {
-            existingTemplate.remoteCoords = normalizedCoords;
-            if (store) {
-              store.remoteCoords = normalizedCoords;
-            }
-            anyChanged = true;
-          }
-        }
-
-        if (!flagsChanged) { continue; }
-
-        const coordsMatch = !!coordsMeta
-          && coordsMeta.length === 4
-          && Array.isArray(existingTemplate.coords)
-          && existingTemplate.coords.length === 4
-          && coordsMeta.every((value, index) => Number(value) === Number(existingTemplate.coords[index]));
-
-        existingTemplate.remoteToTop = nextToTop;
-        existingTemplate.remoteToTopAt = nextToTopAt;
-        existingTemplate.remoteHighlighted = nextHighlighted;
-        existingTemplate.remoteHighlightedAt = nextHighlightedAt;
-        existingTemplate.remoteOrder = nextOrder;
-        if (flagsChanged && nextUpdatedAt && (coordsMatch || !coordsMeta)) {
-          existingTemplate.remoteFlagsAppliedAt = nextUpdatedAt;
-          if (store) {
-            store.remoteFlagsAppliedAt = nextUpdatedAt;
-          }
-        }
-        if (nextUpdatedAt && (!coordsMeta || coordsMatch)) {
-          if (prevFlagsCheckedAt !== nextUpdatedAt) {
-            existingTemplate.remoteFlagsCheckedAt = nextUpdatedAt;
-            if (store) {
-              store.remoteFlagsCheckedAt = nextUpdatedAt;
-            }
-            anyChanged = true;
-          }
-        }
-        if (metaFetched) {
-          const flagsCheckNow = Date.now();
-          existingTemplate.remoteFlagsCheckedAtLocal = flagsCheckNow;
-          if (store) {
-            store.remoteFlagsCheckedAtLocal = flagsCheckNow;
-          }
-          anyChanged = true;
-        }
-        if (store) {
-          store.remoteToTop = nextToTop;
-          store.remoteToTopAt = nextToTopAt;
-          store.remoteHighlighted = nextHighlighted;
-          store.remoteHighlightedAt = nextHighlightedAt;
-          store.remoteOrder = nextOrder;
-        }
-        if (flagsChanged) {
-          anyChanged = true;
-        }
-      }
-      if (anyChanged) {
-        await templateManager.storeTemplates();
-      if (typeof window.buildTemplateFilterList === 'function') {
-        window.buildTemplateFilterList();
-      }
-    }
-  } catch (_) {
-    // Ignore polling errors to avoid noisy UI
-  } finally {
-    templateFlagSyncInFlight = false;
-  }
-}
-
-function startTemplateUpdatePolling() {
-  if (templateUpdatePollId) return;
-  templateUpdatePollId = setInterval(checkTemplateUpdates, TEMPLATE_UPDATE_POLL_MS);
-  checkTemplateUpdates();
-}
-
-function resetTemplateUpdateBadge() {
-  templateUpdatePendingCount = 0;
-  setTemplateUpdateBadge(0);
-}
-
 let notificationPollId = null;
 let notificationRotateId = null;
 let notificationQueue = [];
@@ -447,6 +115,7 @@ const NOTIFICATION_SHOWN_MAX = 500;
 const notificationShownIds = new Set();
 let notificationShownList = [];
 let notificationShownInitPromise = null;
+let overlayBuildInFlight = false;
 
 function loadNotificationShownIds() {
   if (notificationShownInitPromise) return notificationShownInitPromise;
@@ -1424,21 +1093,27 @@ inject(() => {
   Map.prototype.values = hookedMapValues;
 });
 
-// Imports the CSS file (local or remote)
-GM_xmlhttpRequest({
-  method: "GET",
-  url: CSS_BM_File,
-  onload: (response) => {
-    if (response.status >= 200 && response.status < 300) {
-      GM.addStyle(response.responseText);
-    } else {
-      consoleWarn(`%c${name}%c: Failed to load CSS (${response.status}) from ${CSS_BM_File}`, consoleStyle, '');
+// Imports the CSS file (inline build) or remote fallback
+if (typeof __INLINE_CSS__ !== 'undefined' && __INLINE_CSS__) {
+  GM.addStyle(__INLINE_CSS__);
+} else {
+  GM_xmlhttpRequest({
+    method: "GET",
+    url: CSS_BM_File,
+    onload: (response) => {
+      if (response.status >= 200 && response.status < 300) {
+        GM.addStyle(response.responseText);
+      } else {
+        consoleWarn(`%c${name}%c: Failed to load CSS (${response.status}) from ${CSS_BM_File}`, consoleStyle, '');
+        console.log(`${name}: CSS load failed`, { status: response.status, url: CSS_BM_File });
+      }
+    },
+    onerror: (err) => {
+      consoleWarn(`%c${name}%c: Failed to load CSS from ${CSS_BM_File}`, consoleStyle, '', err);
+      console.log(`${name}: CSS load error`, { url: CSS_BM_File, err });
     }
-  },
-  onerror: (err) => {
-    consoleWarn(`%c${name}%c: Failed to load CSS from ${CSS_BM_File}`, consoleStyle, '', err);
-  }
-});
+  });
+}
 
 // CONSTRUCTORS
 const overlayMain = new Overlay(name, version); // Constructs a new Overlay object for the main overlay
@@ -1446,6 +1121,23 @@ const templateManager = new TemplateManager(name, version, overlayMain); // Cons
 const apiManager = new ApiManager(templateManager); // Constructs a new ApiManager object
 
 overlayMain.setApiManager(apiManager); // Sets the API manager
+const templateSync = createTemplateSync({
+  name,
+  consoleStyle,
+  consoleLog,
+  consoleWarn,
+  gmRequest,
+  templateManager,
+  templateSyncBaseUrl: TEMPLATE_SYNC_BASE_URL,
+  templateUpdatePollMs: TEMPLATE_UPDATE_POLL_MS,
+  remoteFlagsRefreshMs: REMOTE_FLAGS_REFRESH_MS,
+  buildTemplateFilterList: () => window.buildTemplateFilterList?.(),
+  autoSyncOnStatus: (message) => overlayMain.handleDisplayStatus(message),
+  autoSyncOnError: (message) => overlayMain.handleDisplayError(message),
+  autoSyncSyncToggleList: () => window.syncToggleList?.(),
+  autoSyncBuildTemplateFilterList: () => window.buildTemplateFilterList?.(),
+  autoSyncBuildColorFilterList: () => window.buildColorFilterList?.(),
+});
 
 GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   const userSettingsValue = await GM.getValue('bmUserSettings', '{}');
@@ -1487,6 +1179,8 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
       'showIntegerZoom': false,
       'enableKeybinds': false,
       'lineTemplateButton': false, // Hidden in settings
+      'ruspixelFlagEnabled': true,
+      'autoSyncTemplates': false,
       'chatDisabled': false,
     });
     templateManager.storeUserSettings();
@@ -1505,12 +1199,26 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   console.log(storageTemplates);
   templateManager.importJSON(storageTemplates); // Loads the templates
 
+  await waitForBody();
   await buildOverlayMain(); // Builds the main overlay
   initChat();
-  startTemplateUpdatePolling();
+  templateSync.startTemplateUpdatePolling();
   startNotificationPolling();
 
   overlayMain.handleDrag('#bm-overlay', '#bm-bar-drag'); // Creates dragging capability on the drag bar for dragging the overlay
+  const rebuildOverlayIfMissing = async () => {
+    if (overlayBuildInFlight || document.getElementById('bm-overlay')) return;
+    overlayBuildInFlight = true;
+    try {
+      await buildOverlayMain();
+      overlayMain.handleDrag('#bm-overlay', '#bm-bar-drag');
+    } catch (err) {
+      consoleWarn(`%c${name}%c: Failed to rebuild overlay`, consoleStyle, '', err);
+    } finally {
+      overlayBuildInFlight = false;
+    }
+  };
+  setInterval(rebuildOverlayIfMissing, 2000);
 
   const keysPressed = new Set();
   let animationFrameId = null;
@@ -2504,6 +2212,27 @@ async function buildOverlayMain() {
               };
             });
           }).buildElement()
+          .addCheckbox({'id': 'bm-ruspixel-flag-enabled', 'textContent': 'Ruspixel Flag in Pixel Info', 'checked': templateManager.isRuspixelFlagEnabled()}, (instance, label, checkbox) => {
+            checkbox.addEventListener('change', () => {
+              templateManager.setRuspixelFlagEnabled(checkbox.checked);
+              apiManager.updatePixelInfoAllianceBackground();
+              if (checkbox.checked) {
+                instance.handleDisplayStatus("Ruspixel flag background enabled for Pixel Info.");
+              } else {
+                instance.handleDisplayStatus("Ruspixel flag background disabled for Pixel Info.");
+              }
+            });
+          }).buildElement()
+          .addCheckbox({'id': 'bm-auto-sync-templates', 'textContent': 'Auto Update Templates', 'checked': templateManager.isTemplateAutoSyncEnabled()}, (instance, label, checkbox) => {
+            checkbox.addEventListener('change', () => {
+              templateManager.setTemplateAutoSyncEnabled(checkbox.checked);
+              if (checkbox.checked) {
+                instance.handleDisplayStatus("Auto update enabled: templates will sync automatically.");
+              } else {
+                instance.handleDisplayStatus("Auto update disabled.");
+              }
+            });
+          }).buildElement()
           .addCheckbox({'id': 'bm-progress-bar-enabled', 'textContent': 'Show Progress Bar', 'checked': templateManager.isProgressBarEnabled()}, (instance, label, checkbox) => {
             checkbox.addEventListener('change', () => {
               templateManager.setProgressBarEnabled(checkbox.checked);
@@ -2706,98 +2435,16 @@ async function buildOverlayMain() {
             button.appendChild(badge);
             button.onclick = async () => {
               try {
-                instance.handleDisplayStatus('Syncing templates from server...');
-                const listResponse = await gmRequest(`${TEMPLATE_SYNC_BASE_URL}/templates`, "json");
-                  const listData = listResponse.response ?? JSON.parse(listResponse.responseText || "{}");
-                  const templateItems = Array.isArray(listData)
-                    ? listData
-                    : (Array.isArray(listData?.templates) ? listData.templates : []);
-                  if (!Array.isArray(templateItems) || templateItems.length === 0) {
-                    instance.handleDisplayStatus('No server templates found.');
-                    return;
-                  }
-                  let importedCount = 0;
-                  for (const entry of templateItems) {
-                    const name = typeof entry === "string" ? entry : entry?.name;
-                    const updatedAt = typeof entry === "object" ? entry?.updated_at : null;
-                    const listOrder = Number.isFinite(Number(entry?.order)) ? Number(entry?.order) : null;
-                    if (!name) { continue; }
-                    const safeName = encodeURIComponent(name);
-                    const existingTemplate = (templateManager.templatesArray ?? []).find(t => {
-                      if (!t) return false;
-                      const sameName = t.displayName === name || t.remoteName === name;
-                      return sameName;
-                    });
-                    const existingPalette = existingTemplate?.colorPalette ? { ...existingTemplate.colorPalette } : null;
-                    const existingUpdatedAt =
-                      templateManager.templatesJSON?.templates?.[existingTemplate?.storageKey]?.remoteUpdatedAt ??
-                      existingTemplate?.remoteUpdatedAt ??
-                      null;
-                      const normalizedExistingUpdatedAt = normalizeUpdatedAt(existingUpdatedAt);
-                      const normalizedUpdatedAt = normalizeUpdatedAt(updatedAt);
-                      if (normalizedExistingUpdatedAt && normalizedUpdatedAt && normalizedExistingUpdatedAt === normalizedUpdatedAt) {
-                        continue;
-                      }
-                    const metaResponse = await gmRequest(`${TEMPLATE_SYNC_BASE_URL}/templates/${safeName}`, "json");
-                  const meta = metaResponse.response ?? JSON.parse(metaResponse.responseText || "{}");
-                  const coords = Array.isArray(meta?.coords) ? meta.coords.map(Number) : null;
-                  if (!coords || coords.length !== 4 || coords.some(n => !Number.isFinite(n))) {
-                    instance.handleDisplayStatus(`Skipped "${name}": invalid coords.`);
-                    continue;
-                  }
-                  const metaUpdatedAt = meta?.updated_at ?? null;
-                    const toTop = meta?.to_top === true;
-                    const toTopAt = meta?.to_top_at ?? null;
-                    const highlighted = meta?.highlighted === true;
-                    const highlightedAt = meta?.highlighted_at ?? null;
-                    const metaOrder = Number(meta?.order);
-                    const order = Number.isFinite(metaOrder) ? metaOrder : listOrder;
-                    if (existingTemplate?.storageKey) {
-                      await templateManager.deleteTemplate(existingTemplate.storageKey);
-                    }
-                    const imageResponse = await gmRequest(`${TEMPLATE_SYNC_BASE_URL}/templates/${safeName}/image`, "blob");
-                    const imageBlob = imageResponse.response;
-                    const file = new File([imageBlob], `${name}.png`, { type: imageBlob?.type || "image/png" });
-                    const created = await templateManager.createTemplate(
-                      file,
-                      name,
-                      coords,
-                      templateManager.getAnchor(),
-                        {
-                          remote: true,
-                          remoteName: name,
-                          remoteCoords: coords,
-                          remoteUpdatedAt: updatedAt || metaUpdatedAt,
-                          remoteToTop: toTop,
-                        remoteToTopAt: toTopAt,
-                        remoteHighlighted: highlighted,
-                        remoteHighlightedAt: highlightedAt,
-                        remoteOrder: Number.isFinite(order) ? order : null,
-                        enabled: false
-                      }
-                    );
-                    if (created) {
-                      if (existingPalette) {
-                        Object.entries(existingPalette).forEach(([rgb, meta]) => {
-                          if (created.colorPalette?.[rgb]) {
-                            created.colorPalette[rgb].enabled = !!meta?.enabled;
-                          }
-                        });
-                      }
-                    }
-                    importedCount += 1;
-                  }
-                syncToggleList();
-                templateManager.createOverlayOnMap();
-                buildTemplateFilterList();
-                buildColorFilterList();
-                instance.handleDisplayStatus(`Synced ${importedCount} template${importedCount === 1 ? '' : 's'}.`);
-                resetTemplateUpdateBadge();
-                checkTemplateUpdates();
-                } catch (err) {
-                  consoleWarn(`%c${name}%c: Failed to sync server templates`, consoleStyle, '', err);
-                  instance.handleDisplayError('Failed to sync server templates.');
-                }
+                await templateSync.syncTemplatesFromServer({
+                  onStatus: (message) => instance.handleDisplayStatus(message),
+                  onError: (message) => instance.handleDisplayError(message),
+                  syncToggleList: () => window.syncToggleList?.(),
+                  buildTemplateFilterList: () => window.buildTemplateFilterList?.(),
+                  buildColorFilterList: () => window.buildColorFilterList?.(),
+                });
+              } catch (err) {
+                // Error already reported in the sync helper.
+              }
               };
             }).buildElement()
             .addSelect({'id': 'bm-template-anchor'}, (instance, select) => {
@@ -2919,7 +2566,7 @@ async function buildOverlayMain() {
               window.open('https://pepoafonso.github.io/color_converter_wplace/', '_blank', 'noopener noreferrer');
             });
           }).buildElement()
-          .addButton({'id': 'bm-button-website', 'className': 'bm-help', 'innerHTML': '🌐', 'title': 'Official Blue Marble Website'}, 
+          .addButton({'id': 'bm-button-website', 'className': 'bm-help', 'innerHTML': '🌐', 'title': 'Official Rus Marble Website'}, 
             (instance, button) => {
             button.addEventListener('click', () => {
               window.open('https://t.me/ruswplace', '_blank', 'noopener noreferrer');
@@ -2927,7 +2574,7 @@ async function buildOverlayMain() {
           }).buildElement()
         .buildElement()
         .addDiv({'id': 'bm-footer'})
-          .addSmall({'textContent': `by SwingTheVine | Forked by TWY`, 'style': 'margin-top: auto;'}).buildElement()
+          .addSmall({'textContent': `Forked by korobka_konfet`, 'title': 'by SwingTheVine | Forked by TWY | Forked by korobka_konfet', 'style': 'margin-top: auto;'}).buildElement()
         .buildElement()
       .buildElement()
     .buildElement()
@@ -3119,18 +2766,20 @@ async function buildOverlayMain() {
         const bStoreRemote = bStore.remote === true;
         const aIsRemote = a.t.isRemote === true || aStoreRemote;
         const bIsRemote = b.t.isRemote === true || bStoreRemote;
-        const aTopRaw = a.t.remoteToTop ?? aStore.remoteToTop ?? false;
-        const bTopRaw = b.t.remoteToTop ?? bStore.remoteToTop ?? false;
-        const aTop = aTopRaw === true || aTopRaw === 'true';
-        const bTop = bTopRaw === true || bTopRaw === 'true';
+        const aTop = normalizeFlag(a.t.remoteToTop) || normalizeFlag(aStore.remoteToTop);
+        const bTop = normalizeFlag(b.t.remoteToTop) || normalizeFlag(bStore.remoteToTop);
         const aGroup = aTop ? 0 : (aIsRemote ? 2 : 1);
         const bGroup = bTop ? 0 : (bIsRemote ? 2 : 1);
         if (aGroup !== bGroup) return aGroup - bGroup;
         if (aGroup === 1) return a.idx - b.idx;
-        const aOrderRaw = Number.isFinite(a.t.remoteOrder) ? a.t.remoteOrder : Number(aStore.remoteOrder);
-        const bOrderRaw = Number.isFinite(b.t.remoteOrder) ? b.t.remoteOrder : Number(bStore.remoteOrder);
-        const aOrderValue = Number.isFinite(aOrderRaw) ? aOrderRaw : Number.MAX_SAFE_INTEGER;
-        const bOrderValue = Number.isFinite(bOrderRaw) ? bOrderRaw : Number.MAX_SAFE_INTEGER;
+        const aOrder = normalizeRemoteOrder(
+          Number.isFinite(a.t.remoteOrder) ? a.t.remoteOrder : aStore.remoteOrder
+        );
+        const bOrder = normalizeRemoteOrder(
+          Number.isFinite(b.t.remoteOrder) ? b.t.remoteOrder : bStore.remoteOrder
+        );
+        const aOrderValue = aOrder === null ? Number.MAX_SAFE_INTEGER : aOrder;
+        const bOrderValue = bOrder === null ? Number.MAX_SAFE_INTEGER : bOrder;
         if (aOrderValue !== bOrderValue) return aOrderValue - bOrderValue;
         return a.idx - b.idx;
       });
@@ -3178,7 +2827,7 @@ async function buildOverlayMain() {
         const templateName = template["displayName"];
         const templateStore = templateManager.templatesJSON?.templates?.[template.storageKey] ?? {};
         const isRemote = template.isRemote === true || templateStore.remote === true;
-        const isHighlighted = template.remoteHighlighted ?? templateStore.remoteHighlighted ?? false;
+        const isHighlighted = normalizeFlag(template.remoteHighlighted) || normalizeFlag(templateStore.remoteHighlighted);
         const filledCount = combinedTemplate[template.storageKey]?.painted ?? 0;
         const filledLabelText = `${filledCount.toLocaleString()}`;
         const renameElement = document.createElement('span');

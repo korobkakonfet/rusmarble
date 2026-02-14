@@ -10,11 +10,11 @@ export function isMapTilerLoaded() {
       myLocationButton["__click"][3] !== undefined &&
       myLocationButton["__click"][3]["v"] !== undefined &&
       myLocationButton["__click"][3]["v"]["addSource"] !== undefined
-    ) || document.head.__bmmap !== undefined;
+    ) || document.head["__bmmap"] !== undefined;
   } else {
     const injector = () => {
       const script = document.currentScript;
-      if (document.head.__bmmap) {
+      if (document.head["__bmmap"]) {
         script.setAttribute('bm-result', 'true');
         return;
       }
@@ -56,11 +56,11 @@ export function isWplaceDoingBadThing() {
   if (myLocationButton["__click"] !== undefined) {
     return (
       typeof myLocationButton["__click"] !== "object"
-    ) && document.head.__bmmap === undefined;
+    ) && document.head["__bmmap"] === undefined;
   } else {
     const injector = () => {
       const script = document.currentScript;
-      if (document.head.__bmmap) {
+      if (document.head["__bmmap"]) {
         script.setAttribute('bm-result', 'false');
         return;
       }
@@ -95,8 +95,8 @@ function controlMapTiler(func, ...args) {
     return;
   };
   const myLocationButton = document.querySelector(".right-3>button");
-  if (document.head.__bmmap) {
-    const map = document.head.__bmmap;
+  if (document.head["__bmmap"]) {
+    const map = document.head["__bmmap"];
     return func(map, ...args);
   } else if ( myLocationButton !== null ) {
     if (myLocationButton["__click"]) {
@@ -104,7 +104,7 @@ function controlMapTiler(func, ...args) {
       return func(map, ...args);
     } else {
       const getMap = () => {
-          return document.head.__bmmap || document.querySelector(".right-3>button")["__click"][3]["v"];
+          return document.head["__bmmap"] || document.querySelector(".right-3>button")["__click"][3]["v"];
       };
       const injector = result => {
           const script = document.currentScript;
@@ -176,7 +176,7 @@ export function addTemplateCanvas(sortID, tileName, templateSize, blob, usage) {
   const blobUrl = URL.createObjectURL(blob);
 
   return controlMapTiler(async (map, sourceID, tileName, templateSize, blobUrl, geoCoords1, geoCoords2, usage, bmCanvas) => {
-    document.head.__bmCanvas = bmCanvas; // sync bmCanvas to document
+    document.head["__bmCanvas"] = bmCanvas; // sync bmCanvas to document
     const overlayImg = document.createElement("img");
     overlayImg.src = blobUrl;
     await new Promise(resolve => overlayImg.addEventListener("load", () => resolve(overlayImg)));
@@ -269,7 +269,7 @@ export function removeLayer(usage = null, sortID = null) {
     });
   })
   return controlMapTiler((map, toRemove, bmCanvas) => {
-    document.head.__bmCanvas = bmCanvas; // sync bmCanvas to document
+    document.head["__bmCanvas"] = bmCanvas; // sync bmCanvas to document
     toRemove.forEach(sourceID => {
       if (map["getLayer"](sourceID)) {
         map["removeLayer"](sourceID);
@@ -319,7 +319,7 @@ export function setTheme(themeName) {
   const dataTheme = themeList[themeName][1];
   document.documentElement.dataset["theme"] = dataTheme;
   return controlMapTiler((map, themeName, bmCanvas) => {
-    document.head.__bmCanvas = bmCanvas; // sync bmCanvas to document
+    document.head["__bmCanvas"] = bmCanvas; // sync bmCanvas to document
     // The default pixel-hover styledata callback only triggers once that we cannot reset
     // May try to somehow get the current source / layer as reference, but that is also not reliable enough.
     const artLayerName = "pixel-art-layer";
@@ -424,7 +424,7 @@ export function setTheme(themeName) {
       }
       // fix layer order:
       // art-layer -> preview -> crosshair -> hover -> bm-overlay -> bm-error -> hover-ghost
-      const bmCanvas = document.head.__bmCanvas;
+      const bmCanvas = document.head["__bmCanvas"];
       if (bmCanvas) {
         ["overlay", "error"].forEach(usage => {
           if (bmCanvas[usage]) {
@@ -651,9 +651,9 @@ export function panMap(offset) {
  */
 export function getCurrentTileSize() {
   var tileSize = controlMapTiler((map) => {
-    var source = map.getSource("pixel-art-layer");
+    var source = map["getSource"]("pixel-art-layer");
     if (!source) return;
-    return source.tileSize;
+    return source["tileSize"];
   });
   // fallback
   if (tileSize === null) {
