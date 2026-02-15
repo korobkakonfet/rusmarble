@@ -565,9 +565,20 @@ export default class Overlay {
     input.addEventListener('change', () => {
       button.style.maxWidth = `${button.offsetWidth}px`;
       if (input.files.length > 0) {
-        button.textContent = input.files[0].name;
+        const fullName = input.files[0].name;
+        const shorten = (value, max = 8) => {
+          if (!value || value.length <= max) return value || '';
+          const headLen = 3;
+          const tailLen = Math.max(1, max - headLen - 3); // keep total <= max with "..."
+          const head = value.slice(0, headLen);
+          const tail = value.slice(-tailLen);
+          return `${head}...${tail}`;
+        };
+        button.textContent = shorten(fullName);
+        button.title = fullName;
       } else {
         button.textContent = text;
+        button.title = '';
       }
     });
 
