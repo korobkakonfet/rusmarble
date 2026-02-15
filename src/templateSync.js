@@ -27,7 +27,7 @@ const safeCall = (fn) => {
 };
 
 const normalizeFlag = (value) => value === true || value === 'true' || value === 1 || value === '1';
-const SYNC_TIMEOUT_MS = 30000;
+const SYNC_TIMEOUT_MS = 180000;
 
 const withTimeout = (promise, label) => new Promise((resolve, reject) => {
   const timer = setTimeout(() => {
