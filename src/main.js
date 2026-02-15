@@ -1252,7 +1252,7 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
       'lineTemplateButton': false, // Hidden in settings
       'ruspixelFlagEnabled': true,
       'autoSyncTemplates': false,
-      'chatDisabled': true,
+      'chatDisabled': false,
     });
     templateManager.storeUserSettings();
   } else {

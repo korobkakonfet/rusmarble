@@ -275,16 +275,13 @@ export function buildUserSettingsSection({
             };
           });
         }).buildElement()
-        .addCheckbox({'id': 'bm-chat-disabled', 'textContent': 'Disable Chat', 'checked': templateManager.isChatDisabled()}, (instance, label, checkbox) => {
+        .addCheckbox({'id': 'bm-chat-enabled', 'textContent': 'Enable Chat', 'checked': !templateManager.isChatDisabled()}, (instance, label, checkbox) => {
           checkbox.addEventListener('change', () => {
-            templateManager.setChatDisabled(checkbox.checked);
-            if (checkbox.checked) {
-              instance.handleDisplayStatus("Chat is now Disabled.");
-            } else {
-              instance.handleDisplayStatus("Chat is now Enabled.");
-            }
+            const enabled = checkbox.checked;
+            templateManager.setChatDisabled(!enabled);
+            instance.handleDisplayStatus(enabled ? "Chat is now Enabled." : "Chat is now Disabled.");
             if (typeof window.setChatEnabled === 'function') {
-              window.setChatEnabled(!checkbox.checked);
+              window.setChatEnabled(enabled);
             }
           });
         }).buildElement()
