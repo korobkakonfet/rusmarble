@@ -1507,7 +1507,7 @@ async function buildOverlayMain() {
   overlayMain.addDiv({'id': 'bm-overlay', 'style': 'top: 10px; right: 75px;'})
     .addDiv({'id': 'bm-contain-header'})
       .addDiv({'id': 'bm-bar-drag'}).buildElement()
-      .addImg({'alt': 'Rus Marble Icon - Click to minimize/maximize', 'src': 'https://upload.wikimedia.org/wikipedia/commons/thumb/f/f3/Flag_of_Russia.svg/960px-Flag_of_Russia.svg.png', 'style': 'cursor: pointer;'}, 
+      .addImg({'alt': 'Rus Marble Icon - Click to minimize/maximize', 'src': 'https://raw.githubusercontent.com/korobkakonfet/rusmarble/custom-improve/dist/assets/logo_rusmarble.png', 'style': 'cursor: pointer;'},
         (instance, img) => {
           /** Click event handler for overlay minimize/maximize functionality.
            * 
