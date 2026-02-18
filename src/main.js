@@ -413,6 +413,36 @@ function initChat() {
   // keep status row visible for connection indicator
 
   const chatSummary = chatDetails?.querySelector('summary');
+  let chatFloatToggleBtn = null;
+  let isChatFloating = false;
+  let dragState = null;
+  let floatingResizeObserver = null;
+  const CHAT_FLOAT_ICON = '⧉';
+  const CHAT_DOCK_ICON = '⇱';
+  const originalChatParent = chatDetails.parentElement;
+  const originalChatNextSibling = chatDetails.nextElementSibling;
+  const overlayRoot = document.getElementById('bm-overlay');
+  const floatingVarNames = [];
+
+  const applyFloatingThemeVars = () => {
+    if (!overlayRoot) return;
+    const computed = getComputedStyle(overlayRoot);
+    for (let i = 0; i < computed.length; i++) {
+      const propName = computed[i];
+      if (!propName || !propName.startsWith('--bm-')) continue;
+      const propValue = computed.getPropertyValue(propName);
+      if (!propValue) continue;
+      chatDetails.style.setProperty(propName, propValue);
+      floatingVarNames.push(propName);
+    }
+  };
+
+  const clearFloatingThemeVars = () => {
+    while (floatingVarNames.length) {
+      const propName = floatingVarNames.pop();
+      chatDetails.style.removeProperty(propName);
+    }
+  };
   if (chatSummary) {
     chatSummary.classList.add('bm-chat-summary');
     if (!chatSummary.querySelector('.bm-chat-status-light')) {
@@ -421,7 +451,147 @@ function initChat() {
       light.title = 'Chat status';
       chatSummary.appendChild(light);
     }
+    chatFloatToggleBtn = document.createElement('button');
+    chatFloatToggleBtn.type = 'button';
+    chatFloatToggleBtn.className = 'bm-chat-float-toggle';
+    chatFloatToggleBtn.textContent = CHAT_FLOAT_ICON;
+    chatFloatToggleBtn.setAttribute('aria-label', 'Float chat');
+    chatFloatToggleBtn.title = 'Open chat in floating window';
+    const statusLight = chatSummary.querySelector('.bm-chat-status-light');
+    if (statusLight) {
+      chatSummary.insertBefore(chatFloatToggleBtn, statusLight);
+    } else {
+      chatSummary.appendChild(chatFloatToggleBtn);
+    }
   }
+
+  const outerHeight = (element) => {
+    if (!element) return 0;
+    const computed = getComputedStyle(element);
+    if (computed.display === 'none') return 0;
+    const marginTop = parseFloat(computed.marginTop) || 0;
+    const marginBottom = parseFloat(computed.marginBottom) || 0;
+    return element.offsetHeight + marginTop + marginBottom;
+  };
+
+  const updateFloatingMessagesHeight = () => {
+    if (!isChatFloating) return;
+    const chatComputed = getComputedStyle(chatDetails);
+    const paddingTop = parseFloat(chatComputed.paddingTop) || 0;
+    const paddingBottom = parseFloat(chatComputed.paddingBottom) || 0;
+    const totalHeight = chatDetails.clientHeight;
+    const occupied =
+      outerHeight(chatSummary) +
+      outerHeight(modTools) +
+      outerHeight(replyBar) +
+      outerHeight(document.getElementById('bm-chat-input-row')) +
+      paddingTop +
+      paddingBottom;
+    const nextHeight = Math.max(80, Math.floor(totalHeight - occupied - 6));
+    messagesEl.style.height = `${nextHeight}px`;
+  };
+
+  const setChatFloating = (enabled) => {
+    isChatFloating = Boolean(enabled);
+    chatDetails.classList.toggle('bm-chat-floating', isChatFloating);
+    if (chatFloatToggleBtn) {
+      chatFloatToggleBtn.textContent = isChatFloating ? CHAT_DOCK_ICON : CHAT_FLOAT_ICON;
+      chatFloatToggleBtn.setAttribute('aria-label', isChatFloating ? 'Dock chat' : 'Float chat');
+      chatFloatToggleBtn.title = isChatFloating ? 'Return chat to main layout' : 'Open chat in floating window';
+    }
+    if (isChatFloating) {
+      if (chatDetails.parentElement !== document.body) {
+        document.body.appendChild(chatDetails);
+      }
+      clearFloatingThemeVars();
+      applyFloatingThemeVars();
+      chatDetails.open = true;
+      if (!chatDetails.style.width) chatDetails.style.width = '360px';
+      if (!chatDetails.style.height) chatDetails.style.height = '420px';
+      if (!chatDetails.style.left && !chatDetails.style.right) chatDetails.style.right = '20px';
+      if (!chatDetails.style.top && !chatDetails.style.bottom) chatDetails.style.bottom = '20px';
+      updateFloatingMessagesHeight();
+      if (!floatingResizeObserver) {
+        floatingResizeObserver = new ResizeObserver(() => updateFloatingMessagesHeight());
+      }
+      floatingResizeObserver.observe(chatDetails);
+    } else {
+      if (floatingResizeObserver) {
+        floatingResizeObserver.disconnect();
+      }
+      if (originalChatParent) {
+        if (originalChatNextSibling && originalChatNextSibling.parentElement === originalChatParent) {
+          originalChatParent.insertBefore(chatDetails, originalChatNextSibling);
+        } else {
+          originalChatParent.appendChild(chatDetails);
+        }
+      }
+      clearFloatingThemeVars();
+      chatDetails.style.left = '';
+      chatDetails.style.top = '';
+      chatDetails.style.right = '';
+      chatDetails.style.bottom = '';
+      chatDetails.style.width = '';
+      chatDetails.style.height = '';
+      messagesEl.style.height = '';
+    }
+  };
+
+  if (chatFloatToggleBtn) {
+    chatFloatToggleBtn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setChatFloating(!isChatFloating);
+    });
+  }
+
+  if (chatSummary) {
+    chatSummary.addEventListener('mousedown', (event) => {
+      if (!isChatFloating) return;
+      if (event.button !== 0) return;
+      if (chatFloatToggleBtn && chatFloatToggleBtn.contains(event.target)) return;
+      const rect = chatDetails.getBoundingClientRect();
+      dragState = {
+        startX: event.clientX,
+        startY: event.clientY,
+        offsetX: event.clientX - rect.left,
+        offsetY: event.clientY - rect.top,
+        moved: false
+      };
+      event.preventDefault();
+    });
+    window.addEventListener('mousemove', (event) => {
+      if (!dragState || !isChatFloating) return;
+      const dx = Math.abs(event.clientX - dragState.startX);
+      const dy = Math.abs(event.clientY - dragState.startY);
+      if (!dragState.moved && (dx > 3 || dy > 3)) {
+        dragState.moved = true;
+      }
+      const rect = chatDetails.getBoundingClientRect();
+      const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
+      const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
+      const left = Math.min(maxLeft, Math.max(8, event.clientX - dragState.offsetX));
+      const top = Math.min(maxTop, Math.max(8, event.clientY - dragState.offsetY));
+      chatDetails.style.left = `${left}px`;
+      chatDetails.style.top = `${top}px`;
+      chatDetails.style.right = 'auto';
+      chatDetails.style.bottom = 'auto';
+    });
+    window.addEventListener('mouseup', () => {
+      if (!dragState) return;
+      if (dragState.moved) {
+        const blockClick = (clickEvent) => {
+          clickEvent.preventDefault();
+          clickEvent.stopPropagation();
+          chatSummary.removeEventListener('click', blockClick, true);
+        };
+        chatSummary.addEventListener('click', blockClick, true);
+      }
+      dragState = null;
+    });
+  }
+
+  window.addEventListener('resize', () => updateFloatingMessagesHeight());
 
   const setStatus = (text) => {
     if (statusTextEl) {
@@ -448,6 +618,7 @@ function initChat() {
     } else {
       chatDetails.classList.add('bm-chat-state-error');
     }
+    updateFloatingMessagesHeight();
   };
 
   const getModCode = () => modCodeInput?.value?.trim() || '';
@@ -503,6 +674,7 @@ function initChat() {
   const clearReply = () => {
     replyToId = null;
     if (replyBar) replyBar.style.display = 'none';
+    updateFloatingMessagesHeight();
   };
 
   const setReplyTo = (id) => {
@@ -518,6 +690,7 @@ function initChat() {
     if (replyText) {
       replyText.textContent = clipText(cached?.text || '');
     }
+    updateFloatingMessagesHeight();
   };
   const isChatDisabled = () => templateManager?.isChatDisabled?.() ?? false;
 
@@ -685,7 +858,16 @@ function initChat() {
     btn.style.justifyContent = 'center';
     btn.style.fontSize = '9px';
     btn.style.lineHeight = '1';
-    btn.addEventListener('click', () => moderateDelete(messageIdNum));
+    btn.style.zIndex = '2';
+    btn.style.pointerEvents = 'auto';
+    btn.addEventListener('mousedown', (event) => {
+      event.stopPropagation();
+    });
+    btn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      moderateDelete(messageIdNum);
+    });
     row.appendChild(btn);
   };
 
@@ -695,6 +877,7 @@ function initChat() {
     if (modTools) {
       modTools.style.display = getModCode() ? 'flex' : 'none';
     }
+    updateFloatingMessagesHeight();
   };
 
   const appendMessage = (payload) => {
@@ -737,8 +920,12 @@ function initChat() {
     row.className = 'bm-chat-row';
     const meta = document.createElement('span');
     meta.className = 'bm-chat-meta';
-    const timeLabel = ts.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    meta.textContent = `[${timeLabel}] ${user}: `;
+    const timeLabel = ts.toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+    meta.textContent = `[${timeLabel}] ${user}:`;
     const body = document.createElement('span');
     body.className = 'bm-chat-body';
     appendLinkedText(body, text, { enableTeleport: true, shortenWplace: true });
@@ -888,7 +1075,18 @@ function initChat() {
   });
   modCodeInput?.addEventListener('input', () => {
     GM.setValue('bmChatModCode', modCodeInput.value.trim());
-    renderModerationControls();
+  renderModerationControls();
+  messagesEl.addEventListener('click', (event) => {
+    const target = event.target instanceof Element ? event.target.closest('.bm-chat-delete') : null;
+    if (!target) return;
+    const row = target.closest('.bm-chat-message');
+    const messageId = row?.getAttribute('data-msg-id');
+    const messageIdNum = messageId ? Number(messageId) : NaN;
+    if (!Number.isFinite(messageIdNum)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    moderateDelete(messageIdNum);
+  });
   });
   const banBtn = document.getElementById('bm-chat-ban-btn');
   const unbanBtn = document.getElementById('bm-chat-unban-btn');
@@ -945,6 +1143,7 @@ function initChat() {
     if (modCodeInput) {
       const isHidden = modCodeInput.style.display === 'none';
       modCodeInput.style.display = isHidden ? '' : 'none';
+      updateFloatingMessagesHeight();
       if (isHidden) {
         modCodeInput.focus();
       } else {
