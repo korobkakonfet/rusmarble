@@ -61,6 +61,30 @@ const normalizeTemplateDisplay = (value) => {
 };
 
 const normalizeFlag = (value) => value === true || value === 'true' || value === 1 || value === '1';
+const isWplaceDarkTheme = () => {
+  const theme = String(document.documentElement?.dataset?.theme ?? '').toLowerCase();
+  return theme === 'dark' || theme === 'halloween';
+};
+const applyWplaceThemeState = () => {
+  const mode = isWplaceDarkTheme() ? 'dark' : 'light';
+  const overlay = document.getElementById('bm-overlay');
+  if (overlay) {
+    overlay.dataset.wplaceTheme = mode;
+  }
+  const notificationContainer = document.getElementById('bm-notification-container');
+  if (notificationContainer) {
+    notificationContainer.dataset.wplaceTheme = mode;
+  }
+};
+const observeWplaceTheme = () => {
+  const observer = new MutationObserver((mutations) => {
+    if (mutations.some(mutation => mutation.type === 'attributes' && mutation.attributeName === 'data-theme')) {
+      applyWplaceThemeState();
+    }
+  });
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  applyWplaceThemeState();
+};
 
 const waitForBody = () => {
   if (document.body) return Promise.resolve();
@@ -79,6 +103,7 @@ const applyLayoutTheme = (value) => {
   const overlay = document.getElementById('bm-overlay');
   if (!overlay) return;
   overlay.dataset.layoutTheme = normalizeLayoutTheme(value);
+  applyWplaceThemeState();
   const notificationContainer = document.getElementById('bm-notification-container');
   if (notificationContainer) {
     notificationContainer.dataset.layoutTheme = normalizeLayoutTheme(value);
@@ -1470,6 +1495,7 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   templateManager.importJSON(storageTemplates); // Loads the templates
 
   await waitForBody();
+  observeWplaceTheme();
   await buildOverlayMain(); // Builds the main overlay
   initChat();
   templateSync.startTemplateUpdatePolling();
@@ -1482,6 +1508,7 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
     try {
       await buildOverlayMain();
       overlayMain.handleDrag('#bm-overlay', '#bm-bar-drag');
+      applyWplaceThemeState();
     } catch (err) {
       consoleWarn(`%c${name}%c: Failed to rebuild overlay`, consoleStyle, '', err);
     } finally {
