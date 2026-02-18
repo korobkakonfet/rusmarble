@@ -221,8 +221,7 @@ function appendLinkedText(target, rawText, options = {}) {
           };
           const shortLat = lat.toFixed(3);
           const shortLng = lng.toFixed(3);
-          const zoomLabel = Number.isFinite(zoom) ? ` z${zoom.toFixed(2)}` : '';
-          linkLabel = `wplace.live @ ${shortLat}, ${shortLng}${zoomLabel}`;
+          linkLabel = `wplace@${shortLat},${shortLng}`;
         }
       }
     } catch (_) {}
