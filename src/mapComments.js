@@ -11,6 +11,24 @@ const VIEWPORT_MARGIN_PX = 20;
 const URL_REGEX = /https?:\/\/[^\s)]+/gi;
 const LOCATION_ALIAS_REGEX = /\bwplace@\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)(?:\s*,\s*(-?\d+(?:\.\d+)?))?/i;
 const DEBUG_STATE_ATTR = 'bm-map-comments-state';
+const COMMENTS_VISIBILITY_STORAGE_KEY = 'bmMapCommentsVisible';
+
+function readCommentsVisibleFlag() {
+  try {
+    const raw = window.localStorage?.getItem(COMMENTS_VISIBILITY_STORAGE_KEY);
+    if (raw === null || raw === undefined || raw === '') return true;
+    const normalized = String(raw).trim().toLowerCase();
+    return normalized !== '0' && normalized !== 'false' && normalized !== 'off';
+  } catch (_) {
+    return true;
+  }
+}
+
+function writeCommentsVisibleFlag(visible) {
+  try {
+    window.localStorage?.setItem(COMMENTS_VISIBILITY_STORAGE_KEY, visible ? '1' : '0');
+  } catch (_) {}
+}
 
 function toFiniteNumber(value) {
   const num = Number(value);
@@ -241,16 +259,22 @@ class MapCommentManagerImpl {
     this.markers = new Map();
     this.visibleCount = 0;
     this.selectedCommentId = null;
+    this.hoveredCommentId = null;
+    this.popupHovered = false;
+    this.hoverCloseTimerId = null;
+    this.commentsVisible = readCommentsVisibleFlag();
     this.renderPending = false;
     this.destroyed = false;
     this.mapReadyPollId = null;
 
     this.map = null;
     this.layer = null;
+    this.toggleButton = null;
     this.popup = null;
     this.popupAuthor = null;
     this.popupTime = null;
     this.popupBody = null;
+    this.themeObserver = null;
 
     this.handleMapChanged = this.handleMapChanged.bind(this);
     this.handleDocumentPointerDown = this.handleDocumentPointerDown.bind(this);
@@ -309,11 +333,31 @@ class MapCommentManagerImpl {
     this.layer = document.createElement('div');
     this.layer.className = 'bm-map-comment-layer';
     this.layer.setAttribute('data-map-comment-layer', '1');
+    this.layer.setAttribute('data-map-comments-visible', this.commentsVisible ? '1' : '0');
     mapContainer.appendChild(this.layer);
+
+    this.toggleButton = document.createElement('button');
+    this.toggleButton.type = 'button';
+    this.toggleButton.className = 'bm-map-comment-toggle';
+    this.toggleButton.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.setCommentsVisible(!this.commentsVisible);
+    });
+    this.layer.appendChild(this.toggleButton);
+    this.updateToggleButton();
 
     this.popup = document.createElement('div');
     this.popup.className = 'bm-map-comment-popup';
     this.popup.style.display = 'none';
+    this.popup.addEventListener('mouseenter', () => {
+      this.popupHovered = true;
+      this.clearHoverCloseTimer();
+    });
+    this.popup.addEventListener('mouseleave', () => {
+      this.popupHovered = false;
+      this.scheduleHoverClose();
+    });
 
     const head = document.createElement('div');
     head.className = 'bm-map-comment-popup-head';
@@ -338,6 +382,9 @@ class MapCommentManagerImpl {
     close.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
+      this.hoveredCommentId = null;
+      this.popupHovered = false;
+      this.clearHoverCloseTimer();
       this.selectedCommentId = null;
       this.scheduleRender();
     });
@@ -346,6 +393,9 @@ class MapCommentManagerImpl {
     this.popup.appendChild(head);
     this.popup.appendChild(this.popupBody);
     this.layer.appendChild(this.popup);
+
+    this.syncThemeFromOverlay();
+    this.installThemeObserver();
   }
 
   handleDocumentPointerDown(event) {
@@ -355,11 +405,107 @@ class MapCommentManagerImpl {
     if (target.closest('.bm-map-comment-popup') || target.closest('.bm-map-comment-marker')) {
       return;
     }
+    this.hoveredCommentId = null;
+    this.popupHovered = false;
+    this.clearHoverCloseTimer();
     this.selectedCommentId = null;
     this.scheduleRender();
   }
 
   handleMapChanged() {
+    this.scheduleRender();
+  }
+
+  syncThemeFromOverlay() {
+    if (!this.layer) return;
+    const overlayRoot = document.getElementById('bm-overlay');
+    if (!overlayRoot) return;
+    const computed = getComputedStyle(overlayRoot);
+    const panelBg = computed.getPropertyValue('--bm-panel-bg').trim();
+    const fg = computed.getPropertyValue('--bm-fg').trim();
+    const muted = computed.getPropertyValue('--bm-muted').trim();
+    const btn = computed.getPropertyValue('--bm-btn-bg').trim();
+    const btnHover = computed.getPropertyValue('--bm-btn-hover').trim();
+    const btnActive = computed.getPropertyValue('--bm-btn-active').trim();
+    const borderStrong = computed.getPropertyValue('--bm-border-strong').trim();
+    const subtleBg = computed.getPropertyValue('--bm-subtle-bg').trim();
+
+    if (panelBg) this.layer.style.setProperty('--bm-comment-bg', panelBg);
+    if (fg) this.layer.style.setProperty('--bm-comment-color', fg);
+    if (muted) this.layer.style.setProperty('--bm-comment-text-subtle', muted);
+    if (btn) this.layer.style.setProperty('--bm-comment-toggle-bg', btn);
+    if (btnHover) this.layer.style.setProperty('--bm-comment-toggle-bg-hover', btnHover);
+    if (btnActive) this.layer.style.setProperty('--bm-comment-toggle-bg-off', btnActive);
+    if (subtleBg) this.layer.style.setProperty('--bm-comment-close-bg', subtleBg);
+    if (borderStrong) this.layer.style.setProperty('--bm-comment-close-bg-hover', borderStrong);
+  }
+
+  installThemeObserver() {
+    if (this.themeObserver || !this.layer) return;
+    const overlayRoot = document.getElementById('bm-overlay');
+    if (!overlayRoot) return;
+    this.themeObserver = new MutationObserver(() => this.syncThemeFromOverlay());
+    this.themeObserver.observe(overlayRoot, {
+      attributes: true,
+      attributeFilter: ['data-layout-theme', 'data-wplace-theme', 'style']
+    });
+    document.addEventListener('bm-layout-theme-changed', () => this.syncThemeFromOverlay());
+  }
+
+  clearHoverCloseTimer() {
+    if (!this.hoverCloseTimerId) return;
+    clearTimeout(this.hoverCloseTimerId);
+    this.hoverCloseTimerId = null;
+  }
+
+  scheduleHoverClose(delayMs = 120) {
+    this.clearHoverCloseTimer();
+    this.hoverCloseTimerId = setTimeout(() => {
+      this.hoverCloseTimerId = null;
+      if (this.popupHovered || this.hoveredCommentId) return;
+      if (!this.selectedCommentId) return;
+      this.selectedCommentId = null;
+      this.scheduleRender();
+    }, delayMs);
+  }
+
+  clearRenderedMarkers() {
+    for (const marker of this.markers.values()) {
+      marker.remove();
+    }
+    this.markers.clear();
+    this.visibleCount = 0;
+  }
+
+  updateToggleButton() {
+    if (!this.toggleButton) return;
+    this.toggleButton.textContent = this.commentsVisible ? 'Hide comments' : 'Show comments';
+    this.toggleButton.setAttribute('data-map-comments-visible', this.commentsVisible ? '1' : '0');
+    this.toggleButton.title = this.commentsVisible
+      ? 'Hide map comments'
+      : 'Show map comments';
+    if (this.layer) {
+      this.layer.setAttribute('data-map-comments-visible', this.commentsVisible ? '1' : '0');
+    }
+  }
+
+  setCommentsVisible(visible) {
+    const next = Boolean(visible);
+    if (this.commentsVisible === next) {
+      this.updateToggleButton();
+      return;
+    }
+    this.commentsVisible = next;
+    writeCommentsVisibleFlag(next);
+    this.updateToggleButton();
+    if (!next) {
+      this.hoveredCommentId = null;
+      this.popupHovered = false;
+      this.clearHoverCloseTimer();
+      this.selectedCommentId = null;
+      this.hidePopup();
+      this.clearRenderedMarkers();
+    }
     this.scheduleRender();
   }
 
@@ -513,9 +659,27 @@ class MapCommentManagerImpl {
     marker.className = 'bm-map-comment-marker';
     marker.setAttribute('data-map-comment-marker', '1');
     marker.dataset.commentId = comment.id;
+      marker.style.display = '';
+      marker.style.pointerEvents = 'auto';
+    marker.addEventListener('mouseenter', () => {
+      if (!this.commentsVisible) return;
+      this.hoveredCommentId = comment.id;
+      this.clearHoverCloseTimer();
+      this.selectedCommentId = comment.id;
+      this.scheduleRender();
+    });
+    marker.addEventListener('mouseleave', () => {
+      if (this.hoveredCommentId === comment.id) {
+        this.hoveredCommentId = null;
+      }
+      this.scheduleHoverClose();
+    });
     marker.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
+      if (!this.commentsVisible) return;
+      this.hoveredCommentId = comment.id;
+      this.clearHoverCloseTimer();
       this.selectedCommentId = comment.id;
       this.scheduleRender();
     });
@@ -548,6 +712,7 @@ class MapCommentManagerImpl {
 
   hidePopup() {
     if (!this.popup) return;
+    this.popupHovered = false;
     this.popup.style.display = 'none';
   }
 
@@ -555,6 +720,19 @@ class MapCommentManagerImpl {
     if (this.destroyed || !this.map) return;
     this.ensureLayer();
     if (!this.layer) return;
+    this.syncThemeFromOverlay();
+    this.updateToggleButton();
+
+    if (!this.commentsVisible) {
+      this.hidePopup();
+      this.clearRenderedMarkers();
+      this.layer.setAttribute(DEBUG_STATE_ATTR, JSON.stringify({
+        total: this.comments.size,
+        visible: 0,
+        enabled: false
+      }));
+      return;
+    }
 
     this.pruneExpired();
     const context = this.getBoundsContext();
@@ -589,6 +767,8 @@ class MapCommentManagerImpl {
       visibleIds.add(comment.id);
       const marker = this.markers.get(comment.id) || this.createMarker(comment);
       marker.dataset.commentId = comment.id;
+      marker.style.display = '';
+      marker.style.pointerEvents = 'auto';
       marker.style.left = `${Math.round(point.x)}px`;
       marker.style.top = `${Math.round(point.y)}px`;
       marker.style.zIndex = String(1000 + index);
@@ -614,6 +794,15 @@ class MapCommentManagerImpl {
           this.hidePopup();
         } else {
           this.renderPopup(selected, point, context);
+          const selectedMarker = this.markers.get(selected.id);
+          if (selectedMarker) {
+            selectedMarker.style.display = 'none';
+            selectedMarker.style.pointerEvents = 'none';
+          }
+          this.hoveredCommentId = null;
+          if (!this.popupHovered) {
+            this.scheduleHoverClose(200);
+          }
         }
       }
     } else {
@@ -642,6 +831,7 @@ class MapCommentManagerImpl {
     return {
       hasMap: Boolean(this.map),
       hasLayer: Boolean(this.layer),
+      enabled: this.commentsVisible,
       totalComments: this.comments.size,
       visibleComments: this.visibleCount,
       selectedCommentId: this.selectedCommentId,
@@ -652,6 +842,13 @@ class MapCommentManagerImpl {
   destroy() {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.clearHoverCloseTimer();
+    this.hoveredCommentId = null;
+    this.popupHovered = false;
+    if (this.themeObserver) {
+      try { this.themeObserver.disconnect(); } catch (_) {}
+      this.themeObserver = null;
+    }
     if (this.mapReadyPollId) {
       clearInterval(this.mapReadyPollId);
       this.mapReadyPollId = null;
@@ -670,6 +867,7 @@ class MapCommentManagerImpl {
     this.popupAuthor = null;
     this.popupTime = null;
     this.popupBody = null;
+    this.toggleButton = null;
     if (this.layer) {
       this.layer.remove();
     }
@@ -690,9 +888,12 @@ function createFallbackApi(reason, parseOnly = false) {
     'upsertFromChatPayload': () => null,
     'removeByMessageId': () => {},
     'parse': (text) => extractMapLocationFromChatText(text),
+    'setVisible': () => {},
+    'isVisible': () => false,
     'getState': () => ({
       hasMap: false,
       hasLayer: false,
+      enabled: false,
       totalComments: 0,
       visibleComments: 0,
       selectedCommentId: null,
@@ -718,6 +919,8 @@ export function createMapCommentManager(options = {}) {
     'upsertFromChatPayload': (payload) => manager.upsertFromChatPayload(payload),
     'removeByMessageId': (messageId) => manager.removeByMessageId(messageId),
     'parse': (text) => extractMapLocationFromChatText(text),
+    'setVisible': (visible) => manager.setCommentsVisible(visible),
+    'isVisible': () => manager.commentsVisible,
     'getState': () => manager.getState(),
     'destroy': () => manager.destroy()
   };
@@ -725,3 +928,4 @@ export function createMapCommentManager(options = {}) {
   installDebugApi(api);
   return api;
 }
+
