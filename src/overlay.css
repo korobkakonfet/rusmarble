@@ -770,12 +770,23 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   color: var(--bm-accent);
 }
 
-#bm-chat-input-row input {
+#bm-chat-input-row input,
+#bm-chat-modcode-row input {
   background-color: var(--bm-subtle-bg);
   color: var(--bm-fg);
   border: 1px solid var(--bm-border);
   border-radius: 6px;
   padding: 2px 4px;
+  font-size: 12px;
+  line-height: 1.25;
+  height: 24px;
+  box-sizing: border-box;
+}
+
+#bm-chat-modcode-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .bm-chat-summary {

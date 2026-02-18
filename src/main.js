@@ -29,8 +29,8 @@ const TEMPLATE_UPDATE_POLL_MS = 5000;
 const REMOTE_FLAGS_REFRESH_MS = 60000;
 const NOTIFICATION_POLL_MS = 3000;
 const NOTIFICATION_ROTATE_MS = 10000;
-const CHAT_MAX_USER_LEN = 12;
-const CHAT_MAX_TEXT_LEN = 100;
+const CHAT_MAX_USER_LEN = 15;
+const CHAT_MAX_TEXT_LEN = 300;
 const REPORT_REQUEST_EVENT_TYPE = 'bm-report-request';
 const REPORT_CLICK_FALLBACK_MS = 5000;
 const REPORT_POST_SEND_HIDE_MS = 1000;
@@ -664,6 +664,7 @@ function initChat() {
   const messagesEl = document.getElementById('bm-chat-messages');
   const userInput = document.getElementById('bm-chat-user');
   const modCodeInput = document.getElementById('bm-chat-modcode');
+  const modCodeRow = document.getElementById('bm-chat-modcode-row');
   const textInput = document.getElementById('bm-chat-text');
   const replyBar = document.getElementById('bm-chat-reply');
   const replyLabel = document.getElementById('bm-chat-reply-label');
@@ -760,8 +761,20 @@ function initChat() {
   loadChatUserColors();
 
   if (!messagesEl || !textInput) return;
-  if (modCodeInput) {
-    modCodeInput.style.display = 'none';
+  const setModCodeVisible = (visible) => {
+    if (modCodeRow) {
+      modCodeRow.style.display = visible ? 'flex' : 'none';
+    }
+    if (modCodeInput) {
+      modCodeInput.style.display = visible ? '' : 'none';
+    }
+  };
+  textInput.maxLength = CHAT_MAX_TEXT_LEN;
+  if (userInput) {
+    userInput.maxLength = CHAT_MAX_USER_LEN;
+  }
+  if (modCodeInput || modCodeRow) {
+    setModCodeVisible(false);
   }
   // keep status row visible for connection indicator
 
@@ -848,6 +861,7 @@ function initChat() {
       outerHeight(modTools) +
       outerHeight(replyBar) +
       outerHeight(document.getElementById('bm-chat-input-row')) +
+      outerHeight(modCodeRow) +
       paddingTop +
       paddingBottom;
     const nextHeight = Math.max(80, Math.floor(totalHeight - occupied - 6));
@@ -1109,6 +1123,22 @@ function initChat() {
   const normalizeUser = (value) => {
     const name = String(value ?? '').trim().slice(0, CHAT_MAX_USER_LEN);
     return name || 'anon';
+  };
+  const enforceInputLimit = (input, maxLength) => {
+    if (!input) return;
+    const value = String(input.value ?? '');
+    if (value.length <= maxLength) return;
+    const nextValue = value.slice(0, maxLength);
+    const selectionStart = input.selectionStart;
+    const selectionEnd = input.selectionEnd;
+    input.value = nextValue;
+    if (typeof selectionStart === 'number' && typeof selectionEnd === 'number') {
+      const nextStart = Math.min(maxLength, selectionStart);
+      const nextEnd = Math.min(maxLength, selectionEnd);
+      try {
+        input.setSelectionRange(nextStart, nextEnd);
+      } catch (_) {}
+    }
   };
   const prunePendingReplies = (now = Date.now()) => {
     while (pendingReplies.length && now - pendingReplies[0].ts > PENDING_REPLY_WINDOW_MS) {
@@ -1537,6 +1567,13 @@ function initChat() {
   }
   chatInitialized = true;
 
+  textInput.addEventListener('input', () => {
+    enforceInputLimit(textInput, CHAT_MAX_TEXT_LEN);
+  });
+  userInput?.addEventListener('input', () => {
+    enforceInputLimit(userInput, CHAT_MAX_USER_LEN);
+  });
+
   textInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
@@ -1610,12 +1647,12 @@ function initChat() {
     if (chatDetails && chatDetails.tagName === 'DETAILS') {
       chatDetails.open = true;
     }
-    if (modCodeInput) {
-      const isHidden = modCodeInput.style.display === 'none';
-      modCodeInput.style.display = isHidden ? '' : 'none';
+    if (modCodeInput || modCodeRow) {
+      const isHidden = modCodeRow ? modCodeRow.style.display === 'none' : modCodeInput.style.display === 'none';
+      setModCodeVisible(isHidden);
       updateFloatingMessagesHeight();
       if (isHidden) {
-        modCodeInput.focus();
+        modCodeInput?.focus();
       } else {
         textInput.focus();
       }
@@ -3006,9 +3043,11 @@ async function buildOverlayMain() {
             .addButton({'id': 'bm-chat-reply-clear', 'textContent': '✖', 'style': 'float: right; font-size: 10px; padding: 0 4px;'}).buildElement()
           .buildElement()
           .addDiv({'id': 'bm-chat-input-row', 'style': 'display: flex; gap: 4px; align-items: center;'})
-            .addInput({'type': 'text', 'id': 'bm-chat-user', 'placeholder': 'User', 'maxlength': CHAT_MAX_USER_LEN, 'style': 'width: 12ch;'}).buildElement()
-            .addInput({'type': 'password', 'id': 'bm-chat-modcode', 'placeholder': 'Code', 'maxlength': 64, 'style': 'width: 8ch; display: none;'}).buildElement()
-            .addInput({'type': 'text', 'id': 'bm-chat-text', 'placeholder': 'Message', 'maxlength': CHAT_MAX_TEXT_LEN, 'style': 'flex: 1;'}).buildElement()
+            .addInput({'type': 'text', 'id': 'bm-chat-user', 'placeholder': 'User', 'maxLength': CHAT_MAX_USER_LEN, 'style': 'width: 15ch;'}).buildElement()
+            .addInput({'type': 'text', 'id': 'bm-chat-text', 'placeholder': 'Message', 'maxLength': CHAT_MAX_TEXT_LEN, 'style': 'flex: 1;'}).buildElement()
+          .buildElement()
+          .addDiv({'id': 'bm-chat-modcode-row', 'style': 'display: none; margin-top: 4px;'})
+            .addInput({'type': 'password', 'id': 'bm-chat-modcode', 'placeholder': 'Code', 'maxLength': 64, 'style': 'width: 100%;'}).buildElement()
           .buildElement()
         .buildElement()
       // Event UI
