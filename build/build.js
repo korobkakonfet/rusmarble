@@ -25,6 +25,7 @@ const isGitHub = !!process.env?.GITHUB_ACTIONS; // Is this running in a GitHub A
 // const isGitHub = true;
 const isDebug = !isGitHub;
 // const isDebug = false;
+const shouldMangleProperties = process.env?.MANGLE_PROPERTIES === '1';
 const localCssUrl = 'http://localhost:8000/dist/RusMarble.user.css';
 const prodCssUrl = 'https://raw.githubusercontent.com/korobkakonfet/rusmarble/refs/heads/custom-improve/dist/RusMarble.user.css';
 const cssBmFile = process.env.CSS_BM_FILE ?? (isGitHub ? prodCssUrl : localCssUrl);
@@ -128,16 +129,20 @@ let resultTerser = await terser.minify(resultEsbuildJS.text, {
     keep_classnames: false, // Should class names be preserved?
     keep_fnames: false, // Should function names be preserved?
     reserved: [], // List of keywords to preserve
-    properties: {
-      // regex: /.*/, // Yes, I am aware I should be using a RegEx. Yes, like you, I am also suprised the userscript still functions
-      keep_quoted: true, // Should names in quotes be preserved?
-      reserved: [
-        'tx', 'ty', 'px', 'py', 'willReadFrequently',
-        // Chat protocol fields (avoid mangling so production builds match server contract)
-        'type', 'text', 'user', 'username', 'name', 'Lt', 'device_id',
-        'reply_to', 'id', 'ts', 'auth_token'
-      ] // What properties should be preserved?
-    },
+    ...(shouldMangleProperties ? {
+      properties: {
+        // regex: /.*/, // Yes, I am aware I should be using a RegEx. Yes, like you, I am also suprised the userscript still functions
+        keep_quoted: true, // Should names in quotes be preserved?
+        reserved: [
+          'tx', 'ty', 'px', 'py', 'willReadFrequently',
+          // Chat protocol / API fields (avoid mangling so production builds match server contract)
+          'type', 'text', 'user', 'username', 'name', 'Lt', 'device_id',
+          'reply_to', 'id', 'ts', 'auth_token', 'message', 'retry_after', 'scope',
+          'banned', 'notifications', 'reason', 'banned_at', 'created_at', 'messages',
+          'identifier', 'ip', 'device', 'message_id', 'ban_id'
+        ] // What properties should be preserved?
+      }
+    } : {}),
   },
   format: {
     comments: 'some' // Save legal comments
