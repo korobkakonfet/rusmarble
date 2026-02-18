@@ -155,6 +155,24 @@ function gmRequest(url, responseType = "json") {
     });
   });
 }
+function parseJsonResponse(response, fallback = {}) {
+  const emptyFallback = fallback ?? {};
+  if (!response) return emptyFallback;
+  const raw = response.response ?? response.responseText;
+  if (raw && typeof raw === 'object') {
+    return raw;
+  }
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) return emptyFallback;
+    try {
+      return JSON.parse(trimmed);
+    } catch (_) {
+      return emptyFallback;
+    }
+  }
+  return emptyFallback;
+}
 
 let notificationPollId = null;
 let notificationRotateId = null;
@@ -607,7 +625,7 @@ function stopNotificationRotation() {
 async function fetchNotifications() {
   try {
     const response = await gmRequest(`${TEMPLATE_SYNC_BASE_URL}/notifications`, "json");
-    const data = response.response ?? JSON.parse(response.responseText || "{}");
+    const data = parseJsonResponse(response, {});
     const list = Array.isArray(data?.notifications) ? data.notifications : [];
     const cleaned = list.filter(item => item && item.text && item.id !== undefined && item.id !== null);
     const queuedIds = new Set(
@@ -673,6 +691,7 @@ function initChat() {
   const modTools = document.getElementById('bm-chat-mod-tools');
   const banTypeSelect = document.getElementById('bm-chat-ban-type');
   const banTargetInput = document.getElementById('bm-chat-ban-target');
+  const banReasonInput = document.getElementById('bm-chat-ban-reason');
   const chatDetails = document.getElementById('bm-contain-chat');
   if (!chatDetails) return;
   let reconnectTimer = null;
@@ -791,19 +810,37 @@ function initChat() {
   const originalChatNextSibling = chatDetails.nextElementSibling;
   const overlayRoot = document.getElementById('bm-overlay');
   const floatingVarNames = [];
+  let bansWindow = null;
+  let bansWindowCount = null;
+  let bansWindowList = null;
+  let bansWindowDragState = null;
+  let bansWindowMoveHandler = null;
+  let bansWindowUpHandler = null;
+  const BANS_WINDOW_MIN_W = 280;
+  const BANS_WINDOW_MIN_H = 220;
+  const BANS_WINDOW_DEFAULT_W = 380;
+  const BANS_WINDOW_DEFAULT_H = 360;
 
-  const applyFloatingThemeVars = () => {
-    if (!overlayRoot) return;
-    floatingVarNames.length = 0;
+  const applyOverlayVarsToElement = (element, trackedNames = null) => {
+    if (!overlayRoot || !element) return;
+    if (trackedNames) {
+      trackedNames.length = 0;
+    }
     const computed = getComputedStyle(overlayRoot);
     for (let i = 0; i < computed.length; i++) {
       const propName = computed[i];
       if (!propName || !propName.startsWith('--bm-')) continue;
       const propValue = computed.getPropertyValue(propName);
       if (!propValue) continue;
-      chatDetails.style.setProperty(propName, propValue);
-      floatingVarNames.push(propName);
+      element.style.setProperty(propName, propValue);
+      if (trackedNames) {
+        trackedNames.push(propName);
+      }
     }
+  };
+
+  const applyFloatingThemeVars = () => {
+    applyOverlayVarsToElement(chatDetails, floatingVarNames);
   };
 
   const clearFloatingThemeVars = () => {
@@ -817,6 +854,237 @@ function initChat() {
     clearFloatingThemeVars();
     applyFloatingThemeVars();
     updateFloatingMessagesHeight();
+  };
+  const refreshBansThemeFromOverlay = () => {
+    if (!bansWindow || bansWindow.style.display === 'none') return;
+    applyOverlayVarsToElement(bansWindow);
+  };
+  const hideBansWindow = () => {
+    if (!bansWindow) return;
+    bansWindow.style.display = 'none';
+  };
+  const ensureBansWindow = () => {
+    if (bansWindow && bansWindow.isConnected) return bansWindow;
+    const panel = document.createElement('section');
+    panel.id = 'bm-chat-bans-window';
+    panel.className = 'bm-chat-bans-window';
+    panel.style.display = 'none';
+    panel.style.width = `${BANS_WINDOW_DEFAULT_W}px`;
+    panel.style.height = `${BANS_WINDOW_DEFAULT_H}px`;
+    panel.style.minWidth = `${BANS_WINDOW_MIN_W}px`;
+    panel.style.minHeight = `${BANS_WINDOW_MIN_H}px`;
+    panel.style.right = '24px';
+    panel.style.bottom = '24px';
+
+    const head = document.createElement('div');
+    head.className = 'bm-chat-bans-window-head';
+    head.title = 'Drag to move';
+
+    const title = document.createElement('span');
+    title.className = 'bm-chat-bans-window-title';
+    title.textContent = 'Active Bans';
+    head.appendChild(title);
+
+    bansWindowCount = document.createElement('span');
+    bansWindowCount.className = 'bm-chat-bans-window-count';
+    bansWindowCount.textContent = '0';
+    head.appendChild(bansWindowCount);
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'bm-chat-bans-window-close';
+    closeBtn.textContent = '✖';
+    closeBtn.title = 'Close bans window';
+    closeBtn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      hideBansWindow();
+    });
+    head.appendChild(closeBtn);
+    panel.appendChild(head);
+
+    bansWindowList = document.createElement('div');
+    bansWindowList.className = 'bm-chat-bans-window-list';
+    panel.appendChild(bansWindowList);
+
+    head.addEventListener('mousedown', (event) => {
+      if (event.button !== 0) return;
+      if (event.target instanceof Element && event.target.closest('button')) return;
+      const rect = panel.getBoundingClientRect();
+      bansWindowDragState = {
+        offsetX: event.clientX - rect.left,
+        offsetY: event.clientY - rect.top
+      };
+      bansWindowMoveHandler = (moveEvent) => {
+        if (!bansWindowDragState) return;
+        const currentRect = panel.getBoundingClientRect();
+        const maxLeft = Math.max(8, window.innerWidth - currentRect.width - 8);
+        const maxTop = Math.max(8, window.innerHeight - currentRect.height - 8);
+        const left = Math.min(maxLeft, Math.max(8, moveEvent.clientX - bansWindowDragState.offsetX));
+        const top = Math.min(maxTop, Math.max(8, moveEvent.clientY - bansWindowDragState.offsetY));
+        panel.style.left = `${left}px`;
+        panel.style.top = `${top}px`;
+        panel.style.right = 'auto';
+        panel.style.bottom = 'auto';
+      };
+      bansWindowUpHandler = () => {
+        bansWindowDragState = null;
+        if (bansWindowMoveHandler) {
+          window.removeEventListener('mousemove', bansWindowMoveHandler);
+          bansWindowMoveHandler = null;
+        }
+        if (bansWindowUpHandler) {
+          window.removeEventListener('mouseup', bansWindowUpHandler);
+          bansWindowUpHandler = null;
+        }
+      };
+      window.addEventListener('mousemove', bansWindowMoveHandler);
+      window.addEventListener('mouseup', bansWindowUpHandler);
+      event.preventDefault();
+    });
+
+    document.body.appendChild(panel);
+    bansWindow = panel;
+    applyOverlayVarsToElement(bansWindow);
+    return panel;
+  };
+  const showBansWindow = (bans) => {
+    const isLikelyMessageId = (value) => {
+      if (typeof value === 'number') return Number.isFinite(value);
+      if (typeof value !== 'string') return false;
+      const trimmed = value.trim();
+      return /^[0-9]+$/.test(trimmed);
+    };
+    const parseBanMessageEntry = (value) => {
+      if (Array.isArray(value)) {
+        return {
+          id: value.length > 0 ? value[0] : null,
+          text: value.length > 1 ? String(value[1] ?? '').trim() : ''
+        };
+      }
+      if (value && typeof value === 'object') {
+        return {
+          id: value.id ?? value.message_id ?? value.msg_id ?? null,
+          text: String(value.text ?? value.message ?? value.body ?? '').trim()
+        };
+      }
+      return { id: null, text: String(value ?? '').trim() };
+    };
+    const normalizeBanMessages = (rawMessages) => {
+      if (!Array.isArray(rawMessages) || !rawMessages.length) return [];
+
+      if (
+        rawMessages.length === 2
+        && !Array.isArray(rawMessages[0])
+        && !Array.isArray(rawMessages[1])
+        && (!(rawMessages[0] && typeof rawMessages[0] === 'object'))
+        && (!(rawMessages[1] && typeof rawMessages[1] === 'object'))
+        && isLikelyMessageId(rawMessages[0])
+      ) {
+        return [parseBanMessageEntry(rawMessages)];
+      }
+
+      if (rawMessages.every(item => item && typeof item === 'object')) {
+        return rawMessages.map(parseBanMessageEntry);
+      }
+
+      if (
+        rawMessages.length % 2 === 0
+        && rawMessages.every((item, index) => (
+          index % 2 === 0 ? isLikelyMessageId(item) : (typeof item === 'string' || typeof item === 'number')
+        ))
+      ) {
+        const pairs = [];
+        for (let i = 0; i < rawMessages.length; i += 2) {
+          pairs.push(parseBanMessageEntry([rawMessages[i], rawMessages[i + 1]]));
+        }
+        return pairs;
+      }
+
+      return rawMessages.map(parseBanMessageEntry);
+    };
+
+    const panel = ensureBansWindow();
+    applyOverlayVarsToElement(panel);
+    const list = Array.isArray(bans) ? bans : [];
+    if (bansWindowCount) {
+      bansWindowCount.textContent = String(list.length);
+    }
+    if (bansWindowList) {
+      bansWindowList.textContent = '';
+      if (!list.length) {
+        const empty = document.createElement('div');
+        empty.className = 'bm-chat-bans-window-empty';
+        empty.textContent = 'No active bans.';
+        bansWindowList.appendChild(empty);
+      } else {
+        list.forEach((entry) => {
+          const item = document.createElement('article');
+          item.className = 'bm-chat-bans-window-item';
+
+          const banId = Number.isFinite(Number(entry?.id)) ? Number(entry.id) : null;
+          const typeLabel = String(entry?.type || 'unknown');
+          const identifier = String(entry?.identifier || entry?.ip || entry?.device_id || '?');
+          const reason = String(entry?.reason || '').trim();
+          const tsRaw = String(entry?.banned_at || entry?.created_at || '').trim();
+          const messages = normalizeBanMessages(entry?.messages);
+          const firstText = String(messages[0]?.text || '').trim();
+
+          const title = document.createElement('div');
+          title.className = 'bm-chat-bans-window-item-title';
+          title.textContent = `#${banId ?? '?'} ${typeLabel}`;
+          item.appendChild(title);
+
+          const ident = document.createElement('div');
+          ident.className = 'bm-chat-bans-window-item-ident';
+          ident.textContent = identifier;
+          item.appendChild(ident);
+
+          if (reason) {
+            const reasonEl = document.createElement('div');
+            reasonEl.className = 'bm-chat-bans-window-item-reason';
+            reasonEl.textContent = reason;
+            item.appendChild(reasonEl);
+          }
+
+          if (tsRaw) {
+            const tsEl = document.createElement('div');
+            tsEl.className = 'bm-chat-bans-window-item-time';
+            tsEl.textContent = tsRaw;
+            item.appendChild(tsEl);
+          }
+
+          const msgMeta = document.createElement('div');
+          msgMeta.className = 'bm-chat-bans-window-item-meta';
+          msgMeta.textContent = `Messages: ${messages.length}`;
+          item.appendChild(msgMeta);
+
+          if (firstText) {
+            const sample = document.createElement('div');
+            sample.className = 'bm-chat-bans-window-item-sample';
+            sample.textContent = clipText(firstText, 90);
+            item.appendChild(sample);
+          }
+
+          if (banId !== null) {
+            const unbanBtn = document.createElement('button');
+            unbanBtn.type = 'button';
+            unbanBtn.className = 'bm-chat-bans-window-item-use';
+            unbanBtn.textContent = 'Unban';
+            unbanBtn.title = `Unban #${banId}`;
+            unbanBtn.addEventListener('click', () => {
+              moderateUnban(banId, () => {
+                fetchBans();
+              });
+            });
+            item.appendChild(unbanBtn);
+          }
+
+          bansWindowList.appendChild(item);
+        });
+      }
+    }
+    panel.style.display = '';
   };
   if (chatSummary) {
     chatSummary.classList.add('bm-chat-summary');
@@ -1067,6 +1335,7 @@ function initChat() {
   });
   document.addEventListener('bm-layout-theme-changed', () => {
     refreshChatThemeFromOverlay();
+    refreshBansThemeFromOverlay();
   });
 
   window.addEventListener('resize', () => updateFloatingMessagesHeight());
@@ -1081,6 +1350,8 @@ function initChat() {
     if (lowered.includes('connecting') || lowered.includes('reconnecting')) {
       nextState = 'connecting';
     } else if (lowered.includes('disconnected')) {
+      nextState = 'error';
+    } else if (lowered.includes('banned')) {
       nextState = 'error';
     } else if (lowered === 'connected') {
       nextState = 'connected';
@@ -1115,6 +1386,11 @@ function initChat() {
       return '';
     }
   };
+  let rateLimitUntilTs = 0;
+  let rateLimitTimer = null;
+  let bannedInfo = null;
+  let pendingSendRestore = null;
+  const defaultChatTextPlaceholder = textInput.placeholder || 'Message';
   const clipText = (value, max = 120) => {
     const text = String(value ?? '');
     if (text.length <= max) return text;
@@ -1213,19 +1489,32 @@ function initChat() {
   const parseBanTarget = (value) => {
     const raw = String(value ?? '').trim();
     if (!raw) return null;
-    const isMessageId = /^\d+$/.test(raw);
-    return { raw, isMessageId };
+    if (!/^\d+$/.test(raw)) return null;
+    const id = Number(raw);
+    if (!Number.isSafeInteger(id) || id <= 0) return null;
+    return { raw, id };
   };
 
-  const postModerationAction = (endpoint, payload) => {
+  const postModerationAction = (endpoint, payload, successStatus = 'moderation ok', onSuccess = null) => {
+    const requestPayload = { ...(payload || {}) };
+    if (requestPayload.code !== undefined && requestPayload.secret_code === undefined) {
+      requestPayload.secret_code = requestPayload.code;
+    }
     GM_xmlhttpRequest({
       method: "POST",
       url: `${TEMPLATE_SYNC_BASE_URL}${endpoint}`,
       headers: { "Content-Type": "application/json" },
-      data: JSON.stringify(payload),
+      data: JSON.stringify(requestPayload),
       onload: (response) => {
         if (response.status >= 200 && response.status < 300) {
-          setStatus('moderation ok');
+          const data = parseJsonResponse(response, {});
+          const suffix = data?.id !== undefined && data?.id !== null ? ` (#${data.id})` : '';
+          setStatus(`${successStatus}${suffix}`);
+          if (typeof onSuccess === 'function') {
+            try {
+              onSuccess(data);
+            } catch (_) {}
+          }
         } else {
           setStatus(`moderation failed (${response.status})`);
         }
@@ -1234,7 +1523,7 @@ function initChat() {
     });
   };
 
-  const moderateBan = (target, type, isUnban = false) => {
+  const moderateBan = (target, type, reasonText = '') => {
     const code = getModCode();
     if (!code) {
       setStatus('missing moderation code');
@@ -1242,43 +1531,37 @@ function initChat() {
     }
     const parsed = parseBanTarget(target);
     if (!parsed) {
-      setStatus('missing ban target');
+      setStatus('invalid message id');
       return;
     }
-    const endpoint = type === 'device'
-      ? (isUnban ? '/chat/moderate/unban_device' : '/chat/moderate/ban_device')
-      : (isUnban ? '/chat/moderate/unban' : '/chat/moderate/ban');
-    const payload = { code };
-    if (type === 'device') {
-      if (isUnban) {
-        payload.device_id = parsed.raw;
-      } else if (parsed.isMessageId) {
-        const cached = messageCache.get(parsed.raw);
-        if (!cached?.device_id) {
-          setStatus('device id not found');
-          return;
-        }
-        payload.device_id = cached.device_id;
-        if (cached?.text) {
-          payload.message = String(cached.text);
-        }
-      } else {
-        payload.device_id = parsed.raw;
-      }
-    } else {
-      if (isUnban) {
-        payload.ip = parsed.raw;
-      } else if (parsed.isMessageId) {
-        payload.message_id = Number(parsed.raw);
-        const cached = messageCache.get(parsed.raw);
-        if (cached?.text) {
-          payload.message = String(cached.text);
-        }
-      } else {
-        payload.ip = parsed.raw;
-      }
+    const normalizedType = type === 'device' ? 'device' : 'ip';
+    const reason = String(reasonText ?? '').trim();
+    if (!reason) {
+      setStatus('ban reason required');
+      banReasonInput?.focus();
+      return;
     }
-    postModerationAction(endpoint, payload);
+    const payload = {
+      code,
+      message_id: parsed.id,
+      type: normalizedType,
+      reason
+    };
+    postModerationAction('/chat/moderate/ban', payload, `ban sent (${normalizedType})`);
+  };
+
+  const moderateUnban = (target, onSuccess = null) => {
+    const code = getModCode();
+    if (!code) {
+      setStatus('missing moderation code');
+      return;
+    }
+    const parsed = parseBanTarget(target);
+    if (!parsed) {
+      setStatus('invalid ban id');
+      return;
+    }
+    postModerationAction('/chat/moderate/unban', { code, ban_id: parsed.id }, 'unban sent', onSuccess);
   };
 
   const fetchBans = () => {
@@ -1287,32 +1570,43 @@ function initChat() {
       setStatus('missing moderation code');
       return;
     }
-    GM_xmlhttpRequest({
-      method: "GET",
-      url: `${TEMPLATE_SYNC_BASE_URL}/chat/moderate/banned?code=${encodeURIComponent(code)}`,
-      onload: (response) => {
-        let data = {};
-        try {
-          data = response.response ?? JSON.parse(response.responseText || "{}");
-        } catch (_) {
-          data = {};
+    const requestBans = (path, fallbackPath = null) => {
+      GM_xmlhttpRequest({
+        method: "GET",
+        url: `${TEMPLATE_SYNC_BASE_URL}${path}?code=${encodeURIComponent(code)}`,
+        onload: (response) => {
+          if (response.status < 200 || response.status >= 300) {
+            if (fallbackPath) {
+              requestBans(fallbackPath, null);
+              return;
+            }
+            setStatus(`moderation failed (${response.status})`);
+            return;
+          }
+          const data = parseJsonResponse(response, {});
+          const list = Array.isArray(data?.banned)
+            ? data.banned
+            : Array.isArray(data)
+              ? data
+              : [];
+          if (!list.length) {
+            setStatus('no bans');
+            showBansWindow([]);
+            return;
+          }
+          setStatus(`active bans: ${list.length}`);
+          showBansWindow(list);
+        },
+        onerror: () => {
+          if (fallbackPath) {
+            requestBans(fallbackPath, null);
+            return;
+          }
+          setStatus('moderation error');
         }
-        const list = Array.isArray(data?.banned) ? data.banned : [];
-        if (!list.length) {
-          setStatus('no bans');
-          return;
-        }
-        const lines = list.map((entry) => {
-          const typeLabel = entry?.type || 'unknown';
-          const idLabel = entry?.identifier || entry?.ip || entry?.device_id || '';
-          const ts = entry?.created_at ? ` @ ${entry.created_at}` : '';
-          const msg = entry?.message ? ` — ${entry.message}` : '';
-          return `${typeLabel}: ${idLabel}${ts}${msg}`;
-        });
-        alert(lines.join('\n'));
-      },
-      onerror: () => setStatus('moderation error')
-    });
+      });
+    };
+    requestBans('/chat/moderate/banned', '/chat/banned');
   };
 
   const ensureDeleteButton = (row) => {
@@ -1324,16 +1618,20 @@ function initChat() {
       if (existing) existing.remove();
       row.style.position = '';
       row.style.paddingRight = '';
+      row.removeAttribute('data-mod-message-id');
+      row.removeAttribute('title');
       return;
     }
+    row.style.position = 'relative';
+    row.style.paddingRight = '18px';
+    row.setAttribute('data-mod-message-id', `ID ${messageId}`);
+    row.title = `Message ID: ${messageId}`;
     if (existing) return;
     const btn = document.createElement('button');
     btn.className = 'bm-chat-delete';
     btn.type = 'button';
     btn.textContent = '✖';
     btn.title = 'Delete message';
-    row.style.position = 'relative';
-    row.style.paddingRight = '18px';
     btn.style.position = 'absolute';
     btn.style.top = '2px';
     btn.style.right = '2px';
@@ -1374,29 +1672,78 @@ function initChat() {
     updateFloatingMessagesHeight();
   };
 
-  const appendMessage = (payload) => {
+  const isRateLimited = () => rateLimitUntilTs > Date.now();
+  const getRateLimitSeconds = () => Math.max(0, (rateLimitUntilTs - Date.now()) / 1000);
+  const isBanned = () => Boolean(bannedInfo);
+  const clearRateLimitTimer = () => {
+    if (rateLimitTimer) {
+      clearInterval(rateLimitTimer);
+      rateLimitTimer = null;
+    }
+  };
+  const restoreChatInputState = () => {
+    if (isBanned()) return;
+    if (isRateLimited()) return;
+    textInput.disabled = false;
+    textInput.placeholder = defaultChatTextPlaceholder;
+  };
+  const clearRateLimitState = () => {
+    rateLimitUntilTs = 0;
+    clearRateLimitTimer();
+    restoreChatInputState();
+  };
+  const restoreFailedSendDraft = () => {
+    if (!pendingSendRestore) return;
+    if (Date.now() - pendingSendRestore.ts > 15000) {
+      pendingSendRestore = null;
+      return;
+    }
+    if (String(textInput.value || '').trim()) return;
+    textInput.value = pendingSendRestore.text;
+    if (pendingSendRestore.replyToId) {
+      setReplyTo(pendingSendRestore.replyToId);
+    }
+    pendingSendRestore = null;
+  };
+
+  const appendMessage = (payload, options = {}) => {
+    const isSystem = Boolean(options?.isSystem);
     // Normalize user field from possible server keys for compatibility; prefer non-anon usernames when provided
-    const candidateUser = payload?.user ?? payload?.username ?? payload?.name ?? payload?.Lt;
-    const fallbackUser = payload?.username ?? payload?.name ?? payload?.Lt;
-    const resolvedUser = (candidateUser && candidateUser !== 'anon')
-      ? candidateUser
-      : (fallbackUser && fallbackUser !== 'anon')
-        ? fallbackUser
-        : 'anon';
-    payload.user = normalizeUser(resolvedUser);
-    applyPendingReply(payload);
+    if (!isSystem) {
+      const candidateUser = payload?.user ?? payload?.username ?? payload?.name ?? payload?.Lt;
+      const fallbackUser = payload?.username ?? payload?.name ?? payload?.Lt;
+      const resolvedUser = (candidateUser && candidateUser !== 'anon')
+        ? candidateUser
+        : (fallbackUser && fallbackUser !== 'anon')
+          ? fallbackUser
+          : 'anon';
+      payload.user = normalizeUser(resolvedUser);
+      applyPendingReply(payload);
+    } else {
+      payload.user = String(payload?.user || 'system').trim() || 'system';
+    }
     const user = payload.user;
     const text = payload?.text || '';
     const ts = payload?.ts ? new Date(payload.ts) : new Date();
     const line = document.createElement('div');
     line.className = 'bm-chat-message';
+    if (isSystem) {
+      line.classList.add('bm-chat-system');
+      if (options?.systemKind === 'banned') {
+        line.classList.add('bm-chat-system-banned');
+      } else if (options?.systemKind === 'rate_limit') {
+        line.classList.add('bm-chat-system-rate-limit');
+      }
+    }
     if (payload?.id !== undefined && payload?.id !== null) {
       const messageId = String(payload.id);
       line.setAttribute('data-msg-id', messageId);
       messageCache.set(messageId, payload);
     }
-    upsertMapCommentSafe(payload, 'appendMessage');
-    const replyId = payload?.reply_to;
+    if (!isSystem) {
+      upsertMapCommentSafe(payload, 'appendMessage');
+    }
+    const replyId = !isSystem ? payload?.reply_to : null;
     if (replyId !== undefined && replyId !== null) {
       const replyBlock = document.createElement('div');
       replyBlock.className = 'bm-chat-reply-inline';
@@ -1420,10 +1767,14 @@ function initChat() {
       minute: '2-digit',
       hour12: false,
     });
-    const metaColor = getChatUserColor(user);
-    meta.style.color = metaColor;
-    meta.style.fontWeight = '700';
-    meta.textContent = `[${timeLabel}] ${user}:`;
+    if (isSystem) {
+      meta.textContent = `[${timeLabel}] System:`;
+    } else {
+      const metaColor = getChatUserColor(user);
+      meta.style.color = metaColor;
+      meta.style.fontWeight = '700';
+      meta.textContent = `[${timeLabel}] ${user}:`;
+    }
     const body = document.createElement('span');
     body.className = 'bm-chat-body';
     appendLinkedText(body, text, { enableTeleport: true, shortenWplace: true });
@@ -1435,14 +1786,85 @@ function initChat() {
       messagesEl.removeChild(messagesEl.firstChild);
     }
     messagesEl.scrollTop = messagesEl.scrollHeight;
-    ensureDeleteButton(line);
-    line.addEventListener('dblclick', () => {
-      const id = line.getAttribute('data-msg-id');
-      if (id) {
-        setReplyTo(id);
-        textInput.focus();
+    if (!isSystem) {
+      if (pendingSendRestore) {
+        const sameText = String(pendingSendRestore.text || '') === String(text || '');
+        const sameUser = String(user || '') === String(getUserName() || '');
+        const pendingReply = pendingSendRestore.replyToId ? String(pendingSendRestore.replyToId) : '';
+        const incomingReply = payload?.reply_to ? String(payload.reply_to) : '';
+        const sameReply = pendingReply === incomingReply;
+        if (sameText && sameUser && sameReply) {
+          pendingSendRestore = null;
+        }
       }
-    });
+      ensureDeleteButton(line);
+      line.addEventListener('dblclick', () => {
+        const id = line.getAttribute('data-msg-id');
+        if (id) {
+          setReplyTo(id);
+          textInput.focus();
+        }
+      });
+    }
+  };
+
+  const appendSystemMessage = (message, ts, systemKind = 'notice') => {
+    const text = String(message ?? '').trim();
+    if (!text) return;
+    appendMessage({
+      user: 'system',
+      text,
+      ts: ts || new Date().toISOString()
+    }, { isSystem: true, systemKind });
+  };
+
+  const applyRateLimitState = (payload) => {
+    const retryAfter = Number(payload?.retry_after);
+    if (!Number.isFinite(retryAfter) || retryAfter <= 0) return;
+    const untilTs = Date.now() + retryAfter * 1000;
+    rateLimitUntilTs = Math.max(rateLimitUntilTs, untilTs);
+    if (payload?.message) {
+      appendSystemMessage(payload.message, payload?.ts, 'rate_limit');
+    }
+    restoreFailedSendDraft();
+    const tick = () => {
+      if (!isRateLimited()) {
+        clearRateLimitState();
+        if (!isBanned() && chatSocket?.readyState === WebSocket.OPEN) {
+          setStatus('connected');
+        }
+        return;
+      }
+      const remaining = getRateLimitSeconds();
+      textInput.disabled = true;
+      textInput.placeholder = `Wait ${remaining.toFixed(1)}s...`;
+      setStatus(`slow mode ${remaining.toFixed(1)}s`);
+    };
+    tick();
+    if (!rateLimitTimer) {
+      rateLimitTimer = setInterval(tick, 200);
+    }
+  };
+
+  const applyBannedState = (payload) => {
+    const scope = payload?.scope === 'device'
+      ? 'device'
+      : payload?.scope === 'ip'
+        ? 'ip'
+        : 'chat';
+    bannedInfo = {
+      scope,
+      ts: payload?.ts || null,
+      message: String(payload?.message || 'You are banned from chat.').trim() || 'You are banned from chat.'
+    };
+    clearRateLimitState();
+    textInput.disabled = true;
+    textInput.placeholder = `Banned (${scope})`;
+    clearReply();
+    restoreFailedSendDraft();
+    appendSystemMessage(bannedInfo.message, bannedInfo.ts, 'banned');
+    setStatus(`banned (${scope})`);
+    try { chatSocket?.close(); } catch (_) {}
   };
 
   const handleDeleted = (payload) => {
@@ -1473,6 +1895,9 @@ function initChat() {
     if (chatSocket && (chatSocket.readyState === WebSocket.OPEN || chatSocket.readyState === WebSocket.CONNECTING)) {
       return;
     }
+    clearRateLimitState();
+    bannedInfo = null;
+    restoreChatInputState();
     setStatus('connecting');
     const buildChatUrl = () => {
       try {
@@ -1493,14 +1918,23 @@ function initChat() {
     chatSocket = new WebSocket(buildChatUrl());
     chatSocket.onopen = () => {
       reconnectAttempts = 0;
+      clearRateLimitState();
+      bannedInfo = null;
+      restoreChatInputState();
       setStatus('connected');
     };
     chatSocket.onclose = () => {
+      if (isBanned()) {
+        setStatus(`banned (${bannedInfo?.scope || 'chat'})`);
+        return;
+      }
       setStatus('disconnected');
       scheduleReconnect();
     };
     chatSocket.onerror = () => {
-      setStatus('error');
+      if (!isBanned()) {
+        setStatus('error');
+      }
     };
     chatSocket.onmessage = (event) => {
       try {
@@ -1509,12 +1943,24 @@ function initChat() {
           appendMessage(payload);
         } else if (payload?.type === 'chat_deleted') {
           handleDeleted(payload);
+        } else if (payload?.type === 'rate_limit') {
+          applyRateLimitState(payload);
+        } else if (payload?.type === 'banned') {
+          applyBannedState(payload);
         }
       } catch (_) {}
     };
   };
 
   const sendMessage = () => {
+    if (isBanned()) {
+      setStatus(`banned (${bannedInfo?.scope || 'chat'})`);
+      return;
+    }
+    if (isRateLimited()) {
+      setStatus(`slow mode ${getRateLimitSeconds().toFixed(1)}s`);
+      return;
+    }
     let text = textInput.value.trim();
     if (!text) return;
     if (text.length > CHAT_MAX_TEXT_LEN) {
@@ -1545,7 +1991,18 @@ function initChat() {
       payload.reply_to = replyToId;
       queuePendingReply(user, text, replyToId);
     }
-    chatSocket.send(JSON.stringify(payload));
+    pendingSendRestore = {
+      text,
+      replyToId: replyToId ? String(replyToId) : null,
+      ts: Date.now()
+    };
+    try {
+      chatSocket.send(JSON.stringify(payload));
+    } catch (_) {
+      setStatus('disconnected');
+      restoreFailedSendDraft();
+      return;
+    }
     textInput.value = '';
     clearReply();
   };
@@ -1582,7 +2039,8 @@ function initChat() {
   });
   modCodeInput?.addEventListener('input', () => {
     GM.setValue('bmChatModCode', modCodeInput.value.trim());
-  renderModerationControls();
+    renderModerationControls();
+  });
   messagesEl.addEventListener('click', (event) => {
     const target = event.target instanceof Element ? event.target.closest('.bm-chat-delete') : null;
     if (!target) return;
@@ -1594,15 +2052,10 @@ function initChat() {
     event.stopPropagation();
     moderateDelete(messageIdNum);
   });
-  });
   const banBtn = document.getElementById('bm-chat-ban-btn');
-  const unbanBtn = document.getElementById('bm-chat-unban-btn');
   const bansBtn = document.getElementById('bm-chat-bans-btn');
   banBtn?.addEventListener('click', () => {
-    moderateBan(banTargetInput?.value, banTypeSelect?.value || 'ip', false);
-  });
-  unbanBtn?.addEventListener('click', () => {
-    moderateBan(banTargetInput?.value, banTypeSelect?.value || 'ip', true);
+    moderateBan(banTargetInput?.value, banTypeSelect?.value || 'ip', banReasonInput?.value);
   });
   bansBtn?.addEventListener('click', () => {
     fetchBans();
@@ -2883,9 +3336,9 @@ async function buildOverlayMain() {
               select.appendChild(optIp);
               select.appendChild(optDevice);
             }).buildElement()
-            .addInput({'type': 'text', 'id': 'bm-chat-ban-target', 'placeholder': 'IP / device id / msg id', 'maxlength': 64, 'style': 'width: 18ch;'}).buildElement()
+            .addInput({'type': 'text', 'id': 'bm-chat-ban-target', 'placeholder': 'Message ID', 'inputMode': 'numeric', 'maxLength': 20, 'style': 'width: 15ch;'}).buildElement()
+            .addInput({'type': 'text', 'id': 'bm-chat-ban-reason', 'placeholder': 'Reason', 'maxLength': 120, 'style': 'flex: 1; min-width: 16ch;'}).buildElement()
             .addButton({'id': 'bm-chat-ban-btn', 'textContent': 'Ban', 'style': 'font-size: 11px; padding: 0 6px;'}).buildElement()
-            .addButton({'id': 'bm-chat-unban-btn', 'textContent': 'Unban', 'style': 'font-size: 11px; padding: 0 6px;'}).buildElement()
             .addButton({'id': 'bm-chat-bans-btn', 'textContent': 'Bans', 'style': 'font-size: 11px; padding: 0 6px;'}).buildElement()
           .buildElement()
           .addDiv({'id': 'bm-chat-messages', 'style': 'max-height: 120px; overflow-y: auto; border: 1px solid var(--bm-border); padding: 4px; border-radius: 4px; margin-bottom: 4px;'}).buildElement()
