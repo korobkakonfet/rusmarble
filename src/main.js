@@ -586,6 +586,70 @@ function initChat() {
     messagesEl.style.height = `${nextHeight}px`;
   };
 
+  const scrollChatToBottom = () => {
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  };
+  const captureChatViewport = () => {
+    const scrollTop = messagesEl.scrollTop;
+    const clientHeight = messagesEl.clientHeight;
+    const scrollHeight = messagesEl.scrollHeight;
+    const nearBottom = (scrollHeight - (scrollTop + clientHeight)) <= 4;
+    const rows = Array.from(messagesEl.querySelectorAll('.bm-chat-message'));
+    let anchorId = null;
+    let anchorElement = null;
+    let anchorIndex = -1;
+    let anchorOffset = 0;
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const rowTop = row.offsetTop;
+      const rowBottom = rowTop + row.offsetHeight;
+      if (rowBottom > scrollTop) {
+        anchorId = row.getAttribute('data-msg-id');
+        anchorElement = row;
+        anchorIndex = i;
+        anchorOffset = scrollTop - rowTop;
+        break;
+      }
+    }
+    return {
+      scrollTop,
+      nearBottom,
+      anchorId,
+      anchorElement,
+      anchorIndex,
+      anchorOffset
+    };
+  };
+  const restoreChatViewport = (state) => {
+    if (!state) return;
+    if (state.nearBottom) {
+      scrollChatToBottom();
+      return;
+    }
+    if (state.anchorId) {
+      const row = Array.from(messagesEl.querySelectorAll('.bm-chat-message'))
+        .find(item => item.getAttribute('data-msg-id') === state.anchorId);
+      if (row) {
+        messagesEl.scrollTop = Math.max(0, row.offsetTop + state.anchorOffset);
+        return;
+      }
+    }
+    if (state.anchorElement && state.anchorElement.isConnected) {
+      messagesEl.scrollTop = Math.max(0, state.anchorElement.offsetTop + state.anchorOffset);
+      return;
+    }
+    if (Number.isInteger(state.anchorIndex) && state.anchorIndex >= 0) {
+      const rows = Array.from(messagesEl.querySelectorAll('.bm-chat-message'));
+      const row = rows[state.anchorIndex];
+      if (row) {
+        messagesEl.scrollTop = Math.max(0, row.offsetTop + state.anchorOffset);
+        return;
+      }
+    }
+    const maxTop = Math.max(0, messagesEl.scrollHeight - messagesEl.clientHeight);
+    messagesEl.scrollTop = Math.min(Math.max(0, state.scrollTop), maxTop);
+  };
+
   const syncFloatingCollapsedState = () => {
     if (!chatDetails) return;
     if (!isChatFloating) {
@@ -609,6 +673,7 @@ function initChat() {
   };
 
   const setChatFloating = (enabled) => {
+    const viewportState = captureChatViewport();
     isChatFloating = Boolean(enabled);
     chatDetails.classList.toggle('bm-chat-floating', isChatFloating);
     if (chatFloatToggleBtn) {
@@ -654,6 +719,11 @@ function initChat() {
       chatDetails.style.height = '';
       messagesEl.style.height = '';
     }
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        restoreChatViewport(viewportState);
+      });
+    });
   };
 
   if (chatFloatToggleBtn) {
