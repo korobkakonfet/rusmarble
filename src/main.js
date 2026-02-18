@@ -102,12 +102,14 @@ const waitForBody = () => {
 const applyLayoutTheme = (value) => {
   const overlay = document.getElementById('bm-overlay');
   if (!overlay) return;
-  overlay.dataset.layoutTheme = normalizeLayoutTheme(value);
+  const nextTheme = normalizeLayoutTheme(value);
+  overlay.dataset.layoutTheme = nextTheme;
   applyWplaceThemeState();
   const notificationContainer = document.getElementById('bm-notification-container');
   if (notificationContainer) {
-    notificationContainer.dataset.layoutTheme = normalizeLayoutTheme(value);
+    notificationContainer.dataset.layoutTheme = nextTheme;
   }
+  document.dispatchEvent(new CustomEvent('bm-layout-theme-changed', { detail: { layoutTheme: nextTheme } }));
 };
 
 /** Injects code into the client
@@ -410,6 +412,12 @@ function startNotificationPolling() {
 
 function initChat() {
   const CHAT_USER_COLORS_STORAGE_KEY = 'bmChatUserColors';
+  const CHAT_NICKNAME_COLOR_VARIANTS = [
+    '#ff6b6b', '#f97316', '#f59e0b', '#eab308', '#84cc16', '#22c55e',
+    '#10b981', '#14b8a6', '#06b6d4', '#0ea5e9', '#3b82f6', '#6366f1',
+    '#8b5cf6', '#a855f7', '#d946ef', '#ec4899', '#f43f5e', '#ef4444',
+    '#fb7185', '#f472b6', '#60a5fa', '#2dd4bf', '#34d399', '#a3e635'
+  ];
   const statusTextEl = document.getElementById('bm-chat-status-text');
   const messagesEl = document.getElementById('bm-chat-messages');
   const userInput = document.getElementById('bm-chat-user');
@@ -440,10 +448,8 @@ function initChat() {
     return null;
   };
   const makeRandomChatColor = () => {
-    const h = Math.floor(Math.random() * 360);
-    const s = 68 + Math.floor(Math.random() * 10);
-    const l = 62 + Math.floor(Math.random() * 8);
-    return `hsl(${h} ${s}% ${l}%)`;
+    const idx = Math.floor(Math.random() * CHAT_NICKNAME_COLOR_VARIANTS.length);
+    return CHAT_NICKNAME_COLOR_VARIANTS[idx] || '#9cc8ff';
   };
   const schedulePersistChatColors = () => {
     if (chatUserColorsPersistTimer) return;
@@ -507,6 +513,7 @@ function initChat() {
 
   const applyFloatingThemeVars = () => {
     if (!overlayRoot) return;
+    floatingVarNames.length = 0;
     const computed = getComputedStyle(overlayRoot);
     for (let i = 0; i < computed.length; i++) {
       const propName = computed[i];
@@ -523,6 +530,12 @@ function initChat() {
       const propName = floatingVarNames.pop();
       chatDetails.style.removeProperty(propName);
     }
+  };
+  const refreshChatThemeFromOverlay = () => {
+    if (!isChatFloating) return;
+    clearFloatingThemeVars();
+    applyFloatingThemeVars();
+    updateFloatingMessagesHeight();
   };
   if (chatSummary) {
     chatSummary.classList.add('bm-chat-summary');
@@ -699,6 +712,9 @@ function initChat() {
 
   chatDetails?.addEventListener('toggle', () => {
     syncFloatingCollapsedState();
+  });
+  document.addEventListener('bm-layout-theme-changed', () => {
+    refreshChatThemeFromOverlay();
   });
 
   window.addEventListener('resize', () => updateFloatingMessagesHeight());
@@ -1844,6 +1860,8 @@ async function buildOverlayMain() {
             isMinimized = !isMinimized; // Toggle the current state
 
             const overlay = document.querySelector('#bm-overlay');
+            overlay?.classList.toggle('bm-overlay-minimized', isMinimized);
+            document.dispatchEvent(new CustomEvent('bm-overlay-minimized-changed', { detail: { minimized: isMinimized } }));
             const header = document.querySelector('#bm-contain-header');
             const dragBar = document.querySelector('#bm-bar-drag');
             const coordsContainer = document.querySelector('#bm-contain-coords');
