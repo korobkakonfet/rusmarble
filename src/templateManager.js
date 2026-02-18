@@ -199,6 +199,7 @@ export default class TemplateManager {
       template.isRemote = true;
       template.remoteName = options.remoteName || template.displayName;
       template.remoteUpdatedAt = options.remoteUpdatedAt || null;
+      template.remoteImageUpdatedAt = options.remoteImageUpdatedAt || null;
       template.remoteFlagsCheckedAt = options.remoteFlagsCheckedAt || null;
       template.remoteFlagsCheckedAtLocal = options.remoteFlagsCheckedAtLocal || null;
       template.remoteCoords = Array.isArray(options.remoteCoords)
@@ -212,6 +213,7 @@ export default class TemplateManager {
       this.templatesJSON.templates[storageKey].remote = true;
       this.templatesJSON.templates[storageKey].remoteName = template.remoteName;
       this.templatesJSON.templates[storageKey].remoteUpdatedAt = template.remoteUpdatedAt;
+      this.templatesJSON.templates[storageKey].remoteImageUpdatedAt = template.remoteImageUpdatedAt;
       this.templatesJSON.templates[storageKey].remoteFlagsCheckedAt = template.remoteFlagsCheckedAt;
       this.templatesJSON.templates[storageKey].remoteFlagsCheckedAtLocal = template.remoteFlagsCheckedAtLocal;
       this.templatesJSON.templates[storageKey].remoteCoords = template.remoteCoords;
@@ -1056,6 +1058,7 @@ export default class TemplateManager {
             template.isRemote = templateValue.remote === true;
             template.remoteName = templateValue.remoteName ?? null;
             template.remoteUpdatedAt = templateValue.remoteUpdatedAt ?? null;
+            template.remoteImageUpdatedAt = templateValue.remoteImageUpdatedAt ?? null;
             template.remoteFlagsCheckedAt = templateValue.remoteFlagsCheckedAt ?? null;
             template.remoteFlagsCheckedAtLocal = templateValue.remoteFlagsCheckedAtLocal ?? null;
             template.remoteCoords = templateValue.remoteCoords ?? null;

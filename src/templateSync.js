@@ -392,6 +392,7 @@ export function createTemplateSync({
           const entryMeta = typeof entry === "object" && entry !== null ? entry : null;
           const templateName = typeof entry === "string" ? entry : entry?.['name'];
           const updatedAt = entryMeta?.['updated_at'] ?? null;
+          const imageUpdatedAt = entryMeta?.['image_updated_at'] ?? null;
           const isDeleted = entryMeta?.['deleted'] === true;
           if (!templateName) { continue; }
           if (isDeleted) { continue; }
@@ -403,32 +404,45 @@ export function createTemplateSync({
             templateManager.templatesJSON?.templates?.[existingTemplate?.storageKey]?.remoteUpdatedAt ??
             existingTemplate?.remoteUpdatedAt ??
             null;
+          const existingImageUpdatedAt =
+            templateManager.templatesJSON?.templates?.[existingTemplate?.storageKey]?.remoteImageUpdatedAt ??
+            existingTemplate?.remoteImageUpdatedAt ??
+            existingUpdatedAt ??
+            null;
           const flagsAppliedAt =
             templateManager.templatesJSON?.templates?.[existingTemplate?.storageKey]?.remoteFlagsAppliedAt ??
             existingTemplate?.remoteFlagsAppliedAt ??
             null;
           const normalizedUpdatedAt = normalizeUpdatedAt(updatedAt);
           const normalizedExistingUpdatedAt = normalizeUpdatedAt(existingUpdatedAt);
+          const normalizedImageUpdatedAt = normalizeUpdatedAt(imageUpdatedAt ?? updatedAt);
+          const normalizedExistingImageUpdatedAt = normalizeUpdatedAt(existingImageUpdatedAt);
           const normalizedFlagsAppliedAt = normalizeUpdatedAt(flagsAppliedAt);
-          if (normalizedUpdatedAt && normalizedFlagsAppliedAt && normalizedUpdatedAt === normalizedFlagsAppliedAt) {
+          const imageChanged = !!normalizedImageUpdatedAt && normalizedImageUpdatedAt !== normalizedExistingImageUpdatedAt;
+          if (normalizedUpdatedAt && normalizedFlagsAppliedAt && normalizedUpdatedAt === normalizedFlagsAppliedAt && !imageChanged) {
             continue;
           }
           const isMissingLocal = !existingTemplate;
-          const isChanged = isMissingLocal || (normalizedUpdatedAt && normalizedUpdatedAt !== normalizedExistingUpdatedAt);
+          const isChanged = isMissingLocal
+            || imageChanged
+            || (normalizedUpdatedAt && normalizedUpdatedAt !== normalizedExistingUpdatedAt);
           if (isChanged) {
-            promptPieces.push(`${templateName}::${normalizedUpdatedAt ?? 'missing'}`);
+            promptPieces.push(`${templateName}::${normalizedUpdatedAt ?? 'missing'}::${normalizedImageUpdatedAt ?? 'missing'}`);
             const updateReasons = [];
             if (isMissingLocal) { updateReasons.push('missing-local'); }
             if (normalizedUpdatedAt && normalizedUpdatedAt !== normalizedExistingUpdatedAt) { updateReasons.push('updated_at-changed'); }
+            if (imageChanged) { updateReasons.push('image_updated_at-changed'); }
             const reasonText = updateReasons.length ? updateReasons.join(', ') : 'unknown';
             console.log(
-              `%c${name}%c: Template update flagged for "%s" (reason: %s). updated_at=%s, local_updated_at=%s, flags_applied_at=%s`,
+              `%c${name}%c: Template update flagged for "%s" (reason: %s). updated_at=%s, local_updated_at=%s, image_updated_at=%s, local_image_updated_at=%s, flags_applied_at=%s`,
               consoleStyle,
               '',
               templateName,
               reasonText,
               updatedAt,
               existingUpdatedAt,
+              imageUpdatedAt,
+              existingImageUpdatedAt,
               flagsAppliedAt
             );
             changedCount += 1;
@@ -522,6 +536,7 @@ export function createTemplateSync({
         const entryMeta = typeof entry === "object" && entry !== null ? entry : null;
         const name = typeof entry === "string" ? entry : entry?.['name'];
         const updatedAt = entryMeta?.['updated_at'] ?? null;
+        const imageUpdatedAt = entryMeta?.['image_updated_at'] ?? null;
         const listOrder = normalizeRemoteOrder(entryMeta?.['order']);
         if (entryMeta?.['deleted'] === true) { continue; }
         if (!name) { continue; }
@@ -551,9 +566,26 @@ export function createTemplateSync({
           templateManager.templatesJSON?.templates?.[preferredTemplate?.storageKey]?.remoteUpdatedAt ??
           preferredTemplate?.remoteUpdatedAt ??
           null;
+        const existingImageUpdatedAt =
+          templateManager.templatesJSON?.templates?.[preferredTemplate?.storageKey]?.remoteImageUpdatedAt ??
+          preferredTemplate?.remoteImageUpdatedAt ??
+          existingUpdatedAt ??
+          null;
+        const flagsAppliedAt =
+          templateManager.templatesJSON?.templates?.[preferredTemplate?.storageKey]?.remoteFlagsAppliedAt ??
+          preferredTemplate?.remoteFlagsAppliedAt ??
+          null;
         const normalizedExistingUpdatedAt = normalizeUpdatedAt(existingUpdatedAt);
         const normalizedUpdatedAt = normalizeUpdatedAt(updatedAt);
-        if (normalizedExistingUpdatedAt && normalizedUpdatedAt && normalizedExistingUpdatedAt === normalizedUpdatedAt) {
+        const normalizedExistingImageUpdatedAt = normalizeUpdatedAt(existingImageUpdatedAt);
+        const normalizedImageUpdatedAt = normalizeUpdatedAt(imageUpdatedAt ?? updatedAt);
+        const normalizedFlagsAppliedAt = normalizeUpdatedAt(flagsAppliedAt);
+        const imageChanged = !!normalizedImageUpdatedAt && normalizedImageUpdatedAt !== normalizedExistingImageUpdatedAt;
+        const updatedChanged = !!normalizedUpdatedAt && normalizedUpdatedAt !== normalizedExistingUpdatedAt;
+        const flagsOnlyAlreadyApplied = updatedChanged
+          && !!normalizedFlagsAppliedAt
+          && normalizedUpdatedAt === normalizedFlagsAppliedAt;
+        if (!imageChanged && (!updatedChanged || flagsOnlyAlreadyApplied)) {
           continue;
         }
         logSync(`Fetching template meta for "${name}"...`, { statusHandler });
@@ -571,6 +603,7 @@ export function createTemplateSync({
           continue;
         }
         const metaUpdatedAt = meta?.['updated_at'] ?? null;
+        const metaImageUpdatedAt = meta?.['image_updated_at'] ?? imageUpdatedAt ?? null;
         const toTop = normalizeFlag(meta?.['to_top'] ?? entryMeta?.['to_top']);
         const toTopAt = meta?.['to_top_at'] ?? null;
         const highlighted = normalizeFlag(meta?.['highlighted'] ?? entryMeta?.['highlighted']);
@@ -604,6 +637,7 @@ export function createTemplateSync({
             remoteName: name,
             remoteCoords: coords,
             remoteUpdatedAt: updatedAt || metaUpdatedAt,
+            remoteImageUpdatedAt: imageUpdatedAt || metaImageUpdatedAt || updatedAt || metaUpdatedAt,
             remoteToTop: toTop,
             remoteToTopAt: toTopAt,
             remoteHighlighted: highlighted,
