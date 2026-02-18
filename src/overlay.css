@@ -292,13 +292,14 @@ div#bm-overlay {
 
 /* The drag bar */
 #bm-bar-drag {
-  margin-bottom: 0.5em;
+  margin-bottom: 0.65em;
   background: var(--bm-drag-bg);
   background-repeat: var(--bm-drag-bg-repeat);
   background-size: var(--bm-drag-bg-size);
   cursor: grab;
   width: 100%;
-  height: 1em;
+  height: 1.15em;
+  border-radius: 4px;
 }
 
 /* When the overlay is being dragged */

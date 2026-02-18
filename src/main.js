@@ -1889,7 +1889,7 @@ async function buildOverlayMain() {
               // Ensure drag bar remains visible and properly spaced
               if (dragBar) {
                 dragBar.style.display = '';
-                dragBar.style.marginBottom = '0.25em';
+                dragBar.style.marginBottom = '0.35em';
               }
             } else {
               // ==================== MAXIMIZED STATE RESTORATION ====================
@@ -1962,7 +1962,7 @@ async function buildOverlayMain() {
               
               // Reset drag bar spacing
               if (dragBar) {
-                dragBar.style.marginBottom = '0.5em';
+                dragBar.style.marginBottom = '0.65em';
               }
               
               // Remove all fixed dimensions to allow responsive behavior
