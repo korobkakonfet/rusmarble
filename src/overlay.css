@@ -392,8 +392,12 @@ div#bm-overlay {
   width: 1.5em;
   margin-top: 2px;
   text-align: center;
-  line-height: 1em;
+  line-height: 1;
   padding: 0 !important; /* Overrides the padding in "#bm-overlay button" */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif;
 }
 
 /* Pin button */
@@ -403,9 +407,13 @@ div#bm-overlay {
 
 /* Pin button image*/
 #bm-button-coords svg {
-  width: 50%;
-  margin: 0 auto;
+  width: 62%;
+  height: 62%;
+  display: block;
+  margin: 0;
   fill: var(--bm-icon);
+  transform: translateY(-0.5px);
+  pointer-events: none;
 }
 
 /* Container for action buttons, that is inside the action button container */
@@ -587,6 +595,7 @@ input[type="file"][id*="template"] {
   border-radius: 1em;
   padding: 0 0.75ch;
   font-size: small;
+  line-height: 1;
 }
 
 #bm-button-sync-templates {
@@ -778,8 +787,8 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   color: var(--bm-muted);
   border: 1px solid var(--bm-border);
   border-radius: 6px;
-  font-size: 10px;
-  line-height: 1.2;
+  font-size: 11px;
+  line-height: 1;
   width: 22px;
   height: 18px;
   padding: 0;
@@ -787,6 +796,20 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  font-family: "Segoe UI Symbol", "Noto Sans Symbols 2", sans-serif;
+}
+
+.bm-icon-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.35em;
+  height: 1.35em;
+  line-height: 1;
+  font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif;
+  text-decoration: none;
+  vertical-align: middle;
+  cursor: pointer;
 }
 
 .bm-chat-float-toggle:hover {
