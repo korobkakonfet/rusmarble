@@ -409,6 +409,7 @@ function startNotificationPolling() {
 }
 
 function initChat() {
+  const CHAT_USER_COLORS_STORAGE_KEY = 'bmChatUserColors';
   const statusTextEl = document.getElementById('bm-chat-status-text');
   const messagesEl = document.getElementById('bm-chat-messages');
   const userInput = document.getElementById('bm-chat-user');
@@ -426,9 +427,63 @@ function initChat() {
   let reconnectTimer = null;
   let reconnectAttempts = 0;
   let replyToId = null;
+  const chatUserColors = new Map();
+  let chatUserColorsPersistTimer = null;
   const messageCache = new Map();
   const pendingReplies = [];
   const PENDING_REPLY_WINDOW_MS = 30000;
+  const normalizeColor = (value) => {
+    const text = String(value ?? '').trim();
+    if (!text) return null;
+    if (/^#[0-9a-f]{6}$/i.test(text)) return text;
+    if (/^hsl\(\s*\d{1,3}\s+[\d.]+%\s+[\d.]+%\s*\)$/i.test(text)) return text;
+    return null;
+  };
+  const makeRandomChatColor = () => {
+    const h = Math.floor(Math.random() * 360);
+    const s = 68 + Math.floor(Math.random() * 10);
+    const l = 62 + Math.floor(Math.random() * 8);
+    return `hsl(${h} ${s}% ${l}%)`;
+  };
+  const schedulePersistChatColors = () => {
+    if (chatUserColorsPersistTimer) return;
+    chatUserColorsPersistTimer = setTimeout(() => {
+      chatUserColorsPersistTimer = null;
+      const payload = Object.fromEntries(chatUserColors.entries());
+      GM.setValue(CHAT_USER_COLORS_STORAGE_KEY, JSON.stringify(payload));
+    }, 300);
+  };
+  const loadChatUserColors = () => {
+    GM.getValue(CHAT_USER_COLORS_STORAGE_KEY, '{}').then((raw) => {
+      let parsed = {};
+      try {
+        parsed = typeof raw === 'string' ? JSON.parse(raw || '{}') : (raw ?? {});
+      } catch (_) {
+        parsed = {};
+      }
+      if (!parsed || typeof parsed !== 'object') return;
+      Object.entries(parsed).forEach(([key, value]) => {
+        const normalizedKey = String(key ?? '').trim().toLowerCase();
+        const normalizedValue = normalizeColor(value);
+        if (!normalizedKey || !normalizedValue) return;
+        if (!chatUserColors.has(normalizedKey)) {
+          chatUserColors.set(normalizedKey, normalizedValue);
+        }
+      });
+    }).catch(() => {});
+  };
+  const getChatUserColor = (userValue) => {
+    const key = normalizeUser(userValue).toLowerCase();
+    if (!key) return '#9cc8ff';
+    let color = chatUserColors.get(key);
+    if (!color) {
+      color = makeRandomChatColor();
+      chatUserColors.set(key, color);
+      schedulePersistChatColors();
+    }
+    return color;
+  };
+  loadChatUserColors();
 
   if (!messagesEl || !textInput) return;
   if (modCodeInput) {
@@ -980,6 +1035,9 @@ function initChat() {
       minute: '2-digit',
       hour12: false,
     });
+    const metaColor = getChatUserColor(user);
+    meta.style.color = metaColor;
+    meta.style.fontWeight = '700';
     meta.textContent = `[${timeLabel}] ${user}:`;
     const body = document.createElement('span');
     body.className = 'bm-chat-body';
