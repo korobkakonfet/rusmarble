@@ -862,6 +862,13 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   max-height: none !important;
 }
 
+#bm-contain-chat.bm-chat-floating.bm-chat-floating-collapsed {
+  min-height: 0;
+  max-height: none;
+  resize: none;
+  overflow: visible;
+}
+
 #bm-notification-container {
   --bm-notify-bg: rgba(18, 18, 18, 0.92);
   --bm-notify-fg: #ffffff;

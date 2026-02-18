@@ -442,6 +442,8 @@ function initChat() {
   let isChatFloating = false;
   let dragState = null;
   let floatingResizeObserver = null;
+  let floatingExpandedWidth = '360px';
+  let floatingExpandedHeight = '420px';
   const CHAT_FLOAT_ICON = '⧉';
   const CHAT_DOCK_ICON = '⇱';
   const originalChatParent = chatDetails.parentElement;
@@ -501,6 +503,7 @@ function initChat() {
 
   const updateFloatingMessagesHeight = () => {
     if (!isChatFloating) return;
+    if (!chatDetails?.open) return;
     const chatComputed = getComputedStyle(chatDetails);
     const paddingTop = parseFloat(chatComputed.paddingTop) || 0;
     const paddingBottom = parseFloat(chatComputed.paddingBottom) || 0;
@@ -514,6 +517,28 @@ function initChat() {
       paddingBottom;
     const nextHeight = Math.max(80, Math.floor(totalHeight - occupied - 6));
     messagesEl.style.height = `${nextHeight}px`;
+  };
+
+  const syncFloatingCollapsedState = () => {
+    if (!chatDetails) return;
+    if (!isChatFloating) {
+      chatDetails.classList.remove('bm-chat-floating-collapsed');
+      return;
+    }
+    if (chatDetails.open) {
+      chatDetails.classList.remove('bm-chat-floating-collapsed');
+      chatDetails.style.width = floatingExpandedWidth;
+      chatDetails.style.height = floatingExpandedHeight;
+      updateFloatingMessagesHeight();
+      return;
+    }
+    const rect = chatDetails.getBoundingClientRect();
+    if (rect.width > 0) floatingExpandedWidth = `${Math.round(rect.width)}px`;
+    if (rect.height > 0) floatingExpandedHeight = `${Math.round(rect.height)}px`;
+    chatDetails.classList.add('bm-chat-floating-collapsed');
+    chatDetails.style.width = '220px';
+    chatDetails.style.height = 'auto';
+    messagesEl.style.height = '';
   };
 
   const setChatFloating = (enabled) => {
@@ -531,10 +556,11 @@ function initChat() {
       clearFloatingThemeVars();
       applyFloatingThemeVars();
       chatDetails.open = true;
-      if (!chatDetails.style.width) chatDetails.style.width = '360px';
-      if (!chatDetails.style.height) chatDetails.style.height = '420px';
+      if (!chatDetails.style.width) chatDetails.style.width = floatingExpandedWidth;
+      if (!chatDetails.style.height || chatDetails.style.height === 'auto') chatDetails.style.height = floatingExpandedHeight;
       if (!chatDetails.style.left && !chatDetails.style.right) chatDetails.style.right = '20px';
       if (!chatDetails.style.top && !chatDetails.style.bottom) chatDetails.style.bottom = '20px';
+      syncFloatingCollapsedState();
       updateFloatingMessagesHeight();
       if (!floatingResizeObserver) {
         floatingResizeObserver = new ResizeObserver(() => updateFloatingMessagesHeight());
@@ -552,6 +578,7 @@ function initChat() {
         }
       }
       clearFloatingThemeVars();
+      chatDetails.classList.remove('bm-chat-floating-collapsed');
       chatDetails.style.left = '';
       chatDetails.style.top = '';
       chatDetails.style.right = '';
@@ -615,6 +642,10 @@ function initChat() {
       dragState = null;
     });
   }
+
+  chatDetails?.addEventListener('toggle', () => {
+    syncFloatingCollapsedState();
+  });
 
   window.addEventListener('resize', () => updateFloatingMessagesHeight());
 
