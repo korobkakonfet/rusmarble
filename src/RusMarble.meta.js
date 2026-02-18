@@ -9,8 +9,8 @@
 // @homepageURL  https://t.me/ruswplace
 // @icon         https://raw.githubusercontent.com/korobkakonfet/rusmarble/custom-improve/dist/assets/logo_rusmarble.png
 // @match        https://wplace.live/*
-// @updateURL    https://github.com/korobkakonfet/rusmarble/raw/refs/heads/custom-improve/dist/RusMarble.user.js
-// @downloadURL  https://github.com/korobkakonfet/rusmarble/raw/refs/heads/custom-improve/dist/RusMarble.user.js
+// @updateURL    https://raw.githubusercontent.com/korobkakonfet/rusmarble/custom-improve/dist/RusMarble.user.js
+// @downloadURL  https://raw.githubusercontent.com/korobkakonfet/rusmarble/custom-improve/dist/RusMarble.user.js
 // @grant        GM.addStyle
 // @grant        GM.setValue
 // @grant        GM.getValue

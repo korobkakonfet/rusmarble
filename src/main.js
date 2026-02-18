@@ -2773,6 +2773,7 @@ async function buildOverlayMain() {
       row.style.gap = '6px';
 
       let removeButton = document.createElement('a');
+      removeButton.className = 'bm-icon-link';
       removeButton.title = "Remove template";
       removeButton.textContent = "🗑️";
       removeButton.style.fontSize = '12px';
@@ -2783,6 +2784,7 @@ async function buildOverlayMain() {
       }
 
       let teleportButton = document.createElement('a');
+      teleportButton.className = 'bm-icon-link';
       teleportButton.title = "Teleport to template";
       teleportButton.textContent = "✈️";
       teleportButton.style.fontSize = '12px';
@@ -2985,6 +2987,7 @@ async function buildOverlayMain() {
 
         if (coords !== null) {
           let teleportButton = document.createElement('a');
+          teleportButton.className = 'bm-icon-link';
           teleportButton.title = "Teleport to event item";
           teleportButton.textContent = "✈️";
           teleportButton.style.fontSize = '12px';
