@@ -15,6 +15,7 @@
  * @param {() => void} deps.buildEventList - Rebuilds the event list.
  * @param {(value?: boolean) => void} deps.forceRefreshTiles - Forces map tile refresh.
  * @param {(layer: string) => void} deps.removeLayer - Removes map layer by id.
+ * @param {(enabled: boolean) => void} deps.setMapCommentsEnabled - Enables/disables map comments on the map layer.
  * @param {object} deps.themeList - Available theme list.
  * @param {string} deps.outputStatusId - Element id for the status output.
  * @returns {import('./Overlay.js').default} Overlay builder instance for chaining.
@@ -34,6 +35,7 @@ export function buildUserSettingsSection({
   buildEventList,
   forceRefreshTiles,
   removeLayer,
+  setMapCommentsEnabled,
   themeList,
   outputStatusId,
 }) {
@@ -283,6 +285,16 @@ export function buildUserSettingsSection({
             if (typeof window.setChatEnabled === 'function') {
               window.setChatEnabled(enabled);
             }
+          });
+        }).buildElement()
+        .addCheckbox({'id': 'bm-map-comments-enabled', 'textContent': 'Enable Map Comments', 'checked': templateManager.isMapCommentsEnabled()}, (instance, label, checkbox) => {
+          checkbox.addEventListener('change', async () => {
+            const enabled = checkbox.checked;
+            await templateManager.setMapCommentsEnabled(enabled);
+            if (typeof setMapCommentsEnabled === 'function') {
+              setMapCommentsEnabled(enabled);
+            }
+            instance.handleDisplayStatus(enabled ? "Map comments are now Enabled." : "Map comments are now Disabled.");
           });
         }).buildElement()
         .addCheckbox({'id': 'bm-enable-line-template', 'textContent':  'Shape Templates (Experimental)', 'checked': templateManager.isLineTemplateButtonShown()}, (instance, label, checkbox) => {
