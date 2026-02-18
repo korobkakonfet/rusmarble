@@ -1,0 +1,131 @@
+.bm-map-comment-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1200;
+  font-family: "Segoe UI", Tahoma, sans-serif;
+}
+
+.bm-map-comment-marker {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, calc(-100% - 14px));
+  pointer-events: auto;
+  border: 0;
+  background: rgba(16, 22, 34, 0.94);
+  color: #eef3ff;
+  border-radius: 14px;
+  padding: 5px 10px;
+  font-size: 11px;
+  line-height: 1.25;
+  max-width: 240px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.34);
+  cursor: pointer;
+}
+
+.bm-map-comment-marker:hover {
+  background: rgba(23, 32, 49, 0.96);
+}
+
+.bm-map-comment-marker::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -8px;
+  width: 14px;
+  height: 14px;
+  background: inherit;
+  transform: translateX(-50%) rotate(45deg);
+  border-radius: 3px;
+}
+
+.bm-map-comment-marker::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -15px;
+  width: 6px;
+  height: 6px;
+  background: #9dbbff;
+  border-radius: 50%;
+  transform: translateX(-50%);
+  box-shadow: 0 0 0 2px rgba(16, 22, 34, 0.75);
+}
+
+.bm-map-comment-popup {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, calc(-100% - 18px));
+  pointer-events: auto;
+  width: min(330px, calc(100% - 18px));
+  min-width: 210px;
+  max-width: 330px;
+  background: rgba(13, 20, 32, 0.97);
+  color: #f4f7ff;
+  border-radius: 14px;
+  padding: 10px 12px 10px;
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.45);
+}
+
+.bm-map-comment-popup::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -9px;
+  width: 16px;
+  height: 16px;
+  background: inherit;
+  transform: translateX(-50%) rotate(45deg);
+  border-radius: 4px;
+}
+
+.bm-map-comment-popup-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.bm-map-comment-popup-author {
+  font-size: 12px;
+  font-weight: 700;
+  color: #dce6ff;
+}
+
+.bm-map-comment-popup-time {
+  font-size: 10px;
+  color: rgba(220, 230, 255, 0.8);
+}
+
+.bm-map-comment-popup-body {
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.bm-map-comment-popup-close {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(240, 245, 255, 0.16);
+  color: rgba(240, 245, 255, 0.88);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.bm-map-comment-popup-close:hover {
+  background: rgba(240, 245, 255, 0.28);
+  color: #ffffff;
+}

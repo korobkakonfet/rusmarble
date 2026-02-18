@@ -11,6 +11,7 @@
 // ES Module imports
 import esbuild from 'esbuild';
 import fs from 'fs';
+import path from 'path';
 import { execSync } from 'child_process';
 import { consoleStyle } from './utils.js';
 import mangleSelectors from './cssMangler.js';
@@ -66,14 +67,33 @@ const blueMetaContent = fs.existsSync('src/BlueMarble.meta.js')
 const cssFiles = fs.readdirSync('src/')
   .filter(file => file.endsWith('.css'))
   .map(file => `src/${file}`);
+let tempCssEntryPoint = null;
+let cssEntryPoint = cssFiles[0];
+if (cssFiles.length > 1) {
+  tempCssEntryPoint = 'build/.tmp-entry.css';
+  const imports = cssFiles
+    .map((file) => {
+      const relativeImport = path.relative(
+        path.dirname(tempCssEntryPoint),
+        file
+      ).replaceAll('\\', '/');
+      return `@import "./${relativeImport}";`;
+    })
+    .join('\n');
+  fs.writeFileSync(tempCssEntryPoint, `${imports}\n`, 'utf8');
+  cssEntryPoint = tempCssEntryPoint;
+}
 
 // Compiles the CSS files
 await esbuild.build({
-  entryPoints: cssFiles,
+  entryPoints: [cssEntryPoint],
   bundle: true,
   outfile: 'dist/RusMarble.user.css',
   minify: true
 });
+if (tempCssEntryPoint && fs.existsSync(tempCssEntryPoint)) {
+  fs.unlinkSync(tempCssEntryPoint);
+}
 if (blueMetaContent) {
   fs.copyFileSync('dist/RusMarble.user.css', 'dist/BlueMarble.user.css');
 }

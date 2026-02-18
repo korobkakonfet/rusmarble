@@ -8,6 +8,7 @@ import ApiManager from './apiManager.js';
 import TemplateManager from './templateManager.js';
 import { buildUserSettingsSection } from './userSettings.js';
 import { createTemplateSync, normalizeRemoteOrder } from './templateSync.js';
+import { createMapCommentManager } from './mapComments.js';
 import { consoleLog, consoleWarn, selectAllCoordinateInputs, rgbToMeta, getOverlayCoords, sortByOptions, getCurrentColor } from './utils.js';
 import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getCurrentTileSize} from './utilsMaptiler.js';
 // import { getCenterGeoCoords, addTemplate } from './utilsMaptiler.js';
@@ -32,6 +33,7 @@ const CHAT_MAX_USER_LEN = 12;
 const CHAT_MAX_TEXT_LEN = 100;
 let chatSocket = null;
 let chatInitialized = false;
+let mapCommentManager = null;
 const layoutThemeOptions = {
   "classic": "Classic",
   "white": "White",
@@ -149,6 +151,17 @@ const notificationShownIds = new Set();
 let notificationShownList = [];
 let notificationShownInitPromise = null;
 let overlayBuildInFlight = false;
+
+function ensureMapCommentsManager() {
+  if (mapCommentManager) return mapCommentManager;
+  try {
+    mapCommentManager = createMapCommentManager();
+  } catch (error) {
+    mapCommentManager = null;
+    consoleWarn('Map comments initialization failed; chat will continue without map comments.', error);
+  }
+  return mapCommentManager;
+}
 
 function loadNotificationShownIds() {
   if (notificationShownInitPromise) return notificationShownInitPromise;
@@ -411,6 +424,7 @@ function startNotificationPolling() {
 }
 
 function initChat() {
+  ensureMapCommentsManager();
   const CHAT_USER_COLORS_STORAGE_KEY = 'bmChatUserColors';
   const CHAT_NICKNAME_COLOR_VARIANTS = [
     '#ff6b6b', '#f97316', '#f59e0b', '#eab308', '#84cc16', '#22c55e',
@@ -440,6 +454,32 @@ function initChat() {
   const messageCache = new Map();
   const pendingReplies = [];
   const PENDING_REPLY_WINDOW_MS = 30000;
+  let mapCommentsFaulted = false;
+  const handleMapCommentsError = (context, error) => {
+    if (mapCommentsFaulted) return;
+    mapCommentsFaulted = true;
+    consoleWarn(`Map comments disabled after runtime error (${context}).`, error);
+    try {
+      mapCommentManager?.['destroy']?.();
+    } catch (_) {}
+    mapCommentManager = null;
+  };
+  const upsertMapCommentSafe = (payload, context) => {
+    if (!mapCommentManager || mapCommentsFaulted) return;
+    try {
+      mapCommentManager['upsertFromChatPayload']?.(payload);
+    } catch (error) {
+      handleMapCommentsError(context, error);
+    }
+  };
+  const removeMapCommentSafe = (messageId, context) => {
+    if (!mapCommentManager || mapCommentsFaulted) return;
+    try {
+      mapCommentManager['removeByMessageId']?.(messageId);
+    } catch (error) {
+      handleMapCommentsError(context, error);
+    }
+  };
   const normalizeColor = (value) => {
     const text = String(value ?? '').trim();
     if (!text) return null;
@@ -1097,6 +1137,7 @@ function initChat() {
       line.setAttribute('data-msg-id', messageId);
       messageCache.set(messageId, payload);
     }
+    upsertMapCommentSafe(payload, 'appendMessage');
     const replyId = payload?.reply_to;
     if (replyId !== undefined && replyId !== null) {
       const replyBlock = document.createElement('div');
@@ -1148,11 +1189,13 @@ function initChat() {
 
   const handleDeleted = (payload) => {
     const messageId = payload?.id;
-    if (typeof messageId !== 'number') return;
-    const row = messagesEl.querySelector(`.bm-chat-message[data-msg-id="${messageId}"]`);
+    if (messageId === undefined || messageId === null || messageId === '') return;
+    const messageIdText = String(messageId);
+    const row = messagesEl.querySelector(`.bm-chat-message[data-msg-id="${messageIdText}"]`);
     if (row) row.remove();
-    messageCache.delete(String(messageId));
-    if (replyToId && String(messageId) === replyToId) {
+    messageCache.delete(messageIdText);
+    removeMapCommentSafe(messageIdText, 'handleDeleted');
+    if (replyToId && messageIdText === replyToId) {
       clearReply();
     }
   };
@@ -1606,6 +1649,8 @@ const templateSync = createTemplateSync({
   autoSyncBuildTemplateFilterList: () => window.buildTemplateFilterList?.(),
   autoSyncBuildColorFilterList: () => window.buildColorFilterList?.(),
 });
+
+ensureMapCommentsManager();
 
 GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   const userSettingsValue = await GM.getValue('bmUserSettings', '{}');
