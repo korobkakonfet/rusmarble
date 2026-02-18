@@ -725,6 +725,7 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   color: var(--bm-muted);
   font-size: 10px;
   white-space: nowrap;
+  font-weight: 600;
 }
 
 #bm-chat-messages .bm-chat-body {
@@ -745,6 +746,7 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 6px;
 }
 
 .bm-chat-status-light {
@@ -754,6 +756,28 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   background: #6b6b6b;
   box-shadow: 0 0 6px rgba(107, 107, 107, 0.6);
   margin-left: 6px;
+}
+
+.bm-chat-float-toggle {
+  margin-left: auto;
+  background: transparent;
+  color: var(--bm-muted);
+  border: 1px solid var(--bm-border);
+  border-radius: 6px;
+  font-size: 10px;
+  line-height: 1.2;
+  width: 22px;
+  height: 18px;
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bm-chat-float-toggle:hover {
+  color: var(--bm-fg);
+  border-color: var(--bm-border-strong);
 }
 
 #bm-contain-chat.bm-chat-state-connected .bm-chat-status-light {
@@ -769,6 +793,36 @@ span.bm-templatename:hover, a.bm-templatename:focus {
 #bm-contain-chat.bm-chat-state-error .bm-chat-status-light {
   background: #e05a5a;
   box-shadow: 0 0 8px rgba(224, 90, 90, 0.9);
+}
+
+#bm-contain-chat.bm-chat-floating {
+  position: fixed;
+  z-index: 9101;
+  right: 20px;
+  bottom: 20px;
+  width: 360px;
+  height: 420px;
+  max-width: min(92vw, 560px);
+  max-height: 80vh;
+  margin-top: 0;
+  background: var(--bm-bg);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.45);
+  resize: both;
+  overflow: hidden;
+  min-height: 220px;
+}
+
+#bm-contain-chat.bm-chat-floating > summary {
+  cursor: move;
+  user-select: none;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bm-bg);
+}
+
+#bm-contain-chat.bm-chat-floating #bm-chat-messages {
+  max-height: none !important;
 }
 
 #bm-notification-container {
@@ -911,8 +965,9 @@ span.bm-templatename:hover, a.bm-templatename:focus {
 
 #bm-chat-messages .bm-chat-row {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
 }
 
 #bm-chat-messages .bm-chat-reply-inline {
