@@ -734,6 +734,7 @@ span.bm-templatename:hover, a.bm-templatename:focus {
 
 #bm-chat-messages {
   font-size: 12px;
+  color: var(--bm-fg);
 }
 
 #bm-chat-messages .bm-chat-message {
@@ -756,6 +757,17 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   flex: 1;
   min-width: 0;
   word-break: break-word;
+  color: var(--bm-fg);
+  opacity: 1;
+}
+
+#bm-chat-messages .bm-chat-body a {
+  color: var(--bm-accent-strong);
+  text-decoration: underline;
+}
+
+#bm-chat-messages .bm-chat-body a:visited {
+  color: var(--bm-accent);
 }
 
 #bm-chat-input-row input {
@@ -840,6 +852,7 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   bottom: 20px;
   width: 360px;
   height: 420px;
+  min-width: 280px;
   max-width: min(92vw, 560px);
   max-height: 80vh;
   margin-top: 0;
@@ -868,6 +881,10 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   max-height: none;
   resize: none;
   overflow: visible;
+}
+
+#bm-overlay.bm-overlay-minimized #bm-contain-chat:not(.bm-chat-floating) {
+  display: none !important;
 }
 
 #bm-notification-container {
