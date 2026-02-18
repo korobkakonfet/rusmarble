@@ -11,24 +11,6 @@ const VIEWPORT_MARGIN_PX = 20;
 const URL_REGEX = /https?:\/\/[^\s)]+/gi;
 const LOCATION_ALIAS_REGEX = /\bwplace@\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)(?:\s*,\s*(-?\d+(?:\.\d+)?))?/i;
 const DEBUG_STATE_ATTR = 'bm-map-comments-state';
-const COMMENTS_VISIBILITY_STORAGE_KEY = 'bmMapCommentsVisible';
-
-function readCommentsVisibleFlag() {
-  try {
-    const raw = window.localStorage?.getItem(COMMENTS_VISIBILITY_STORAGE_KEY);
-    if (raw === null || raw === undefined || raw === '') return true;
-    const normalized = String(raw).trim().toLowerCase();
-    return normalized !== '0' && normalized !== 'false' && normalized !== 'off';
-  } catch (_) {
-    return true;
-  }
-}
-
-function writeCommentsVisibleFlag(visible) {
-  try {
-    window.localStorage?.setItem(COMMENTS_VISIBILITY_STORAGE_KEY, visible ? '1' : '0');
-  } catch (_) {}
-}
 
 function toFiniteNumber(value) {
   const num = Number(value);
@@ -262,14 +244,13 @@ class MapCommentManagerImpl {
     this.hoveredCommentId = null;
     this.popupHovered = false;
     this.hoverCloseTimerId = null;
-    this.commentsVisible = readCommentsVisibleFlag();
+    this.commentsVisible = true;
     this.renderPending = false;
     this.destroyed = false;
     this.mapReadyPollId = null;
 
     this.map = null;
     this.layer = null;
-    this.toggleButton = null;
     this.popup = null;
     this.popupAuthor = null;
     this.popupTime = null;
@@ -335,17 +316,6 @@ class MapCommentManagerImpl {
     this.layer.setAttribute('data-map-comment-layer', '1');
     this.layer.setAttribute('data-map-comments-visible', this.commentsVisible ? '1' : '0');
     mapContainer.appendChild(this.layer);
-
-    this.toggleButton = document.createElement('button');
-    this.toggleButton.type = 'button';
-    this.toggleButton.className = 'bm-map-comment-toggle';
-    this.toggleButton.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      this.setCommentsVisible(!this.commentsVisible);
-    });
-    this.layer.appendChild(this.toggleButton);
-    this.updateToggleButton();
 
     this.popup = document.createElement('div');
     this.popup.className = 'bm-map-comment-popup';
@@ -477,27 +447,13 @@ class MapCommentManagerImpl {
     this.visibleCount = 0;
   }
 
-  updateToggleButton() {
-    if (!this.toggleButton) return;
-    this.toggleButton.textContent = this.commentsVisible ? 'Hide comments' : 'Show comments';
-    this.toggleButton.setAttribute('data-map-comments-visible', this.commentsVisible ? '1' : '0');
-    this.toggleButton.title = this.commentsVisible
-      ? 'Hide map comments'
-      : 'Show map comments';
+  setCommentsVisible(visible) {
+    const next = Boolean(visible);
+    if (this.commentsVisible === next) return;
+    this.commentsVisible = next;
     if (this.layer) {
       this.layer.setAttribute('data-map-comments-visible', this.commentsVisible ? '1' : '0');
     }
-  }
-
-  setCommentsVisible(visible) {
-    const next = Boolean(visible);
-    if (this.commentsVisible === next) {
-      this.updateToggleButton();
-      return;
-    }
-    this.commentsVisible = next;
-    writeCommentsVisibleFlag(next);
-    this.updateToggleButton();
     if (!next) {
       this.hoveredCommentId = null;
       this.popupHovered = false;
@@ -659,8 +615,6 @@ class MapCommentManagerImpl {
     marker.className = 'bm-map-comment-marker';
     marker.setAttribute('data-map-comment-marker', '1');
     marker.dataset.commentId = comment.id;
-      marker.style.display = '';
-      marker.style.pointerEvents = 'auto';
     marker.addEventListener('mouseenter', () => {
       if (!this.commentsVisible) return;
       this.hoveredCommentId = comment.id;
@@ -721,7 +675,6 @@ class MapCommentManagerImpl {
     this.ensureLayer();
     if (!this.layer) return;
     this.syncThemeFromOverlay();
-    this.updateToggleButton();
 
     if (!this.commentsVisible) {
       this.hidePopup();
@@ -867,7 +820,6 @@ class MapCommentManagerImpl {
     this.popupAuthor = null;
     this.popupTime = null;
     this.popupBody = null;
-    this.toggleButton = null;
     if (this.layer) {
       this.layer.remove();
     }

@@ -2,9 +2,6 @@
   --bm-comment-bg: #8ca8d8;
   --bm-comment-color: #ffffff;
   --bm-comment-text-subtle: rgba(255, 255, 255, 0.88);
-  --bm-comment-toggle-bg: rgba(18, 26, 42, 0.88);
-  --bm-comment-toggle-bg-hover: rgba(13, 20, 32, 0.95);
-  --bm-comment-toggle-bg-off: rgba(86, 105, 136, 0.88);
   --bm-comment-close-bg: rgba(255, 255, 255, 0.22);
   --bm-comment-close-bg-hover: rgba(255, 255, 255, 0.35);
   --bm-comment-caret-width: 18px;
@@ -23,9 +20,6 @@ html[data-theme="halloween"] .bm-map-comment-layer {
   --bm-comment-bg: #2a3448;
   --bm-comment-color: #eef3ff;
   --bm-comment-text-subtle: rgba(238, 243, 255, 0.78);
-  --bm-comment-toggle-bg: rgba(238, 243, 255, 0.14);
-  --bm-comment-toggle-bg-hover: rgba(238, 243, 255, 0.24);
-  --bm-comment-toggle-bg-off: rgba(238, 243, 255, 0.3);
   --bm-comment-close-bg: rgba(238, 243, 255, 0.14);
   --bm-comment-close-bg-hover: rgba(238, 243, 255, 0.26);
   --bm-comment-shadow-a: rgba(0, 0, 0, 0.18);
@@ -87,33 +81,6 @@ html[data-theme="halloween"] .bm-map-comment-layer {
   background: var(--bm-comment-bg);
   border-radius: 0 0 6px 6px;
   transform: translateX(-50%);
-}
-
-.bm-map-comment-toggle {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  pointer-events: auto;
-  border: 0;
-  border-radius: 999px;
-  padding: 6px 10px;
-  background: var(--bm-comment-toggle-bg);
-  color: var(--bm-comment-color);
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1;
-  letter-spacing: 0.2px;
-  cursor: pointer;
-  z-index: 1300;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-}
-
-.bm-map-comment-toggle:hover {
-  background: var(--bm-comment-toggle-bg-hover);
-}
-
-.bm-map-comment-toggle[data-map-comments-visible="0"] {
-  background: var(--bm-comment-toggle-bg-off);
 }
 
 .bm-map-comment-popup {

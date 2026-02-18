@@ -1948,6 +1948,40 @@ export default class TemplateManager {
     await this.storeUserSettings();
   }
 
+  /** A utility to check if map comments are disabled.
+   * @returns {boolean}
+   * @since 0.90.0
+   */
+  isMapCommentsDisabled() {
+    return this.userSettings?.mapCommentsDisabled ?? false;
+  }
+
+  /** A utility to check if map comments are enabled.
+   * @returns {boolean}
+   * @since 0.90.0
+   */
+  isMapCommentsEnabled() {
+    return !this.isMapCommentsDisabled();
+  }
+
+  /** Sets the map comments disabled flag.
+   * @param {boolean} value - The value
+   * @since 0.90.0
+   */
+  async setMapCommentsDisabled(value) {
+    this.userSettings.mapCommentsDisabled = Boolean(value);
+    await this.storeUserSettings();
+  }
+
+  /** Sets the map comments enabled flag.
+   * @param {boolean} value - The value
+   * @since 0.90.0
+   */
+  async setMapCommentsEnabled(value) {
+    this.userSettings.mapCommentsDisabled = !Boolean(value);
+    await this.storeUserSettings();
+  }
+
   /** Whether the "+ Line" and "+ Circle" buttons are displayed
    * @returns {boolean}
    * @since 0.86.13

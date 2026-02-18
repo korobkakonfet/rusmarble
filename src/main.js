@@ -31,9 +31,24 @@ const NOTIFICATION_POLL_MS = 3000;
 const NOTIFICATION_ROTATE_MS = 10000;
 const CHAT_MAX_USER_LEN = 12;
 const CHAT_MAX_TEXT_LEN = 100;
+const REPORT_REQUEST_EVENT_TYPE = 'bm-report-request';
+const REPORT_CLICK_FALLBACK_MS = 5000;
+const REPORT_POST_SEND_HIDE_MS = 1000;
 let chatSocket = null;
 let chatInitialized = false;
 let mapCommentManager = null;
+let templateManagerRef = null;
+const reportCommentsState = {
+  isApplied: false,
+  clickActive: false,
+  requestCount: 0,
+  reportModalOpen: false,
+  postSendHold: false,
+  clickTimer: null,
+  postSendTimer: null,
+  reportModalObserver: null,
+  chatDisplayBeforeHide: null,
+};
 const layoutThemeOptions = {
   "classic": "Classic",
   "white": "White",
@@ -161,6 +176,219 @@ function ensureMapCommentsManager() {
     consoleWarn('Map comments initialization failed; chat will continue without map comments.', error);
   }
   return mapCommentManager;
+}
+
+function setMapCommentsEnabled(enabled) {
+  const manager = ensureMapCommentsManager();
+  if (!manager) return;
+  try {
+    manager['setVisible']?.(Boolean(enabled));
+  } catch (error) {
+    consoleWarn('Failed to toggle map comments visibility.', error);
+  }
+}
+
+function setMapCommentsVisibleForReport(visible) {
+  if (!mapCommentManager) return;
+  try {
+    mapCommentManager['setVisible']?.(Boolean(visible));
+  } catch (error) {
+    consoleWarn('Failed to set report-time map comments visibility.', error);
+  }
+}
+
+function applyReportCommentsHidden() {
+  if (reportCommentsState.isApplied) return;
+  reportCommentsState.isApplied = true;
+  setMapCommentsVisibleForReport(false);
+  const chatDetails = document.getElementById('bm-contain-chat');
+  if (chatDetails) {
+    reportCommentsState.chatDisplayBeforeHide = chatDetails.style.display;
+    chatDetails.style.display = 'none';
+  }
+}
+
+function clearReportCommentsHidden() {
+  if (!reportCommentsState.isApplied) return;
+  reportCommentsState.isApplied = false;
+  const mapCommentsEnabled = templateManagerRef?.isMapCommentsEnabled?.() ?? true;
+  setMapCommentsVisibleForReport(mapCommentsEnabled);
+  const chatDetails = document.getElementById('bm-contain-chat');
+  if (chatDetails) {
+    const chatShouldBeVisible = !(templateManagerRef?.isChatDisabled?.() ?? false);
+    chatDetails.style.display = chatShouldBeVisible
+      ? (reportCommentsState.chatDisplayBeforeHide ?? '')
+      : 'none';
+  }
+  reportCommentsState.chatDisplayBeforeHide = null;
+}
+
+function syncReportCommentsHiddenState() {
+  const shouldHide = reportCommentsState.clickActive
+    || reportCommentsState.reportModalOpen
+    || reportCommentsState.postSendHold
+    || reportCommentsState.requestCount > 0;
+  if (shouldHide) {
+    applyReportCommentsHidden();
+  } else {
+    clearReportCommentsHidden();
+  }
+}
+
+function markReportSubmitClicked() {
+  ensureReportModalObserver();
+  reportCommentsState.clickActive = true;
+  if (reportCommentsState.clickTimer) {
+    clearTimeout(reportCommentsState.clickTimer);
+  }
+  reportCommentsState.clickTimer = setTimeout(() => {
+    reportCommentsState.clickTimer = null;
+    reportCommentsState.clickActive = false;
+    updateReportModalState();
+    syncReportCommentsHiddenState();
+  }, REPORT_CLICK_FALLBACK_MS);
+  updateReportModalState();
+  syncReportCommentsHiddenState();
+}
+
+function markReportSubmitCancelled() {
+  if (reportCommentsState.clickTimer) {
+    clearTimeout(reportCommentsState.clickTimer);
+    reportCommentsState.clickTimer = null;
+  }
+  reportCommentsState.clickActive = false;
+  reportCommentsState.reportModalOpen = false;
+  updateReportModalState();
+  syncReportCommentsHiddenState();
+}
+
+function clearReportPostSendHold() {
+  if (reportCommentsState.postSendTimer) {
+    clearTimeout(reportCommentsState.postSendTimer);
+    reportCommentsState.postSendTimer = null;
+  }
+  reportCommentsState.postSendHold = false;
+}
+
+function startReportPostSendHold() {
+  clearReportPostSendHold();
+  reportCommentsState.postSendHold = true;
+  reportCommentsState.postSendTimer = setTimeout(() => {
+    reportCommentsState.postSendTimer = null;
+    reportCommentsState.postSendHold = false;
+    syncReportCommentsHiddenState();
+  }, REPORT_POST_SEND_HIDE_MS);
+}
+
+function markReportRequestStarted() {
+  clearReportPostSendHold();
+  if (reportCommentsState.clickActive) {
+    reportCommentsState.clickActive = false;
+    if (reportCommentsState.clickTimer) {
+      clearTimeout(reportCommentsState.clickTimer);
+      reportCommentsState.clickTimer = null;
+    }
+  }
+  reportCommentsState.requestCount += 1;
+  syncReportCommentsHiddenState();
+}
+
+function markReportRequestFinished() {
+  if (reportCommentsState.requestCount > 0) {
+    reportCommentsState.requestCount -= 1;
+  }
+  updateReportModalState();
+  if (reportCommentsState.requestCount === 0) {
+    startReportPostSendHold();
+  }
+  syncReportCommentsHiddenState();
+}
+
+function getReportControlContext(control) {
+  const dialog = control.closest('[role="dialog"],[aria-modal="true"],dialog');
+  const formAction = control.closest('form')?.getAttribute('action') || '';
+  return [
+    control.textContent,
+    control.getAttribute('value'),
+    control instanceof HTMLInputElement ? control.value : '',
+    control.getAttribute('aria-label'),
+    control.getAttribute('title'),
+    control.getAttribute('name'),
+    control.id,
+    control.className,
+    formAction,
+    dialog?.textContent,
+    dialog?.getAttribute?.('aria-label'),
+    dialog?.id,
+    dialog?.className
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+}
+
+function isReportDialogElement(dialogElement) {
+  if (!(dialogElement instanceof HTMLElement)) return false;
+  const combined = [
+    dialogElement.textContent,
+    dialogElement.getAttribute('aria-label'),
+    dialogElement.id,
+    dialogElement.className
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  return combined.includes('report user') || combined.includes('/report-user');
+}
+
+function updateReportModalState() {
+  const dialogs = Array.from(document.querySelectorAll('[role="dialog"],[aria-modal="true"],dialog'));
+  reportCommentsState.reportModalOpen = dialogs.some(isReportDialogElement);
+}
+
+function ensureReportModalObserver() {
+  if (reportCommentsState.reportModalObserver) return;
+  const root = document.body || document.documentElement;
+  if (!root) return;
+  reportCommentsState.reportModalObserver = new MutationObserver(() => {
+    updateReportModalState();
+    syncReportCommentsHiddenState();
+  });
+  reportCommentsState.reportModalObserver.observe(root, {
+    childList: true,
+    subtree: true
+  });
+  updateReportModalState();
+}
+
+function isReportSubmitControl(target) {
+  if (!(target instanceof Element)) return false;
+  const control = target.closest('button,input[type="submit"],input[type="button"]');
+  if (!(control instanceof HTMLElement)) return false;
+  const formAction = control.closest('form')?.getAttribute('action') || '';
+  if (String(formAction).toLowerCase().includes('/report-user')) {
+    return true;
+  }
+  const combined = getReportControlContext(control);
+  return combined.includes('report') && (combined.includes('send') || combined.includes('submit'));
+}
+
+function isReportOpenControl(target) {
+  if (!(target instanceof Element)) return false;
+  const control = target.closest('button,input[type="button"]');
+  if (!(control instanceof HTMLElement)) return false;
+  const combined = getReportControlContext(control);
+  return combined.includes('report user');
+}
+
+function isReportCancelControl(target) {
+  if (!(target instanceof Element)) return false;
+  const control = target.closest('button,input[type="button"]');
+  if (!(control instanceof HTMLElement)) return false;
+  const combined = getReportControlContext(control);
+  const isCancel = combined.includes('cancel') || combined.includes('close');
+  const isReportContext = combined.includes('report') || combined.includes('/report-user');
+  return isCancel && isReportContext;
 }
 
 function loadNotificationShownIds() {
@@ -1407,6 +1635,26 @@ inject(() => {
   const name = script?.getAttribute('bm-name') || 'Rus Marble'; // Gets the name value that was passed in. Defaults to "Rus Marble" if nothing was found
   const consoleStyle = script?.getAttribute('bm-cStyle') || ''; // Gets the console style value that was passed in. Defaults to no styling if nothing was found
   const fetchedBlobQueue = new Map(); // Blobs being processed
+  const REPORT_EVENT_TYPE = 'bm-report-request';
+
+  const postReportRequestPhase = (phase, endpoint) => {
+    window.postMessage({
+      source: 'blue-marble',
+      type: REPORT_EVENT_TYPE,
+      phase,
+      endpoint: endpoint || ''
+    }, '*');
+  };
+
+  const isReportUserEndpoint = (urlLike) => {
+    if (!urlLike) return false;
+    try {
+      const parsed = new URL(String(urlLike), window.location.href);
+      return parsed.pathname.includes('/report-user');
+    } catch (_) {
+      return String(urlLike).toLowerCase().includes('/report-user');
+    }
+  };
 
   // intercept 
   // const originalBroadcastChannel_onmessage = window.BroadcastChannel.prototype.onmessage;
@@ -1417,9 +1665,10 @@ inject(() => {
   // window.BroadcastChannel.prototype.onmessage = wrapped;
 
   window.addEventListener('message', (event) => {
-    const { source, endpoint, blobID, blobData, blink } = event.data;
+    const { source, endpoint, blobID, blobData, blink } = event.data ?? {};
+    if (source !== 'blue-marble' || !blobID || !blobData || endpoint) return;
 
-    const elapsed = Date.now() - blink;
+    const elapsed = Number.isFinite(blink) ? (Date.now() - blink) : 0;
 
     // Since this code does not run in the userscript, we can't use consoleLog().
     console.groupCollapsed(`%c${name}%c: ${fetchedBlobQueue.size} Recieved IMAGE message about blob "${blobID}"`, consoleStyle, '');
@@ -1427,23 +1676,19 @@ inject(() => {
     console.log(fetchedBlobQueue);
     console.groupEnd();
 
-    // The modified blob won't have an endpoint, so we ignore any message without one.
-    if ((source == 'blue-marble') && !!blobID && !!blobData && !endpoint) {
+    const callback = fetchedBlobQueue.get(blobID); // Retrieves the blob based on the UUID
 
-      const callback = fetchedBlobQueue.get(blobID); // Retrieves the blob based on the UUID
+    // If the blobID is a valid function...
+    if (typeof callback === 'function') {
 
-      // If the blobID is a valid function...
-      if (typeof callback === 'function') {
+      callback(blobData); // ...Retrieve the blob data from the blobID function
+    } else {
+      // ...else the blobID is unexpected. We don't know what it is, but we know for sure it is not a blob. This means we ignore it.
 
-        callback(blobData); // ...Retrieve the blob data from the blobID function
-      } else {
-        // ...else the blobID is unexpected. We don't know what it is, but we know for sure it is not a blob. This means we ignore it.
-
-        consoleWarn(`%c${name}%c: Attempted to retrieve a blob (%s) from queue, but the blobID was not a function! Skipping...`, consoleStyle, '', blobID);
-      }
-
-      fetchedBlobQueue.delete(blobID); // Delete the blob from the queue, because we don't need to process it again
+      consoleWarn(`%c${name}%c: Attempted to retrieve a blob (%s) from queue, but the blobID was not a function! Skipping...`, consoleStyle, '', blobID);
     }
+
+    fetchedBlobQueue.delete(blobID); // Delete the blob from the queue, because we don't need to process it again
   });
 
   // Spys on "spontaneous" fetch requests made by the client
@@ -1453,12 +1698,25 @@ inject(() => {
   window.fetch = async function(...args) {
 
     const blink = Date.now(); // Current time
-
-    const response = await originalFetch.apply(this, args); // Sends a fetch
-    const cloned = response.clone(); // Makes a copy of the response
-
-    // Retrieves the endpoint name. Unknown endpoint = "ignore"
     const endpointName = ((args[0] instanceof Request) ? args[0]?.url : args[0]) || 'ignore';
+    const isReportRequest = isReportUserEndpoint(endpointName);
+    if (isReportRequest) {
+      postReportRequestPhase('start', endpointName);
+    }
+
+    let response;
+    try {
+      response = await originalFetch.apply(this, args); // Sends a fetch
+    } catch (error) {
+      if (isReportRequest) {
+        postReportRequestPhase('end', endpointName);
+      }
+      throw error;
+    }
+    if (isReportRequest) {
+      postReportRequestPhase('end', endpointName);
+    }
+    const cloned = response.clone(); // Makes a copy of the response
 
     // Check Content-Type to only process JSON
     const contentType = cloned.headers.get('content-type') || '';
@@ -1574,6 +1832,28 @@ inject(() => {
     return response; // Returns the original response
   };
 
+  const originalXhrOpen = window.XMLHttpRequest?.prototype?.open;
+  const originalXhrSend = window.XMLHttpRequest?.prototype?.send;
+  if (originalXhrOpen && originalXhrSend) {
+    window.XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+      this.__bmReportEndpoint = url;
+      this.__bmIsReportRequest = isReportUserEndpoint(url);
+      return originalXhrOpen.call(this, method, url, ...rest);
+    };
+    window.XMLHttpRequest.prototype.send = function(...rest) {
+      if (this.__bmIsReportRequest) {
+        const endpoint = this.__bmReportEndpoint;
+        postReportRequestPhase('start', endpoint);
+        const onLoadEnd = () => {
+          this.removeEventListener('loadend', onLoadEnd);
+          postReportRequestPhase('end', endpoint);
+        };
+        this.addEventListener('loadend', onLoadEnd);
+      }
+      return originalXhrSend.apply(this, rest);
+    };
+  }
+
   const hookedMapFuncs = {
     "values": Map.prototype.values
   };
@@ -1629,6 +1909,7 @@ if (typeof __INLINE_CSS__ !== 'undefined' && __INLINE_CSS__) {
 // CONSTRUCTORS
 const overlayMain = new Overlay(name, version); // Constructs a new Overlay object for the main overlay
 const templateManager = new TemplateManager(name, version, overlayMain); // Constructs a new TemplateManager object
+templateManagerRef = templateManager;
 const apiManager = new ApiManager(templateManager); // Constructs a new ApiManager object
 
 overlayMain.setApiManager(apiManager); // Sets the API manager
@@ -1648,6 +1929,28 @@ const templateSync = createTemplateSync({
   autoSyncSyncToggleList: () => window.syncToggleList?.(),
   autoSyncBuildTemplateFilterList: () => window.buildTemplateFilterList?.(),
   autoSyncBuildColorFilterList: () => window.buildColorFilterList?.(),
+});
+
+document.addEventListener('click', (event) => {
+  if (isReportCancelControl(event.target)) {
+    markReportSubmitCancelled();
+    return;
+  }
+  if (isReportSubmitControl(event.target) || isReportOpenControl(event.target)) {
+    markReportSubmitClicked();
+  }
+}, true);
+
+window.addEventListener('message', (event) => {
+  const payload = event?.data;
+  if (!payload || payload.source !== 'blue-marble' || payload.type !== REPORT_REQUEST_EVENT_TYPE) {
+    return;
+  }
+  if (payload.phase === 'start') {
+    markReportRequestStarted();
+  } else if (payload.phase === 'end') {
+    markReportRequestFinished();
+  }
 });
 
 ensureMapCommentsManager();
@@ -1695,11 +1998,13 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
       'ruspixelFlagEnabled': true,
       'autoSyncTemplates': false,
       'chatDisabled': false,
+      'mapCommentsDisabled': false,
     });
     templateManager.storeUserSettings();
   } else {
     templateManager.setUserSettings(userSettings);
   }
+  setMapCommentsEnabled(templateManager.isMapCommentsEnabled());
 
   // load templates after user settings
   let storageTemplates;
@@ -2332,6 +2637,7 @@ async function buildOverlayMain() {
       buildEventList: () => buildEventList(),
       forceRefreshTiles,
       removeLayer,
+      setMapCommentsEnabled: (enabled) => setMapCommentsEnabled(enabled),
       themeList,
       outputStatusId: overlayMain.outputStatusId,
     });
