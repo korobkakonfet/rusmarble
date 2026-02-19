@@ -237,7 +237,8 @@ export default class ApiManager {
 
     return document.querySelector(
       ".flex.gap-2.px-3>button.btn-circle," + 
-      ".flex.gap-1\\.5.px-3>button.btn-circle"
+      ".flex.gap-1\\.5.px-3>button.btn-circle," +
+      ".flex.h-10.items-center.justify-between.px-3.pb-1\\.5>button.btn-circle"
     ); // close button
   }
 
@@ -303,11 +304,11 @@ export default class ApiManager {
     if (!displayCoords1) {
       const closeButton = this.getCloseButton();
       if (!closeButton) return;
-      const coordRow = closeButton.parentElement;
+      const coordRow = closeButton.parentElement?.nextElementSibling || closeButton.parentElement;
       // For every span element, find the one we want (pixel numbers when canvas clicked)
       displayCoords1 = document.createElement('span');
       displayCoords1.id = 'bm-display-coords1';
-      displayCoords1.style = 'margin-left: calc(var(--spacing)*3); font-size: small;';
+      displayCoords1.style = 'margin-left: calc(var(--spacing)*3); margin-top: 6px; display: inline-block; font-size: small;';
       displayCoords1.className = 'bm-display-coords-clickable';
       coordRow.insertAdjacentElement('afterend', displayCoords1);
       
@@ -317,7 +318,7 @@ export default class ApiManager {
 
       displayCoords2 = document.createElement('span');
       displayCoords2.id = 'bm-display-coords2';
-      displayCoords2.style = 'margin-left: calc(var(--spacing)*3); font-size: small;';
+      displayCoords2.style = 'margin-left: calc(var(--spacing)*3); margin-top: 2px; display: inline-block; font-size: small;';
       displayCoords2.className = 'bm-display-coords-clickable';
       br.insertAdjacentElement('afterend', displayCoords2);
     }
