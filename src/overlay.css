@@ -48,6 +48,15 @@
   -webkit-transform-style: preserve-3d;
 }
 
+.bm-distance-line-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 1190;
+}
+
 #bm-overlay[data-layout-theme="white"] {
   --bm-bg: rgba(248, 249, 252, 0.82);
   --bm-panel-bg: rgba(248, 249, 252, 0.92);
@@ -406,6 +415,32 @@ div#bm-overlay {
   vertical-align: middle;
 }
 
+#bm-button-distance {
+  vertical-align: middle;
+}
+
+#bm-button-distance.bm-distance-active {
+  background-color: var(--bm-btn-hover);
+  box-shadow: inset 0 0 0 1px var(--bm-border-strong);
+}
+
+#bm-button-convert,
+#bm-button-distance,
+#bm-button-website {
+  width: 1.7em;
+  height: 1.7em;
+  padding: 0 !important;
+}
+
+#bm-button-convert .bm-action-icon,
+#bm-button-distance .bm-action-icon,
+#bm-button-website .bm-action-icon {
+  display: inline-block;
+  line-height: 1;
+  font-size: 13px;
+  transform: translateY(-0.5px);
+}
+
 /* Pin button image*/
 #bm-button-coords svg {
   width: 62%;
@@ -415,6 +450,18 @@ div#bm-overlay {
   fill: var(--bm-icon);
   transform: translateY(-0.5px);
   pointer-events: none;
+}
+
+#bm-contain-coords {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5ch;
+}
+
+#bm-contain-coords .bm-help,
+#bm-contain-coords input[type="number"] {
+  flex: 0 0 auto;
 }
 
 /* Container for action buttons, that is inside the action button container */
@@ -453,6 +500,18 @@ div:has(> #bm-button-teleport) {
 #bm-contain-coords input[type="number"]::-webkit-inner-spin-button {
   -webkit-appearance: none;
   margin: 0;
+}
+
+#bm-distance-output {
+  width: 100%;
+  flex: 1 0 100%;
+  margin-top: 4px;
+  margin-left: 0;
+  font-size: 10px;
+  color: var(--bm-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Automation button container */
@@ -506,6 +565,13 @@ input[type="file"][id*="template"] {
 #bm-contain-buttons-action {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+}
+
+#bm-contain-buttons-action > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 0.5ch;
 }
 
 /* All small elements */
