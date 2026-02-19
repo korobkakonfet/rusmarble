@@ -29,6 +29,7 @@ export default class ApiManager {
     this.lastFetchedTime = null;
     this.eventData = null;
     this.eventDataURL = null;
+    this.onCoordsUpdated = null;
   }
 
   getCurrentCharges() {
@@ -806,6 +807,11 @@ export default class ApiManager {
           this.coordsTilePixel = [...coordsTile, ...coordsPixel]; // Combines the two arrays such that [x, y, x, y]
           this.updateDisplayCoords();
           this.updateDownloadButton();
+          try {
+            if (typeof this.onCoordsUpdated === 'function') {
+              this.onCoordsUpdated([...this.coordsTilePixel]);
+            }
+          } catch (_) {}
           break;
         
         case 'tiles':

@@ -34,6 +34,7 @@ const CHAT_MAX_TEXT_LEN = 300;
 const REPORT_REQUEST_EVENT_TYPE = 'bm-report-request';
 const REPORT_CLICK_FALLBACK_MS = 5000;
 const REPORT_POST_SEND_HIDE_MS = 1000;
+const MAP_WORLD_WIDTH_PX = 2048 * 1000;
 let chatSocket = null;
 let chatInitialized = false;
 let mapCommentManager = null;
@@ -48,6 +49,18 @@ const reportCommentsState = {
   postSendTimer: null,
   reportModalObserver: null,
   chatDisplayBeforeHide: null,
+};
+const distanceMeasureState = {
+  active: false,
+  startPoint: null,
+  hoverPoint: null,
+  lastOutput: 'Distance: off.',
+  map: null,
+  mapContainer: null,
+  mapReadyPollId: null,
+  mapEventsBound: false,
+  lineCanvas: null,
+  lineContext: null,
 };
 const layoutThemeOptions = {
   "classic": "Classic",
@@ -2401,6 +2414,7 @@ const overlayMain = new Overlay(name, version); // Constructs a new Overlay obje
 const templateManager = new TemplateManager(name, version, overlayMain); // Constructs a new TemplateManager object
 templateManagerRef = templateManager;
 const apiManager = new ApiManager(templateManager); // Constructs a new ApiManager object
+apiManager.onCoordsUpdated = handleDistanceToolCoordsUpdate;
 
 overlayMain.setApiManager(apiManager); // Sets the API manager
 const templateSync = createTemplateSync({
@@ -2859,6 +2873,529 @@ function observeBlack() {
   observer.observe(document.body, { childList: true, subtree: true });
 }
 
+function normalizeTilePixelCoords(rawCoords) {
+  if (!Array.isArray(rawCoords) || rawCoords.length < 4) return null;
+  const txRaw = Number(rawCoords[0]);
+  const tyRaw = Number(rawCoords[1]);
+  const pxRaw = Number(rawCoords[2]);
+  const pyRaw = Number(rawCoords[3]);
+  if (![txRaw, tyRaw, pxRaw, pyRaw].every(Number.isFinite)) return null;
+
+  const tx = ((Math.trunc(txRaw) % 2048) + 2048) % 2048;
+  const ty = Math.trunc(tyRaw);
+  const px = ((Math.trunc(pxRaw) % 1000) + 1000) % 1000;
+  const py = ((Math.trunc(pyRaw) % 1000) + 1000) % 1000;
+  return [tx, ty, px, py];
+}
+
+function resolveDistanceMapInstance() {
+  const direct = document.head?.['__bmmap'];
+  if (direct && typeof direct['project'] === 'function') return direct;
+  const myLocationButton = document.querySelector('.right-3>button');
+  const fallback = myLocationButton?.['__click']?.[3]?.['v'];
+  if (fallback && typeof fallback['project'] === 'function') return fallback;
+  return null;
+}
+
+function tilePixelCoordsToWorldPoint(rawCoords) {
+  const coords = normalizeTilePixelCoords(rawCoords);
+  if (!coords) return null;
+  const [tx, ty, px, py] = coords;
+  const [lat, lng] = coordsTileCoordsToGeoCoords([tx, ty], [px, py], true);
+  return {
+    coords,
+    x: tx * 1000 + px,
+    y: ty * 1000 + py,
+    lat,
+    lng,
+  };
+}
+
+function formatTilePixelCoords(coords) {
+  const normalized = normalizeTilePixelCoords(coords);
+  if (!normalized) return 'Unavailable';
+  const [tx, ty, px, py] = normalized;
+  return `Tl X: ${tx}, Tl Y: ${ty}, Px X: ${px}, Px Y: ${py}`;
+}
+
+function getDistanceMetrics(startPoint, endPoint) {
+  if (!startPoint || !endPoint) return null;
+  let dx = endPoint.x - startPoint.x;
+  if (Math.abs(dx) > MAP_WORLD_WIDTH_PX / 2) {
+    dx += dx > 0 ? -MAP_WORLD_WIDTH_PX : MAP_WORLD_WIDTH_PX;
+  }
+  const dy = endPoint.y - startPoint.y;
+  const width = Math.abs(dx) + 1;
+  const height = Math.abs(dy) + 1;
+  const area = width * height;
+  const euclidean = Math.hypot(dx, dy);
+  const chebyshev = Math.max(Math.abs(dx), Math.abs(dy));
+  const manhattan = Math.abs(dx) + Math.abs(dy);
+  return { dx, dy, width, height, area, euclidean, chebyshev, manhattan };
+}
+
+function formatDistanceMetrics(metrics) {
+  if (!metrics) return 'Distance: unavailable.';
+  const numberFmt = new Intl.NumberFormat();
+  const euclideanText = metrics.euclidean.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const signed = (value) => `${value >= 0 ? '+' : ''}${numberFmt.format(value)}`;
+  return `Distance: ${euclideanText} px | dx ${signed(metrics.dx)} | dy ${signed(metrics.dy)} | w ${numberFmt.format(metrics.width)} | h ${numberFmt.format(metrics.height)} | inside ${numberFmt.format(metrics.area)} px^2 | grid ${numberFmt.format(metrics.chebyshev)} | manhattan ${numberFmt.format(metrics.manhattan)}`;
+}
+
+function setDistanceToolOutput(text) {
+  distanceMeasureState.lastOutput = text;
+  const output = document.getElementById('bm-distance-output');
+  if (output) {
+    output.textContent = text;
+  }
+}
+
+function syncDistanceToolUi() {
+  const button = document.getElementById('bm-button-distance');
+  if (button) {
+    button.classList.toggle('bm-distance-active', distanceMeasureState.active);
+    button.title = distanceMeasureState.active
+      ? 'Distance Tool: Active. Click a start pixel, then move cursor for live line and distance. Right-click to clear.'
+      : 'Distance Tool: Off. Click to enable.';
+  }
+
+  const output = document.getElementById('bm-distance-output');
+  if (output) {
+    output.textContent = distanceMeasureState.lastOutput;
+  }
+}
+
+function ensureDistanceLineCanvas() {
+  const map = distanceMeasureState.map;
+  if (!map) return;
+  if (!distanceMeasureState.lineCanvas || !distanceMeasureState.lineCanvas.isConnected) {
+    const mapContainer =
+      map['getCanvasContainer']?.() ||
+      map['getContainer']?.() ||
+      document.querySelector('#map');
+    if (!mapContainer) return;
+
+    distanceMeasureState.mapContainer = mapContainer;
+    const canvas = document.createElement('canvas');
+    canvas.id = 'bm-distance-line-layer';
+    canvas.className = 'bm-distance-line-layer';
+    mapContainer.appendChild(canvas);
+    distanceMeasureState.lineCanvas = canvas;
+    distanceMeasureState.lineContext = canvas.getContext('2d');
+  }
+  resizeDistanceLineCanvas();
+}
+
+function removeDistanceLineCanvas() {
+  if (distanceMeasureState.lineCanvas) {
+    distanceMeasureState.lineCanvas.width = 0;
+    distanceMeasureState.lineCanvas.height = 0;
+    distanceMeasureState.lineCanvas.remove();
+  }
+  distanceMeasureState.lineCanvas = null;
+  distanceMeasureState.lineContext = null;
+}
+
+function resizeDistanceLineCanvas() {
+  const canvas = distanceMeasureState.lineCanvas;
+  const ctx = distanceMeasureState.lineContext;
+  const map = distanceMeasureState.map;
+  if (!canvas || !ctx || !map) return;
+  const mapCanvas = map['getCanvas']?.();
+  const width = mapCanvas?.clientWidth ?? mapCanvas?.width ?? 0;
+  const height = mapCanvas?.clientHeight ?? mapCanvas?.height ?? 0;
+  if (!(width > 0) || !(height > 0)) return;
+
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  const nextWidth = Math.round(width * dpr);
+  const nextHeight = Math.round(height * dpr);
+  if (canvas.width !== nextWidth || canvas.height !== nextHeight) {
+    canvas.width = nextWidth;
+    canvas.height = nextHeight;
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+    canvas.dataset.dpr = dpr.toString();
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+function clearDistanceLineDrawing() {
+  const canvas = distanceMeasureState.lineCanvas;
+  const ctx = distanceMeasureState.lineContext;
+  if (!canvas || !ctx) return;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+function projectDistancePoint(point) {
+  if (!point || !distanceMeasureState.map || typeof distanceMeasureState.map['project'] !== 'function') return null;
+  const projected = distanceMeasureState.map['project']([point.lng, point.lat]);
+  if (!projected || !Number.isFinite(projected.x) || !Number.isFinite(projected.y)) return null;
+  return { x: projected.x, y: projected.y };
+}
+
+function alignProjectedDistancePoints(startProjected, endProjected) {
+  if (!startProjected) return null;
+  if (!endProjected) return { start: startProjected, end: null };
+
+  let startX = startProjected.x;
+  let endX = endProjected.x;
+  const worldSize = Number(distanceMeasureState.map?.['transform']?.['worldSize']);
+  if (Number.isFinite(worldSize) && worldSize > 0) {
+    while (endX - startX > worldSize / 2) endX -= worldSize;
+    while (endX - startX < -worldSize / 2) endX += worldSize;
+
+    const mapCanvas = distanceMeasureState.map?.['getCanvas']?.();
+    const canvasWidth = mapCanvas?.clientWidth ?? mapCanvas?.width ?? 0;
+    const centerX = canvasWidth / 2;
+    while (startX - centerX > worldSize / 2) {
+      startX -= worldSize;
+      endX -= worldSize;
+    }
+    while (startX - centerX < -worldSize / 2) {
+      startX += worldSize;
+      endX += worldSize;
+    }
+  }
+
+  return {
+    start: { x: startX, y: startProjected.y },
+    end: { x: endX, y: endProjected.y },
+  };
+}
+
+function drawDistanceLineOverlay() {
+  if (!distanceMeasureState.active) {
+    clearDistanceLineDrawing();
+    return;
+  }
+  ensureDistanceMapAttached();
+  ensureDistanceLineCanvas();
+  const canvas = distanceMeasureState.lineCanvas;
+  const ctx = distanceMeasureState.lineContext;
+  if (!canvas || !ctx) return;
+  clearDistanceLineDrawing();
+
+  if (!distanceMeasureState.startPoint) return;
+
+  const startProjected = projectDistancePoint(distanceMeasureState.startPoint);
+  const endProjected = projectDistancePoint(distanceMeasureState.hoverPoint);
+  const projected = alignProjectedDistancePoints(startProjected, endProjected);
+  if (!projected?.start) return;
+
+  const dpr = Number(canvas.dataset.dpr || '1');
+  const strokeColor = getComputedStyle(document.getElementById('bm-overlay') ?? document.documentElement).getPropertyValue('--bm-accent-strong').trim() || '#ffe8ee';
+  const shadowColor = 'rgba(0, 0, 0, 0.55)';
+  const lineOutlineColor = 'rgba(0, 0, 0, 0.88)';
+  const lineInnerColor = 'rgba(255, 255, 255, 0.96)';
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  if (projected.end) {
+    ctx.setLineDash([]);
+    ctx.strokeStyle = lineOutlineColor;
+    ctx.lineWidth = 7;
+    ctx.beginPath();
+    ctx.moveTo(projected.start.x, projected.start.y);
+    ctx.lineTo(projected.end.x, projected.end.y);
+    ctx.stroke();
+
+    ctx.strokeStyle = lineInnerColor;
+    ctx.lineWidth = 4.25;
+    ctx.beginPath();
+    ctx.moveTo(projected.start.x, projected.start.y);
+    ctx.lineTo(projected.end.x, projected.end.y);
+    ctx.stroke();
+
+    ctx.setLineDash([]);
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = 2.35;
+    ctx.beginPath();
+    ctx.moveTo(projected.start.x, projected.start.y);
+    ctx.lineTo(projected.end.x, projected.end.y);
+    ctx.stroke();
+
+    const metrics = getDistanceMetrics(distanceMeasureState.startPoint, distanceMeasureState.hoverPoint);
+    if (metrics) {
+      const x0 = projected.start.x;
+      const y0 = projected.start.y;
+      const x1 = projected.end.x;
+      const y1 = projected.end.y;
+      const cornerX = x1;
+      const cornerY = y0;
+
+      const drawGuideLabel = (text, x, y) => {
+        const padX = 5;
+        const padY = 2;
+        ctx.font = '600 10px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const textWidth = ctx.measureText(text).width;
+        const boxWidth = textWidth + padX * 2;
+        const boxHeight = 12 + padY * 2;
+        const boxLeft = x - boxWidth / 2;
+        const boxTop = y - boxHeight / 2;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.72)';
+        ctx.fillRect(boxLeft, boxTop, boxWidth, boxHeight);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(boxLeft + 0.5, boxTop + 0.5, boxWidth - 1, boxHeight - 1);
+        ctx.fillStyle = strokeColor;
+        ctx.fillText(text, x, y);
+      };
+
+      const drawGuideSegment = (fromX, fromY, toX, toY) => {
+        ctx.setLineDash([4, 3]);
+        ctx.strokeStyle = lineOutlineColor;
+        ctx.lineWidth = 3.2;
+        ctx.beginPath();
+        ctx.moveTo(fromX, fromY);
+        ctx.lineTo(toX, toY);
+        ctx.stroke();
+
+        ctx.strokeStyle = lineInnerColor;
+        ctx.lineWidth = 2.1;
+        ctx.beginPath();
+        ctx.moveTo(fromX, fromY);
+        ctx.lineTo(toX, toY);
+        ctx.stroke();
+
+        ctx.strokeStyle = strokeColor;
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(fromX, fromY);
+        ctx.lineTo(toX, toY);
+        ctx.stroke();
+      };
+
+      ctx.globalAlpha = 0.85;
+      const widthLabelOffsetY = y1 >= y0 ? -12 : 12;
+      const heightLabelOffsetX = x1 >= x0 ? 12 : -12;
+      if (metrics.width > 1) {
+        drawGuideSegment(x0, y0, cornerX, cornerY);
+        drawGuideLabel(`W: ${metrics.width}px`, (x0 + cornerX) / 2, y0 + widthLabelOffsetY);
+      }
+      if (metrics.height > 1) {
+        drawGuideSegment(cornerX, cornerY, x1, y1);
+        drawGuideLabel(`H: ${metrics.height}px`, x1 + heightLabelOffsetX, (cornerY + y1) / 2);
+      }
+      ctx.globalAlpha = 1;
+
+      const labelText = `${metrics.euclidean.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} px | area ${metrics.area}`;
+      const dxLine = projected.end.x - projected.start.x;
+      const dyLine = projected.end.y - projected.start.y;
+      const length = Math.hypot(dxLine, dyLine);
+      const nx = length > 0 ? -dyLine / length : 0;
+      const ny = length > 0 ? dxLine / length : -1;
+      const labelX = (projected.start.x + projected.end.x) / 2 + nx * 12;
+      const labelY = (projected.start.y + projected.end.y) / 2 + ny * 12;
+      const padX = 6;
+      const padY = 3;
+      ctx.font = '600 11px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const textWidth = ctx.measureText(labelText).width;
+      const boxWidth = textWidth + padX * 2;
+      const boxHeight = 14 + padY * 2;
+      const boxLeft = labelX - boxWidth / 2;
+      const boxTop = labelY - boxHeight / 2;
+
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.72)';
+      ctx.fillRect(boxLeft, boxTop, boxWidth, boxHeight);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(boxLeft + 0.5, boxTop + 0.5, boxWidth - 1, boxHeight - 1);
+      ctx.fillStyle = strokeColor;
+      ctx.fillText(labelText, labelX, labelY);
+    }
+  }
+
+  const drawMarker = (x, y) => {
+    ctx.beginPath();
+    ctx.fillStyle = lineOutlineColor;
+    ctx.arc(x, y, 5.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.fillStyle = lineInnerColor;
+    ctx.arc(x, y, 4.05, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.fillStyle = strokeColor;
+    ctx.arc(x, y, 2.7, 0, Math.PI * 2);
+    ctx.fill();
+  };
+
+  drawMarker(projected.start.x, projected.start.y);
+  if (projected.end) {
+    drawMarker(projected.end.x, projected.end.y);
+  }
+}
+
+function mapEventToWorldPoint(event) {
+  const lat = Number(event?.lngLat?.lat);
+  const lng = Number(event?.lngLat?.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  const [coordsTile, coordsPixel] = coordsGeoCoordsToTileCoords(lat, lng, true);
+  const point = tilePixelCoordsToWorldPoint([coordsTile[0], coordsTile[1], coordsPixel[0], coordsPixel[1]]);
+  return point;
+}
+
+function updateDistanceOutputForPoint(point, announce = false) {
+  const metrics = getDistanceMetrics(distanceMeasureState.startPoint, point);
+  const message = formatDistanceMetrics(metrics);
+  setDistanceToolOutput(message);
+  if (announce) {
+    overlayMain.handleDisplayStatus(message);
+  }
+}
+
+function handleDistanceMapMouseMove(event) {
+  if (!distanceMeasureState.active || !distanceMeasureState.startPoint) return;
+  const point = mapEventToWorldPoint(event);
+  if (!point) return;
+  distanceMeasureState.hoverPoint = point;
+  updateDistanceOutputForPoint(point, false);
+  drawDistanceLineOverlay();
+}
+
+function handleDistanceMapMouseLeave() {
+  if (!distanceMeasureState.active) return;
+  distanceMeasureState.hoverPoint = null;
+  if (distanceMeasureState.startPoint) {
+    const startText = formatTilePixelCoords(distanceMeasureState.startPoint.coords);
+    setDistanceToolOutput(`Distance start: ${startText}. Move cursor or click another pixel.`);
+  }
+  drawDistanceLineOverlay();
+}
+
+function handleDistanceMapViewChanged() {
+  if (!distanceMeasureState.active) return;
+  drawDistanceLineOverlay();
+}
+
+function handleDistanceMapContextMenu(event) {
+  if (!distanceMeasureState.active) return;
+  event?.originalEvent?.preventDefault?.();
+  event?.originalEvent?.stopPropagation?.();
+  setDistanceToolActive(false, overlayMain);
+}
+
+function bindDistanceMapEvents() {
+  const map = distanceMeasureState.map;
+  if (!map || distanceMeasureState.mapEventsBound || typeof map['on'] !== 'function') return;
+  map['on']('mousemove', handleDistanceMapMouseMove);
+  map['on']('contextmenu', handleDistanceMapContextMenu);
+  ['move', 'zoom', 'resize', 'moveend', 'zoomend', 'rotate', 'pitch'].forEach((eventName) => {
+    map['on'](eventName, handleDistanceMapViewChanged);
+  });
+  const mapContainer =
+    map['getCanvasContainer']?.() ||
+    map['getContainer']?.() ||
+    document.querySelector('#map');
+  if (mapContainer) {
+    distanceMeasureState.mapContainer = mapContainer;
+    mapContainer.addEventListener('mouseleave', handleDistanceMapMouseLeave);
+  }
+  distanceMeasureState.mapEventsBound = true;
+}
+
+function unbindDistanceMapEvents() {
+  const map = distanceMeasureState.map;
+  if (!map || !distanceMeasureState.mapEventsBound || typeof map['off'] !== 'function') return;
+  map['off']('mousemove', handleDistanceMapMouseMove);
+  map['off']('contextmenu', handleDistanceMapContextMenu);
+  ['move', 'zoom', 'resize', 'moveend', 'zoomend', 'rotate', 'pitch'].forEach((eventName) => {
+    map['off'](eventName, handleDistanceMapViewChanged);
+  });
+  if (distanceMeasureState.mapContainer) {
+    distanceMeasureState.mapContainer.removeEventListener('mouseleave', handleDistanceMapMouseLeave);
+  }
+  distanceMeasureState.mapEventsBound = false;
+}
+
+function ensureDistanceMapAttached() {
+  if (!distanceMeasureState.map || typeof distanceMeasureState.map['project'] !== 'function') {
+    const map = resolveDistanceMapInstance();
+    if (!map) return false;
+    distanceMeasureState.map = map;
+  }
+  if (distanceMeasureState.mapReadyPollId) {
+    clearInterval(distanceMeasureState.mapReadyPollId);
+    distanceMeasureState.mapReadyPollId = null;
+  }
+  if (distanceMeasureState.active) {
+    bindDistanceMapEvents();
+    ensureDistanceLineCanvas();
+  }
+  return true;
+}
+
+function startDistanceMapPolling() {
+  if (distanceMeasureState.mapReadyPollId) return;
+  distanceMeasureState.mapReadyPollId = setInterval(() => {
+    if (ensureDistanceMapAttached()) {
+      clearInterval(distanceMeasureState.mapReadyPollId);
+      distanceMeasureState.mapReadyPollId = null;
+      drawDistanceLineOverlay();
+    }
+  }, 2000);
+}
+
+function setDistanceToolActive(active, overlayInstance) {
+  distanceMeasureState.active = Boolean(active);
+  distanceMeasureState.startPoint = null;
+  distanceMeasureState.hoverPoint = null;
+  if (distanceMeasureState.active) {
+    setDistanceToolOutput('Distance: click a pixel to set start point.');
+    overlayInstance?.handleDisplayStatus('Distance tool enabled. Click one pixel to set start, then move the cursor to measure in real time.');
+    doAfterMapFound(() => {
+      if (distanceMeasureState.active && ensureDistanceMapAttached()) {
+        drawDistanceLineOverlay();
+      }
+    });
+    if (!ensureDistanceMapAttached()) {
+      startDistanceMapPolling();
+    } else {
+      drawDistanceLineOverlay();
+    }
+  } else {
+    unbindDistanceMapEvents();
+    removeDistanceLineCanvas();
+    if (distanceMeasureState.mapReadyPollId) {
+      clearInterval(distanceMeasureState.mapReadyPollId);
+      distanceMeasureState.mapReadyPollId = null;
+    }
+    setDistanceToolOutput('Distance: off.');
+    overlayInstance?.handleDisplayStatus('Distance tool disabled.');
+  }
+  syncDistanceToolUi();
+}
+
+function handleDistanceToolCoordsUpdate(rawCoords) {
+  if (!distanceMeasureState.active) return;
+  const point = tilePixelCoordsToWorldPoint(rawCoords);
+  if (!point) return;
+  distanceMeasureState.hoverPoint = point;
+
+  if (!distanceMeasureState.startPoint) {
+    distanceMeasureState.startPoint = point;
+    const startText = formatTilePixelCoords(point.coords);
+    setDistanceToolOutput(`Distance start: ${startText}. Move cursor or click another pixel.`);
+    overlayMain.handleDisplayStatus(`Distance start point set at (${startText}).`);
+    drawDistanceLineOverlay();
+    syncDistanceToolUi();
+    return;
+  }
+
+  updateDistanceOutputForPoint(point, true);
+  drawDistanceLineOverlay();
+  syncDistanceToolUi();
+}
+
 const persistCoords = () => {
   try {
     const [[tx, ty], [px, py]] = getOverlayCoords();
@@ -3258,6 +3795,7 @@ async function buildOverlayMain() {
             }
           }
         ).buildElement()
+        .addDiv({'id': 'bm-distance-output', 'textContent': 'Distance: off.'}).buildElement()
       .buildElement();
 
     buildUserSettingsSection({
@@ -3543,13 +4081,26 @@ async function buildOverlayMain() {
           // .addButton({'id': 'bm-button-teleport', 'className': 'bm-help', 'textContent': '✈'}).buildElement()
           // .addButton({'id': 'bm-button-favorite', 'className': 'bm-help', 'innerHTML': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><polygon points="10,2 12,7.5 18,7.5 13.5,11.5 15.5,18 10,14 4.5,18 6.5,11.5 2,7.5 8,7.5" fill="white"></polygon></svg>'}).buildElement()
           // .addButton({'id': 'bm-button-templates', 'className': 'bm-help', 'innerHTML': '🖌'}).buildElement()
-          .addButton({'id': 'bm-button-convert', 'className': 'bm-help', 'innerHTML': '🎨', 'title': 'Template Color Converter'}, 
+          .addButton({'id': 'bm-button-convert', 'className': 'bm-help', 'innerHTML': '<span class="bm-action-icon" aria-hidden="true">🎨</span>', 'title': 'Template Color Converter'}, 
             (instance, button) => {
             button.addEventListener('click', () => {
               window.open('https://pepoafonso.github.io/color_converter_wplace/', '_blank', 'noopener noreferrer');
             });
           }).buildElement()
-          .addButton({'id': 'bm-button-website', 'className': 'bm-help', 'innerHTML': '🌐', 'title': 'Official Rus Marble Website'}, 
+          .addButton({'id': 'bm-button-distance', 'className': 'bm-help', 'innerHTML': '<span class="bm-action-icon" aria-hidden="true">📏</span>', 'title': 'Distance Tool: Off. Click to enable.'},
+            (instance, button) => {
+            button.onclick = () => {
+              setDistanceToolActive(!distanceMeasureState.active, instance);
+            };
+            button.addEventListener('contextmenu', (event) => {
+              event.preventDefault();
+              if (distanceMeasureState.active) {
+                setDistanceToolActive(false, instance);
+              }
+            });
+            syncDistanceToolUi();
+          }).buildElement()
+          .addButton({'id': 'bm-button-website', 'className': 'bm-help', 'innerHTML': '<span class="bm-action-icon" aria-hidden="true">🌐</span>', 'title': 'Official Rus Marble Website'}, 
             (instance, button) => {
             button.addEventListener('click', () => {
               window.open('https://t.me/ruswplace', '_blank', 'noopener noreferrer');
@@ -3562,6 +4113,7 @@ async function buildOverlayMain() {
       .buildElement()
     .buildElement()
   .buildOverlay(document.body);
+  syncDistanceToolUi();
 
   applyLayoutTheme(templateManager.getLayoutTheme());
 
