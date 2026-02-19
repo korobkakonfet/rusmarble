@@ -54,7 +54,7 @@ const distanceMeasureState = {
   active: false,
   startPoint: null,
   hoverPoint: null,
-  lastOutput: 'Distance: off.',
+  lastOutput: '',
   map: null,
   mapContainer: null,
   mapReadyPollId: null,
@@ -3369,7 +3369,7 @@ function setDistanceToolActive(active, overlayInstance) {
       clearInterval(distanceMeasureState.mapReadyPollId);
       distanceMeasureState.mapReadyPollId = null;
     }
-    setDistanceToolOutput('Distance: off.');
+    setDistanceToolOutput('');
     overlayInstance?.handleDisplayStatus('Distance tool disabled.');
   }
   syncDistanceToolUi();
@@ -3795,7 +3795,7 @@ async function buildOverlayMain() {
             }
           }
         ).buildElement()
-        .addDiv({'id': 'bm-distance-output', 'textContent': 'Distance: off.'}).buildElement()
+        .addDiv({'id': 'bm-distance-output', 'textContent': ''}).buildElement()
       .buildElement();
 
     buildUserSettingsSection({
