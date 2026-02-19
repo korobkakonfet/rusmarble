@@ -1,4 +1,4 @@
-﻿/** ApiManager class for handling API requests, responses, and interactions.
+/** ApiManager class for handling API requests, responses, and interactions.
  * Note: Fetch spying is done in main.js, not here.
  * @class ApiManager
  * @since 0.11.1
@@ -9,6 +9,10 @@ import { consoleError, escapeHTML, numberToEncoded, serverTPtoDisplayTP, cleanUp
 import { coordsTileCoordsToGeoCoords, overrideRandom } from "./utilsMaptiler.js";
 
 const EASTER_EGG_USER_ID = 11728406;
+const EASTER_EGG_WAVE_FIRST_DELAY_MS = 2000;
+const EASTER_EGG_WAVE_PAUSE_BEFORE_LOOP_MS = 3000;
+const EASTER_EGG_WAVE_STEP_DURATION_MS = 1800;
+const EASTER_EGG_WAVE_STAGGER_MS = 90;
 
 export default class ApiManager {
 
@@ -399,24 +403,163 @@ export default class ApiManager {
       closeButton.closest('.modal') ||
       closeButton.parentElement;
     if (!infoRoot) return;
+    const clearFlowTimeouts = () => {
+      clearTimeout(this.easterEggPulseTimeout);
+      clearTimeout(this.easterEggWaveTimeout); // legacy timer name (compat)
+      clearTimeout(this.easterEggWaveStartTimeout);
+      clearTimeout(this.easterEggWaveStopTimeout); // legacy timer name (compat)
+      clearTimeout(this.easterEggWaveLoopStartTimeout);
+    };
+    const clearCloseHandler = () => {
+      if (this.easterEggCloseButton && this.easterEggCloseHandler) {
+        this.easterEggCloseButton.removeEventListener('click', this.easterEggCloseHandler);
+      }
+      this.easterEggCloseButton = null;
+      this.easterEggCloseHandler = null;
+    };
+    const clearWave = () => {
+      Array.from(infoRoot.querySelectorAll('[data-bm-easter-egg-wave-original]')).forEach(target => {
+        const originalText = target.getAttribute('data-bm-easter-egg-wave-original');
+        if (originalText !== null) {
+          target.textContent = originalText;
+        }
+        target.removeAttribute('data-bm-easter-egg-wave-original');
+        const animations = target.__bmEasterEggWaveAnimations;
+        if (Array.isArray(animations)) {
+          animations.forEach(animation => {
+            try {
+              animation.cancel();
+            } catch {}
+          });
+        }
+        target.__bmEasterEggWaveAnimations = null;
+      });
+    };
+    const getWaveTargets = (targetElement, idPattern) => {
+      const container =
+        targetElement.closest('.inline-flex.items-baseline') ||
+        targetElement.closest('.flex.flex-wrap.items-center.gap-1')?.querySelector('.inline-flex.items-baseline') ||
+        targetElement.closest('.flex.h-10.items-center.justify-between')?.querySelector('.inline-flex.items-baseline') ||
+        targetElement.parentElement;
+      if (!container) return [];
+      const leaves = Array.from(container.querySelectorAll('*'))
+        .filter(element => !element.children.length && /\S/.test(element.textContent || ''));
+      const textLeaves = leaves.length ? leaves : (/\S/.test(container.textContent || '') ? [container] : []);
+      const idElement =
+        textLeaves.find(element => idPattern.test(element.textContent || '')) ||
+        targetElement;
+      const nameElement =
+        textLeaves.find(element => element !== idElement && !/#\s*\d+\b/.test(element.textContent || '')) ||
+        textLeaves.find(element => element !== idElement) ||
+        null;
+      return Array.from(new Set([nameElement, idElement].filter(Boolean)));
+    };
+    const applyWave = (targetElements, { iterations = Infinity } = {}) => {
+      let waveIndex = 0;
+      let maxDelay = 0;
+      targetElements.forEach(target => {
+        const originalText = target.textContent || '';
+        if (!/\S/.test(originalText)) return;
+        target.setAttribute('data-bm-easter-egg-wave-original', originalText);
+        target.textContent = '';
+        const animations = [];
+        Array.from(originalText).forEach(character => {
+          const waveChar = document.createElement('span');
+          waveChar.textContent = character === ' ' ? '\u00A0' : character;
+          waveChar.style.display = 'inline-block';
+          waveChar.style.willChange = 'transform';
+          target.appendChild(waveChar);
+          if (typeof waveChar.animate === 'function') {
+            const delay = waveIndex * EASTER_EGG_WAVE_STAGGER_MS;
+            const animation = waveChar.animate(
+              [
+                { transform: 'translateY(0)' },
+                { transform: 'translateY(-4px)' },
+                { transform: 'translateY(0)' }
+              ],
+              {
+                duration: EASTER_EGG_WAVE_STEP_DURATION_MS,
+                easing: 'ease-in-out',
+                iterations,
+                delay
+              }
+            );
+            animations.push(animation);
+            if (delay > maxDelay) {
+              maxDelay = delay;
+            }
+          }
+          waveIndex += 1;
+        });
+        target.__bmEasterEggWaveAnimations = animations;
+        waveIndex += 2;
+      });
+      return EASTER_EGG_WAVE_STEP_DURATION_MS + maxDelay;
+    };
+    const runPulse = (animTarget) => {
+      if (typeof animTarget.animate === 'function') {
+        animTarget.__bmEasterEggPulseAnimation?.cancel();
+        animTarget.__bmEasterEggPulseAnimation = animTarget.animate(
+          [
+            { transform: 'scale(1)', textShadow: 'none' },
+            {
+              transform: 'scale(1.12)',
+              textShadow: '0 0 14px rgba(255, 235, 180, 0.9), 0 0 24px rgba(255, 180, 120, 0.6)'
+            },
+            { transform: 'scale(1)', textShadow: 'none' }
+          ],
+          { duration: 1400, easing: 'ease-in-out', iterations: 1 }
+        );
+        this.easterEggPulseTimeout = setTimeout(() => {
+          const pulseAnimation = animTarget.__bmEasterEggPulseAnimation;
+          if (!pulseAnimation) return;
+          try {
+            pulseAnimation.cancel();
+          } catch {}
+          animTarget.__bmEasterEggPulseAnimation = null;
+        }, 1450);
+        return;
+      }
+      animTarget.classList.remove('bm-easter-egg');
+      void animTarget.offsetWidth;
+      animTarget.classList.add('bm-easter-egg');
+      this.easterEggPulseTimeout = setTimeout(() => animTarget.classList.remove('bm-easter-egg'), 1400);
+    };
+    clearFlowTimeouts();
+    clearCloseHandler();
+    clearWave();
     const elements = Array.from(infoRoot.querySelectorAll('*'));
-    let targetElement = null;
-    let matchedId = null;
-    for (const element of elements) {
-      const text = element.textContent || '';
-      const match = text.match(/#\s*(\d{4,})/);
-      if (!match) continue;
-      matchedId = Number(match[1]);
-      targetElement = element;
-      break;
-    }
-    infoRoot.querySelectorAll('.bm-easter-egg').forEach(el => el.classList.remove('bm-easter-egg'));
-    if (matchedId !== EASTER_EGG_USER_ID || !targetElement) return;
-    const animTarget = targetElement.closest('div') || targetElement;
-    animTarget.classList.remove('bm-easter-egg');
-    void animTarget.offsetWidth;
-    animTarget.classList.add('bm-easter-egg');
-    setTimeout(() => animTarget.classList.remove('bm-easter-egg'), 1400);
+    const exactIdText = `#${EASTER_EGG_USER_ID}`;
+    const idPattern = new RegExp(`#\\s*${EASTER_EGG_USER_ID}\\b`);
+    const targetElement =
+      elements.find(element => (element.textContent || '').trim() === exactIdText) ||
+      elements.find(element => !element.children.length && idPattern.test(element.textContent || '')) ||
+      elements.find(element => idPattern.test(element.textContent || '')) ||
+      null;
+    if (!targetElement) return;
+    const animTarget =
+      targetElement.closest('.flex.items-center.gap-2') ||
+      targetElement.closest('.flex.h-10.items-center.justify-between')?.querySelector('.flex.items-center.gap-2') ||
+      targetElement;
+    this.easterEggCloseButton = closeButton;
+    this.easterEggCloseHandler = () => {
+      clearFlowTimeouts();
+      clearWave();
+      clearCloseHandler();
+    };
+    closeButton.addEventListener('click', this.easterEggCloseHandler, { once: true });
+    runPulse(animTarget);
+    const runOneWaveWithPause = (waveTargets) => {
+      const waveDuration = applyWave(waveTargets, { iterations: 1 });
+      this.easterEggWaveLoopStartTimeout = setTimeout(() => {
+        runOneWaveWithPause(waveTargets);
+      }, waveDuration + EASTER_EGG_WAVE_PAUSE_BEFORE_LOOP_MS);
+    };
+    this.easterEggWaveStartTimeout = setTimeout(() => {
+      const waveTargets = getWaveTargets(targetElement, idPattern);
+      if (!waveTargets.length) return;
+      runOneWaveWithPause(waveTargets);
+    }, 1450 + EASTER_EGG_WAVE_FIRST_DELAY_MS);
   }
 
   /** Update the texts and related functions shown on the pixel info overlay
@@ -706,7 +849,7 @@ export default class ApiManager {
         const py2 = bottom % 1000;
         buttonLines.push(`Top Left: (Tl X: ${tx1}, Tl Y: ${ty1}, Px X: ${px1}, Px Y: ${py1})`);
         buttonLines.push(`Bottom Right: (Tl X: ${tx2}, Tl Y: ${ty2}, Px X: ${px2}, Px Y: ${py2})`);
-        buttonLines.push(`Image Size: ${width}Ã—${height}`);
+        buttonLines.push(`Image Size: ${width}×${height}`);
         if (testCanvasSize(width, height)) {
           downloadBtn.disabled = false;
         } else {

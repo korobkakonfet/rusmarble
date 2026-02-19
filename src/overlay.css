@@ -652,7 +652,6 @@ input[type="file"][id*="template"] {
 
 .bm-easter-egg {
   animation: bm-easter-egg-pulse 1.4s ease-in-out;
-  display: inline-block;
 }
 
 /* All overlay buttons */
