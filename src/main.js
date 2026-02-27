@@ -1819,6 +1819,7 @@ function startNotificationPolling() {
 function initChat() {
   ensureMapCommentsManager();
   const CHAT_USER_COLORS_STORAGE_KEY = 'bmChatUserColors';
+  const CHAT_LAST_READ_ID_STORAGE_KEY = 'bmChatLastReadMessageId';
   const CHAT_NICKNAME_COLOR_VARIANTS = [
     '#ff6b6b', '#f97316', '#f59e0b', '#eab308', '#84cc16', '#22c55e',
     '#10b981', '#14b8a6', '#06b6d4', '#0ea5e9', '#3b82f6', '#6366f1',
@@ -1847,6 +1848,10 @@ function initChat() {
   const chatUserColors = new Map();
   let chatUserColorsPersistTimer = null;
   const messageCache = new Map();
+  let unreadBadge = null;
+  let lastReadPersistTimer = null;
+  let lastReadMessageId = null;
+  const unreadMessageIds = new Set();
   const pendingReplies = [];
   const PENDING_REPLY_WINDOW_MS = 30000;
   let mapCommentsFaulted = false;
@@ -1927,6 +1932,100 @@ function initChat() {
   loadChatUserColors();
 
   if (!messagesEl || !textInput) return;
+  const normalizeMessageId = (value) => {
+    const normalized = String(value ?? '').trim();
+    return normalized || null;
+  };
+  const isNumericMessageId = (value) => /^[0-9]+$/.test(value);
+  const compareMessageIds = (leftValue, rightValue) => {
+    const left = normalizeMessageId(leftValue);
+    const right = normalizeMessageId(rightValue);
+    if (!left && !right) return 0;
+    if (!left) return -1;
+    if (!right) return 1;
+    const leftIsNumeric = isNumericMessageId(left);
+    const rightIsNumeric = isNumericMessageId(right);
+    if (leftIsNumeric && rightIsNumeric) {
+      if (left.length !== right.length) return left.length > right.length ? 1 : -1;
+      if (left === right) return 0;
+      return left > right ? 1 : -1;
+    }
+    if (left === right) return 0;
+    return left > right ? 1 : -1;
+  };
+  const renderUnreadBadge = () => {
+    if (!unreadBadge) return;
+    const count = unreadMessageIds.size;
+    if (count > 0) {
+      unreadBadge.textContent = count > 99 ? '99+' : String(count);
+      unreadBadge.style.display = 'inline-flex';
+      unreadBadge.title = `${count} unread message${count === 1 ? '' : 's'}`;
+      return;
+    }
+    unreadBadge.textContent = '';
+    unreadBadge.style.display = 'none';
+    unreadBadge.title = '';
+  };
+  const schedulePersistLastReadMessageId = () => {
+    if (!lastReadMessageId) return;
+    if (lastReadPersistTimer) return;
+    lastReadPersistTimer = setTimeout(() => {
+      lastReadPersistTimer = null;
+      if (!lastReadMessageId) return;
+      GM.setValue(CHAT_LAST_READ_ID_STORAGE_KEY, lastReadMessageId).catch(() => {});
+    }, 200);
+  };
+  const pruneUnreadByLastRead = () => {
+    if (!lastReadMessageId || !unreadMessageIds.size) return;
+    for (const unreadId of Array.from(unreadMessageIds)) {
+      if (compareMessageIds(unreadId, lastReadMessageId) <= 0) {
+        unreadMessageIds.delete(unreadId);
+      }
+    }
+  };
+  const setLastReadMessageId = (messageId, options = {}) => {
+    const normalized = normalizeMessageId(messageId);
+    if (!normalized) return;
+    if (compareMessageIds(normalized, lastReadMessageId) <= 0) return;
+    lastReadMessageId = normalized;
+    pruneUnreadByLastRead();
+    renderUnreadBadge();
+    if (options.persist !== false) {
+      schedulePersistLastReadMessageId();
+    }
+  };
+  const isChatVisibleAndOpen = () => Boolean(chatDetails.open && chatDetails.style.display !== 'none');
+  const getLatestRenderedMessageId = () => {
+    const rows = messagesEl.querySelectorAll('.bm-chat-message[data-msg-id]');
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const id = normalizeMessageId(rows[i].getAttribute('data-msg-id'));
+      if (id) return id;
+    }
+    return null;
+  };
+  const markChatAsRead = () => {
+    const latest = getLatestRenderedMessageId();
+    if (latest) {
+      setLastReadMessageId(latest);
+    }
+    if (!unreadMessageIds.size) return;
+    unreadMessageIds.clear();
+    renderUnreadBadge();
+  };
+  const trackIncomingUnread = (messageId) => {
+    const normalized = normalizeMessageId(messageId);
+    if (!normalized) return;
+    if (isChatVisibleAndOpen()) {
+      setLastReadMessageId(normalized);
+      if (!unreadMessageIds.size) return;
+      unreadMessageIds.clear();
+      renderUnreadBadge();
+      return;
+    }
+    if (compareMessageIds(normalized, lastReadMessageId) <= 0) return;
+    unreadMessageIds.add(normalized);
+    renderUnreadBadge();
+  };
   const setModCodeVisible = (visible) => {
     if (modCodeRow) {
       modCodeRow.style.display = visible ? 'flex' : 'none';
@@ -2247,13 +2346,22 @@ function initChat() {
     chatFloatToggleBtn.textContent = CHAT_FLOAT_ICON;
     chatFloatToggleBtn.setAttribute('aria-label', 'Float chat');
     chatFloatToggleBtn.title = 'Open chat in floating window';
+    unreadBadge = chatSummary.querySelector('.bm-chat-unread-badge');
+    if (!unreadBadge) {
+      unreadBadge = document.createElement('span');
+      unreadBadge.className = 'bm-chat-unread-badge';
+      unreadBadge.style.display = 'none';
+    }
     const statusLight = chatSummary.querySelector('.bm-chat-status-light');
     if (statusLight) {
       chatSummary.insertBefore(chatFloatToggleBtn, statusLight);
+      chatSummary.insertBefore(unreadBadge, statusLight);
     } else {
       chatSummary.appendChild(chatFloatToggleBtn);
+      chatSummary.appendChild(unreadBadge);
     }
   }
+  renderUnreadBadge();
 
   const outerHeight = (element) => {
     if (!element) return 0;
@@ -2479,6 +2587,9 @@ function initChat() {
 
   chatDetails?.addEventListener('toggle', () => {
     syncFloatingCollapsedState();
+    if (chatDetails.open) {
+      markChatAsRead();
+    }
   });
   document.addEventListener('bm-layout-theme-changed', () => {
     refreshChatThemeFromOverlay();
@@ -2957,6 +3068,9 @@ function initChat() {
       messagesEl.removeChild(messagesEl.firstChild);
     }
     messagesEl.scrollTop = messagesEl.scrollHeight;
+    if (!isSystem && messageId) {
+      trackIncomingUnread(messageId);
+    }
     if (!isSystem) {
       clearPendingSendRestoreIfMatch(user, text, payload?.reply_to);
       ensureDeleteButton(line);
@@ -3035,6 +3149,9 @@ function initChat() {
     const messageIdText = String(messageId);
     const row = messagesEl.querySelector(`.bm-chat-message[data-msg-id="${messageIdText}"]`);
     if (row) row.remove();
+    if (unreadMessageIds.delete(messageIdText)) {
+      renderUnreadBadge();
+    }
     messageCache.delete(messageIdText);
     removeMapCommentSafe(messageIdText, 'handleDeleted');
     if (replyToId && messageIdText === replyToId) {
@@ -3237,8 +3354,9 @@ function initChat() {
 
   Promise.all([
     GM.getValue('bmChatUser', '').catch(() => ''),
-    GM.getValue('bmChatModCode', '').catch(() => '')
-  ]).then(([savedUser, savedCode]) => {
+    GM.getValue('bmChatModCode', '').catch(() => ''),
+    GM.getValue(CHAT_LAST_READ_ID_STORAGE_KEY, '').catch(() => '')
+  ]).then(([savedUser, savedCode, savedLastReadId]) => {
     if (userInput && !userInput.value) {
       const fallback = document.getElementById('bm-user-name')?.textContent?.trim() || '';
       userInput.value = normalizeUser(savedUser || fallback);
@@ -3246,6 +3364,16 @@ function initChat() {
     if (modCodeInput && !modCodeInput.value) {
       modCodeInput.value = savedCode || '';
       renderModerationControls();
+    }
+    const normalizedLastReadId = normalizeMessageId(savedLastReadId);
+    if (normalizedLastReadId) {
+      lastReadMessageId = normalizedLastReadId;
+      pruneUnreadByLastRead();
+    }
+    if (chatDetails.open) {
+      markChatAsRead();
+    } else {
+      renderUnreadBadge();
     }
   }).finally(() => {
     setChatEnabled(!isChatDisabled());
