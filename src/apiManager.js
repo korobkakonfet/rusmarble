@@ -34,6 +34,7 @@ export default class ApiManager {
     this.eventData = null;
     this.eventDataURL = null;
     this.onCoordsUpdated = null;
+    this.displayCoordsRetryTimeout = null;
   }
 
   getCurrentCharges() {
@@ -291,14 +292,30 @@ export default class ApiManager {
    * @since 0.87.32
    */
   getDisplayCoordsAnchor(closeButton = this.getCloseButton(), infoRoot = this.getPixelInfoRoot(closeButton)) {
-    if (!closeButton) return null;
-    const locationButton = Array.from(infoRoot?.querySelectorAll('button') || [])
-      .find(button => /\b\d{1,4}\s*,\s*\d{1,4}\b/.test(button.textContent || ''));
+    if (!closeButton || !infoRoot) return closeButton?.parentElement || null;
+    const compactCoordPattern = /\b\d{1,4}\s*,\s*\d{1,4}\b/;
+    const rows = Array.from(infoRoot.querySelectorAll('div'));
+    const locationRowByText = rows.find(row =>
+      compactCoordPattern.test(row.textContent || '')
+      && row.querySelector('button')
+      && !row.querySelector('#bm-display-coords-container')
+    );
+    if (locationRowByText) return locationRowByText;
+    const locationButton = Array.from(infoRoot.querySelectorAll('button'))
+      .find(button => compactCoordPattern.test(button.textContent || ''));
     const locationRow =
       locationButton?.closest('.mt-2.flex.w-full.justify-between') ||
       locationButton?.closest('.flex.items-center.gap-1\\.5')?.parentElement;
-    if (locationRow) return locationRow;
+    if (locationRow && infoRoot.contains(locationRow)) return locationRow;
     return closeButton.parentElement?.nextElementSibling || closeButton.parentElement;
+  }
+
+  #scheduleDisplayCoordsRetry(retryCount) {
+    if (retryCount >= 12) return;
+    clearTimeout(this.displayCoordsRetryTimeout);
+    this.displayCoordsRetryTimeout = setTimeout(() => {
+      this.updateDisplayCoords(retryCount + 1);
+    }, 70);
   }
 
   /** Get the container containing the three button, namely Paint, Favorite, and Share, for anchoring
@@ -327,7 +344,7 @@ export default class ApiManager {
    * 
    * @since 0.85.28
   */
-  updateDisplayCoords() {
+  updateDisplayCoords(retryCount = 0) {
     const coordsTile = [ this.coordsTilePixel[0], this.coordsTilePixel[1] ];
     const coordsPixel = [ this.coordsTilePixel[2], this.coordsTilePixel[3] ];
     const closeButton = this.getCloseButton();
@@ -387,12 +404,38 @@ export default class ApiManager {
     };
   
     const coordRow = this.getDisplayCoordsAnchor(closeButton, infoRoot);
-    if (!coordRow) return;
+    const paintButtonContainer = this.getPaintButtonContainer();
+    const canAnchorAbovePaint =
+      !!paintButtonContainer &&
+      infoRoot.contains(paintButtonContainer) &&
+      paintButtonContainer.parentElement;
+    if (!coordRow) {
+      this.#scheduleDisplayCoordsRetry(retryCount);
+      return;
+    }
+    const coordPattern = /\b\d{1,4}\s*,\s*\d{1,4}\b/;
+    const isLikelyHeaderFallback =
+      coordRow === closeButton.parentElement &&
+      !coordPattern.test(coordRow.textContent || '');
+    if (isLikelyHeaderFallback) {
+      this.#scheduleDisplayCoordsRetry(retryCount);
+      return;
+    }
+    clearTimeout(this.displayCoordsRetryTimeout);
+    this.displayCoordsRetryTimeout = null;
     if (!displayCoordsContainer) {
       displayCoordsContainer = document.createElement('div');
       displayCoordsContainer.id = 'bm-display-coords-container';
       displayCoordsContainer.style = 'margin-left: calc(var(--spacing)*3); margin-top: 4px; margin-bottom: 2px; line-height: 1.2; display: inline-flex; gap: 12px; align-items: baseline; white-space: nowrap;';
-      coordRow.insertAdjacentElement('afterend', displayCoordsContainer);
+      if (canAnchorAbovePaint) {
+        paintButtonContainer.insertAdjacentElement('beforebegin', displayCoordsContainer);
+      } else {
+        coordRow.insertAdjacentElement('afterend', displayCoordsContainer);
+      }
+    } else if (canAnchorAbovePaint) {
+      if (displayCoordsContainer.nextElementSibling !== paintButtonContainer) {
+        paintButtonContainer.insertAdjacentElement('beforebegin', displayCoordsContainer);
+      }
     } else if (displayCoordsContainer.previousElementSibling !== coordRow) {
       coordRow.insertAdjacentElement('afterend', displayCoordsContainer);
     }
@@ -423,6 +466,21 @@ export default class ApiManager {
     this.updateAddCircleTemplateButton();
   }
 
+  #isRuspixelAllianceText(text) {
+    const normalized = String(text || '')
+      .toLowerCase()
+      .replace(/ё/g, 'е')
+      .replace(/[^a-zа-я0-9]+/g, '');
+    if (!normalized) return false;
+    return (
+      normalized.includes('ruspixel') ||
+      normalized.includes('ruspixe') ||
+      normalized.includes('руспиксель') ||
+      normalized.includes('руспиксел') ||
+      normalized.includes('руспикс')
+    );
+  }
+
   /** Updates the pixel info window background when the painter alliance is Ruspixel.
    *
    * @since 0.87.6
@@ -451,7 +509,12 @@ export default class ApiManager {
       .find(button => {
         if (!button.classList.contains('btn')) return false;
         if (button.classList.contains('btn-circle')) return false;
-        return /\bruspixel\b/i.test(button.textContent || '');
+        const possibleText = [
+          button.textContent || '',
+          button.getAttribute('data-tip') || '',
+          button.title || ''
+        ].join(' ');
+        return this.#isRuspixelAllianceText(possibleText);
       });
     const isRuspixel = !!allianceButton;
     infoCard.classList.toggle('bm-ruspixel-flag', isRuspixel);
@@ -594,14 +657,27 @@ export default class ApiManager {
     clearCloseHandler();
     clearWave();
     const elements = Array.from(infoRoot.querySelectorAll('*'));
-    const exactIdText = `#${EASTER_EGG_USER_ID}`;
-    const idPattern = new RegExp(`#\\s*${EASTER_EGG_USER_ID}\\b`);
+    const targetUserIDs = new Set([EASTER_EGG_USER_ID]);
+    const ownUserID = Number(this.templateManager?.userID);
+    if (Number.isFinite(ownUserID) && ownUserID >= 0) {
+      targetUserIDs.add(ownUserID);
+    }
+    const extractTargetUserID = (text) => {
+      const match = String(text || '').match(/#\s*(\d{4,})\b/);
+      if (!match) return null;
+      const userID = Number(match[1]);
+      return targetUserIDs.has(userID) ? userID : null;
+    };
+    const exactIdTexts = new Set(Array.from(targetUserIDs, userID => `#${userID}`));
     const targetElement =
-      elements.find(element => (element.textContent || '').trim() === exactIdText) ||
-      elements.find(element => !element.children.length && idPattern.test(element.textContent || '')) ||
-      elements.find(element => idPattern.test(element.textContent || '')) ||
+      elements.find(element => exactIdTexts.has((element.textContent || '').trim())) ||
+      elements.find(element => !element.children.length && extractTargetUserID(element.textContent || '') !== null) ||
+      elements.find(element => extractTargetUserID(element.textContent || '') !== null) ||
       null;
     if (!targetElement) return;
+    const matchedUserID = extractTargetUserID(targetElement.textContent || '');
+    if (matchedUserID === null) return;
+    const idPattern = new RegExp(`#\\s*${matchedUserID}\\b`);
     const animTarget =
       targetElement.closest('.inline-flex.items-baseline') ||
       targetElement.closest('.flex.gap-1\\.5') ||
