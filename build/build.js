@@ -22,20 +22,34 @@ const require = createRequire(import.meta.url);
 const terser = require('terser');
 
 const isGitHub = !!process.env?.GITHUB_ACTIONS; // Is this running in a GitHub Action Workflow?'
-// const isGitHub = true;
-const isDebug = !isGitHub;
-// const isDebug = false;
+const cliFlags = new Set(
+  process.argv
+    .slice(2)
+    .map((value) => String(value ?? '').trim().toLowerCase())
+    .filter(Boolean)
+);
+const cliMode = cliFlags.has('--dev') || cliFlags.has('-d')
+  ? 'development'
+  : cliFlags.has('--prod') || cliFlags.has('-p')
+    ? 'production'
+    : null;
+const buildModeRaw = String(cliMode ?? process.env.BUILD_MODE ?? process.env.NODE_ENV ?? 'production')
+  .trim()
+  .toLowerCase();
+const isDebug = ['dev', 'development', 'debug', 'local'].includes(buildModeRaw);
+const isProduction = !isDebug;
 const shouldMangleProperties = process.env?.MANGLE_PROPERTIES === '1';
 const localCssUrl = 'http://localhost:8000/dist/RusMarble.user.css';
 const prodCssUrl = 'https://raw.githubusercontent.com/korobkakonfet/rusmarble/refs/heads/custom-improve/dist/RusMarble.user.css';
-const cssBmFile = process.env.CSS_BM_FILE ?? (isGitHub ? prodCssUrl : localCssUrl);
+const cssBmFile = process.env.CSS_BM_FILE ?? (isProduction ? prodCssUrl : localCssUrl);
 const localTemplateSyncUrl = 'http://localhost:8003';
 const prodTemplateSyncUrl = 'https://wplace.zaebal.me';
-const templateSyncBaseUrl = process.env.TEMPLATE_SYNC_BASE_URL ?? (isGitHub ? prodTemplateSyncUrl : localTemplateSyncUrl);
+const templateSyncBaseUrl = process.env.TEMPLATE_SYNC_BASE_URL ?? (isProduction ? prodTemplateSyncUrl : localTemplateSyncUrl);
 const prodChatWsUrl = 'wss://wplace.zaebal.me/ws/chat';
-const chatWsUrl = process.env.CHAT_WS_URL ?? (isGitHub ? prodChatWsUrl : '');
+const chatWsUrl = process.env.CHAT_WS_URL ?? (isProduction ? prodChatWsUrl : '');
 
 console.log(`${consoleStyle.BLUE}Starting build...${consoleStyle.RESET}`);
+console.log(`Mode: ${isProduction ? 'production' : 'development'} (${buildModeRaw || 'production'})`);
 
 // Tries to build the wiki if build.js is run in a GitHub Workflow
 // if (isGitHub) {
@@ -148,9 +162,9 @@ let resultTerser = await terser.minify(resultEsbuildJS.text, {
     comments: 'some' // Save legal comments
   },
   compress: {
-    dead_code: isGitHub, // Should unreachable code be removed?
-    drop_console: isGitHub, // Should console code be removed?
-    drop_debugger: isGitHub, // SHould debugger code be removed?
+    dead_code: isProduction, // Should unreachable code be removed?
+    drop_console: isProduction, // Should console code be removed?
+    drop_debugger: isProduction, // SHould debugger code be removed?
     passes: 2 // How many times terser will compress the code
   }
 });
@@ -162,8 +176,8 @@ fs.writeFileSync('dist/RusMarble.user.js', resultTerser.code, 'utf8');
 
 let importedMapCSS = {}; // The imported CSS map
 
-// Only import a CSS map if we are NOT in production (GitHub Workflow)
-// Theoretically, if the previous map is always imported, the names would not scramble. However, the names would never decrease in number...
+// Import a previous CSS map in local builds to keep selector names stable across runs.
+// GitHub builds start from a clean workspace and generate a fresh mapping artifact.
 if (!isDebug) {
   if (!isGitHub) {
     try {
@@ -173,15 +187,14 @@ if (!isDebug) {
     }
   }
 
-  // Mangles the CSS selectors
-  // If we are in production (GitHub Workflow), then generate the CSS mapping
+  // Mangle CSS selectors for production-style builds and return a mapping when enabled.
   const mapCSS = mangleSelectors({
     inputPrefix: 'bm-',
     outputPrefix: 'bm-',
     pathJS: 'dist/RusMarble.user.js',
     pathCSS: 'dist/RusMarble.user.css',
     importMap: importedMapCSS,
-    returnMap: isGitHub
+    returnMap: isProduction
   });
 
   // If a map was returned, write it to the file

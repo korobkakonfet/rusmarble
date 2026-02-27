@@ -189,6 +189,8 @@ export default class TemplateManager {
     this.templatesJSON.templates[storageKey] = {
       "name": template.displayName, // Display name of template
       "coords": coords.join(', '), // The coords of the template
+      "width": Number.isFinite(template.imageWidth) ? template.imageWidth : null,
+      "height": Number.isFinite(template.imageHeight) ? template.imageHeight : null,
       "enabled": templateEnabled,
       "tiles": templateTilesBuffers, // Stores the chunked tile buffers
       "palette": template.colorPalette, // Persist palette and enabled flags
@@ -985,6 +987,16 @@ export default class TemplateManager {
           const displayName = templateValue.name || `Template ${sortID || ''}`; // Display name of the template
           //const coords = templateValue?.coords?.split(',').map(Number); // "1,2,3,4" -> [1, 2, 3, 4]
           const tilesbase64 = templateValue.tiles;
+          const parsedShreadSize = Math.max(1, Number(templateValue.shreadSize) || this.drawMult);
+          const templateWorldWidth = 2048 * this.tileSize;
+          const topLeftWorldX = templateCoords[0] * this.tileSize + templateCoords[2];
+          const topLeftWorldY = templateCoords[1] * this.tileSize + templateCoords[3];
+          let inferredImageWidth = Number.isFinite(Number(templateValue.width))
+            ? Math.max(1, Math.trunc(Number(templateValue.width)))
+            : 0;
+          let inferredImageHeight = Number.isFinite(Number(templateValue.height))
+            ? Math.max(1, Math.trunc(Number(templateValue.height)))
+            : 0;
           const templateTiles = {}; // Stores the template bitmap tiles for each tile.
           const templateTilesBuffer = {}; // Store the template bitmap tiles for each tile in Uint8Array.
           let requiredPixelCount = 0; // Global required pixel count for this imported template
@@ -1004,6 +1016,20 @@ export default class TemplateManager {
                 templateTiles[tile] = templateBitmap;
               }
               templateTilesBuffer[tile] = templateUint8Array;
+
+              const tileCoords = tile.split(',').map(Number);
+              if (tileCoords.length >= 4 && tileCoords.slice(0, 4).every(Number.isFinite)) {
+                const chunkWorldX = tileCoords[0] * this.tileSize + tileCoords[2];
+                const chunkWorldY = tileCoords[1] * this.tileSize + tileCoords[3];
+                const offsetX = ((chunkWorldX - topLeftWorldX) % templateWorldWidth + templateWorldWidth) % templateWorldWidth;
+                const offsetY = chunkWorldY - topLeftWorldY;
+                const chunkWidth = Math.max(1, Math.round(templateBitmap.width / parsedShreadSize));
+                const chunkHeight = Math.max(1, Math.round(templateBitmap.height / parsedShreadSize));
+                inferredImageWidth = Math.max(inferredImageWidth, offsetX + chunkWidth);
+                if (offsetY >= 0) {
+                  inferredImageHeight = Math.max(inferredImageHeight, offsetY + chunkHeight);
+                }
+              }
 
               // Count required pixels in this bitmap (center pixels with alpha >= 64 and not #deface)
               try {
@@ -1048,9 +1074,11 @@ export default class TemplateManager {
             sortID: sortID || (this.largestSeenSortID + 1) || 0,
             authorID: authorID || '',
             coords: templateCoords,
+            imageWidth: inferredImageWidth > 0 ? inferredImageWidth : null,
+            imageHeight: inferredImageHeight > 0 ? inferredImageHeight : null,
           });
           if (template.sortID > this.largestSeenSortID) { this.largestSeenSortID = template.sortID; }
-          template.shreadSize = templateValue.shreadSize ?? this.drawMult; // Copy to template's shread Size
+          template.shreadSize = parsedShreadSize; // Copy to template's shread Size
           template.chunked = templateTiles;
           template.chunkedBuffer = templateTilesBuffer;
             template.requiredPixelCount = requiredPixelCount;
@@ -1067,6 +1095,14 @@ export default class TemplateManager {
             template.remoteHighlighted = normalizeFlagValue(templateValue.remoteHighlighted);
             template.remoteHighlightedAt = templateValue.remoteHighlightedAt ?? null;
             template.remoteOrder = templateValue.remoteOrder ?? null;
+          if (inferredImageWidth > 0) {
+            template.imageWidth = inferredImageWidth;
+            templates[templateKey].width = inferredImageWidth;
+          }
+          if (inferredImageHeight > 0) {
+            template.imageHeight = inferredImageHeight;
+            templates[templateKey].height = inferredImageHeight;
+          }
           // Construct colorPalette from paletteMap
           const paletteObj = {};
           for (const [key, count] of paletteMap.entries()) { paletteObj[key] = { count, enabled: true }; }

@@ -30,6 +30,8 @@ export default class Template {
     chunked = null,
     chunkedBuffer = null,
     tileSize = 1000,
+    imageWidth = null,
+    imageHeight = null,
   } = {}) {
     this.displayName = displayName;
     this.sortID = sortID;
@@ -40,6 +42,8 @@ export default class Template {
     this.chunked = chunked; // tileKey => ImageBitmap, null if memory saving
     this.chunkedBuffer = chunkedBuffer;
     this.tileSize = tileSize;
+    this.imageWidth = Number.isFinite(Number(imageWidth)) ? Math.max(1, Math.trunc(Number(imageWidth))) : null;
+    this.imageHeight = Number.isFinite(Number(imageHeight)) ? Math.max(1, Math.trunc(Number(imageHeight))) : null;
     this.enabled = true;
     this.pixelCount = 0; // Total pixel count in template
     this.requiredPixelCount = 0; // Total number of non-transparent, non-#deface pixels
@@ -103,6 +107,8 @@ export default class Template {
     const bitmap = this.file instanceof ImageBitmap ? this.file : await createImageBitmap(this.file, { "colorSpaceConversion": "none" }); // Create efficient bitmap from uploaded file
     const imageWidth = bitmap.width;
     const imageHeight = bitmap.height;
+    this.imageWidth = Math.max(1, Math.trunc(imageWidth));
+    this.imageHeight = Math.max(1, Math.trunc(imageHeight));
   
     const [tx, ty, px, py] = this.coords;
     let mapX = tx * this.tileSize + px;
