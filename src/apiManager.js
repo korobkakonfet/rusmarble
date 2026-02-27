@@ -239,11 +239,66 @@ export default class ApiManager {
     Button Class List: btn btn-sm btn-primary btn-soft
     */
 
-    return document.querySelector(
-      ".flex.gap-2.px-3>button.btn-circle," + 
-      ".flex.gap-1\\.5.px-3>button.btn-circle," +
-      ".flex.h-10.items-center.justify-between.px-3.pb-1\\.5>button.btn-circle"
-    ); // close button
+    const selectors = [
+      '.rounded-t-box .flex.items-center.justify-end.gap-1 > button.btn-circle',
+      '.flex.items-center.justify-between.px-3.pb-1\\.5 button.btn-circle',
+      '.flex.h-10.items-center.justify-between.px-3.pb-1\\.5 button.btn-circle',
+      '.flex.gap-1\\.5.px-3 > button.btn-circle',
+      '.flex.gap-2.px-3 > button.btn-circle'
+    ];
+    for (const selector of selectors) {
+      const closeButton = document.querySelector(selector);
+      if (closeButton) return closeButton;
+    }
+
+    const candidates = Array.from(
+      document.querySelectorAll('.rounded-t-box button.btn-circle, dialog.modal button.btn-circle, .modal button.btn-circle')
+    );
+    return (
+      candidates.find(button => {
+        const root = this.getPixelInfoRoot(button);
+        if (!root) return false;
+        const text = root.textContent || '';
+        return /\bpaint\b/i.test(text) || /\b#\s*\d+\b/.test(text);
+      }) ||
+      candidates[0] ||
+      null
+    );
+  }
+
+  /** Get the root element of the current pixel info panel.
+   *
+   * @param {HTMLElement | null} closeButton
+   * @returns {HTMLElement | null}
+   * @since 0.87.32
+   */
+  getPixelInfoRoot(closeButton = this.getCloseButton()) {
+    if (!closeButton) return null;
+    const roundedBox = closeButton.closest('.rounded-t-box');
+    if (roundedBox) return roundedBox;
+    const dialog = closeButton.closest('dialog.modal, dialog');
+    if (dialog) return dialog.firstElementChild || dialog;
+    const modal = closeButton.closest('.modal');
+    if (modal) return modal.firstElementChild || modal;
+    return closeButton.parentElement;
+  }
+
+  /** Get the row after which coordinate text should be inserted.
+   *
+   * @param {HTMLElement | null} closeButton
+   * @param {HTMLElement | null} infoRoot
+   * @returns {HTMLElement | null}
+   * @since 0.87.32
+   */
+  getDisplayCoordsAnchor(closeButton = this.getCloseButton(), infoRoot = this.getPixelInfoRoot(closeButton)) {
+    if (!closeButton) return null;
+    const locationButton = Array.from(infoRoot?.querySelectorAll('button') || [])
+      .find(button => /\b\d{1,4}\s*,\s*\d{1,4}\b/.test(button.textContent || ''));
+    const locationRow =
+      locationButton?.closest('.mt-2.flex.w-full.justify-between') ||
+      locationButton?.closest('.flex.items-center.gap-1\\.5')?.parentElement;
+    if (locationRow) return locationRow;
+    return closeButton.parentElement?.nextElementSibling || closeButton.parentElement;
   }
 
   /** Get the container containing the three button, namely Paint, Favorite, and Share, for anchoring
@@ -253,10 +308,19 @@ export default class ApiManager {
   getPaintButtonContainer() {
     const anchorElement = this.getCloseButton();
     if (!anchorElement) return;
+    const infoRoot = this.getPixelInfoRoot(anchorElement);
+    if (infoRoot) {
+      const actionRows = Array.from(infoRoot.querySelectorAll('div'))
+        .filter(row => !!row.querySelector(':scope > button.btn-sm.btn-primary'));
+      const visibleActionRow = actionRows.find(row => row.offsetParent !== null);
+      if (visibleActionRow) return visibleActionRow;
+      if (actionRows.length) return actionRows[0];
+    }
+    // Legacy fallback:
     // .parentElement: The row containing the pixel
     // .parentElement: The whole container
     // .lastElementChild: The button container
-    return anchorElement.parentElement.parentElement.lastElementChild;
+    return anchorElement.parentElement?.parentElement?.lastElementChild;
   }
 
   /** Update the texts and related functions shown on the pixel info overlay
@@ -266,12 +330,20 @@ export default class ApiManager {
   updateDisplayCoords() {
     const coordsTile = [ this.coordsTilePixel[0], this.coordsTilePixel[1] ];
     const coordsPixel = [ this.coordsTilePixel[2], this.coordsTilePixel[3] ];
+    const closeButton = this.getCloseButton();
+    const infoRoot = this.getPixelInfoRoot(closeButton);
+    if (!closeButton || !infoRoot) return;
 
-    let displayCoords1 = document.getElementById('bm-display-coords1');
-    let displayCoords2 = document.getElementById('bm-display-coords2');
-    const displayCoords1Copy = document.getElementById('bm-display-coords1-copy');
-    const displayCoords2Copy = document.getElementById('bm-display-coords2-copy');
-    const displayCoordsBr = document.getElementById('bm-display-coords-br');
+    document.querySelectorAll('#bm-display-coords-container, #bm-display-coords1, #bm-display-coords2, #bm-display-coords-br')
+      .forEach(element => {
+        if (!infoRoot.contains(element)) {
+          element.remove();
+        }
+      });
+
+    let displayCoordsContainer = infoRoot.querySelector('#bm-display-coords-container');
+    const displayCoords1Copy = infoRoot.querySelector('#bm-display-coords1-copy');
+    const displayCoords2Copy = infoRoot.querySelector('#bm-display-coords2-copy');
 
     if (displayCoords1Copy) displayCoords1Copy.remove();
     if (displayCoords2Copy) displayCoords2Copy.remove();
@@ -286,16 +358,26 @@ export default class ApiManager {
       if (!parent) return;
       const existing = parent.querySelector('.bm-display-coords-toast');
       if (existing) existing.remove();
+      if (window.getComputedStyle(parent).position === 'static') {
+        parent.style.position = 'relative';
+      }
       const toast = document.createElement('span');
       toast.className = 'bm-display-coords-toast';
       toast.textContent = message;
-      anchor.insertAdjacentElement('afterend', toast);
+      toast.style.left = `${anchor.offsetLeft + anchor.offsetWidth + 8}px`;
+      toast.style.top = `${anchor.offsetTop}px`;
+      parent.appendChild(toast);
+      const maxLeft = Math.max(0, parent.clientWidth - toast.offsetWidth);
+      const currentLeft = parseFloat(toast.style.left) || 0;
+      if (currentLeft > maxLeft) {
+        const fallbackLeft = Math.max(0, anchor.offsetLeft - toast.offsetWidth - 8);
+        toast.style.left = `${fallbackLeft}px`;
+      }
       setTimeout(() => toast.remove(), 1200);
     };
 
     const attachCopyHandler = (element) => {
-      if (!element || element.dataset.bmCopyAttached) return;
-      element.dataset.bmCopyAttached = 'true';
+      if (!element) return;
       element.addEventListener('click', () => {
         const content = element.dataset.text || '';
         if (!content) return;
@@ -304,40 +386,36 @@ export default class ApiManager {
       });
     };
   
-    // If we could not find the addition coord span, we make it then update the textContent with the new coords
-    if (!displayCoords1) {
-      const closeButton = this.getCloseButton();
-      if (!closeButton) return;
-      const coordRow = closeButton.parentElement?.nextElementSibling || closeButton.parentElement;
-      // For every span element, find the one we want (pixel numbers when canvas clicked)
-      displayCoords1 = document.createElement('span');
-      displayCoords1.id = 'bm-display-coords1';
-      displayCoords1.style = 'margin-left: calc(var(--spacing)*3); margin-top: 6px; display: inline-block; font-size: small;';
-      displayCoords1.className = 'bm-display-coords-clickable';
-      coordRow.insertAdjacentElement('afterend', displayCoords1);
-      
-      const br = document.createElement('br');
-      br.id = 'bm-display-coords-br';
-      displayCoords1.insertAdjacentElement('afterend', br);
-
-      displayCoords2 = document.createElement('span');
-      displayCoords2.id = 'bm-display-coords2';
-      displayCoords2.style = 'margin-left: calc(var(--spacing)*3); margin-top: 2px; display: inline-block; font-size: small;';
-      displayCoords2.className = 'bm-display-coords-clickable';
-      br.insertAdjacentElement('afterend', displayCoords2);
+    const coordRow = this.getDisplayCoordsAnchor(closeButton, infoRoot);
+    if (!coordRow) return;
+    if (!displayCoordsContainer) {
+      displayCoordsContainer = document.createElement('div');
+      displayCoordsContainer.id = 'bm-display-coords-container';
+      displayCoordsContainer.style = 'margin-left: calc(var(--spacing)*3); margin-top: 4px; margin-bottom: 2px; line-height: 1.2; display: inline-flex; gap: 12px; align-items: baseline; white-space: nowrap;';
+      coordRow.insertAdjacentElement('afterend', displayCoordsContainer);
+    } else if (displayCoordsContainer.previousElementSibling !== coordRow) {
+      coordRow.insertAdjacentElement('afterend', displayCoordsContainer);
     }
 
-    if (displayCoords1 && displayCoords2) {
-      displayCoords1.textContent = text1;
-      displayCoords2.textContent = text2;
-      displayCoords1.dataset.text = text1;
-      displayCoords2.dataset.text = text2;
-      if (displayCoordsBr && displayCoordsBr.tagName !== 'BR') {
-        displayCoordsBr.remove();
-      }
-      attachCopyHandler(displayCoords1);
-      attachCopyHandler(displayCoords2);
-    }
+    displayCoordsContainer.textContent = '';
+
+    const displayCoords1 = document.createElement('span');
+    displayCoords1.id = 'bm-display-coords1';
+    displayCoords1.style = 'display: inline-block;';
+    displayCoords1.className = 'bm-display-coords-clickable text-base-content/70 text-xs';
+    displayCoords1.textContent = text1;
+    displayCoords1.dataset.text = text1;
+
+    const displayCoords2 = document.createElement('span');
+    displayCoords2.id = 'bm-display-coords2';
+    displayCoords2.style = 'display: inline-block;';
+    displayCoords2.className = 'bm-display-coords-clickable text-base-content/70 text-xs';
+    displayCoords2.textContent = text2;
+    displayCoords2.dataset.text = text2;
+
+    displayCoordsContainer.append(displayCoords1, displayCoords2);
+    attachCopyHandler(displayCoords1);
+    attachCopyHandler(displayCoords2);
 
     this.updatePixelInfoAllianceBackground();
     this.#maybeTriggerEasterEgg();
@@ -350,16 +428,14 @@ export default class ApiManager {
    * @since 0.87.6
   */
   updatePixelInfoAllianceBackground() {
+    const closeButton = this.getCloseButton();
+    const infoRoot = this.getPixelInfoRoot(closeButton);
+    const infoCard =
+      closeButton?.closest('.rounded-t-box') ||
+      infoRoot?.querySelector('.rounded-t-box') ||
+      infoRoot;
+
     if (this.templateManager?.isRuspixelFlagEnabled && !this.templateManager.isRuspixelFlagEnabled()) {
-      const closeButton = this.getCloseButton();
-      const infoRoot =
-        closeButton?.parentElement?.parentElement ||
-        closeButton?.closest('dialog') ||
-        closeButton?.closest('.modal') ||
-        closeButton?.parentElement;
-      const infoCard =
-        closeButton?.closest('.rounded-t-box') ||
-        infoRoot?.querySelector('.rounded-t-box');
       if (infoCard) {
         infoCard.classList.remove('bm-ruspixel-flag');
       }
@@ -368,17 +444,8 @@ export default class ApiManager {
       }
       return;
     }
-    const closeButton = this.getCloseButton();
     if (!closeButton) return;
-    const infoRoot =
-      closeButton.parentElement?.parentElement ||
-      closeButton.closest('dialog') ||
-      closeButton.closest('.modal') ||
-      closeButton.parentElement;
     if (!infoRoot) return;
-    const infoCard =
-      closeButton.closest('.rounded-t-box') ||
-      infoRoot.querySelector('.rounded-t-box');
     if (!infoCard) return;
     const allianceButton = Array.from(infoRoot.querySelectorAll('button'))
       .find(button => {
@@ -397,11 +464,7 @@ export default class ApiManager {
   #maybeTriggerEasterEgg() {
     const closeButton = this.getCloseButton();
     if (!closeButton) return;
-    const infoRoot =
-      closeButton.parentElement?.parentElement ||
-      closeButton.closest('dialog') ||
-      closeButton.closest('.modal') ||
-      closeButton.parentElement;
+    const infoRoot = this.getPixelInfoRoot(closeButton);
     if (!infoRoot) return;
     const clearFlowTimeouts = () => {
       clearTimeout(this.easterEggPulseTimeout);
@@ -438,6 +501,8 @@ export default class ApiManager {
     const getWaveTargets = (targetElement, idPattern) => {
       const container =
         targetElement.closest('.inline-flex.items-baseline') ||
+        targetElement.closest('.flex.gap-1\\.5')?.querySelector('.inline-flex.items-baseline') ||
+        targetElement.closest('.m-1.flex.w-full.items-start.gap-2')?.querySelector('.inline-flex.items-baseline') ||
         targetElement.closest('.flex.flex-wrap.items-center.gap-1')?.querySelector('.inline-flex.items-baseline') ||
         targetElement.closest('.flex.h-10.items-center.justify-between')?.querySelector('.inline-flex.items-baseline') ||
         targetElement.parentElement;
@@ -538,6 +603,9 @@ export default class ApiManager {
       null;
     if (!targetElement) return;
     const animTarget =
+      targetElement.closest('.inline-flex.items-baseline') ||
+      targetElement.closest('.flex.gap-1\\.5') ||
+      targetElement.closest('.m-1.flex.w-full.items-start.gap-2') ||
       targetElement.closest('.flex.items-center.gap-2') ||
       targetElement.closest('.flex.h-10.items-center.justify-between')?.querySelector('.flex.items-center.gap-2') ||
       targetElement;

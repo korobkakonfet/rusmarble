@@ -9,7 +9,7 @@ import TemplateManager from './templateManager.js';
 import { buildUserSettingsSection } from './userSettings.js';
 import { createTemplateSync, normalizeRemoteOrder } from './templateSync.js';
 import { createMapCommentManager } from './mapComments.js';
-import { consoleLog, consoleWarn, selectAllCoordinateInputs, rgbToMeta, getOverlayCoords, sortByOptions, getCurrentColor } from './utils.js';
+import { consoleLog, consoleWarn, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor } from './utils.js';
 import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getCurrentTileSize} from './utilsMaptiler.js';
 // import { getCenterGeoCoords, addTemplate } from './utilsMaptiler.js';
 
@@ -35,6 +35,12 @@ const REPORT_REQUEST_EVENT_TYPE = 'bm-report-request';
 const REPORT_CLICK_FALLBACK_MS = 5000;
 const REPORT_POST_SEND_HIDE_MS = 1000;
 const MAP_WORLD_WIDTH_PX = 2048 * 1000;
+const MAP_WORLD_HEIGHT_PX = 2048 * 1000;
+const TEMPLATE_FOCUS_VIEWPORT_RATIO = 0.72;
+const TEMPLATE_FOCUS_SCALE_PADDING = 1.5;
+const TEMPLATE_FOCUS_SCALE_MIN = 0.0001;
+const TEMPLATE_FOCUS_ZOOM_MIN = 0;
+const TEMPLATE_FOCUS_ZOOM_MAX = 22;
 let chatSocket = null;
 let chatInitialized = false;
 let mapCommentManager = null;
@@ -79,6 +85,196 @@ const templateDisplayOptions = {
   "cross-z-11": "Cross (Z, 11x11)",
   "dot": "Dot (Original)"
 };
+const TEMPLATE_TEXT_MAX_CHARS = 120;
+const TEMPLATE_TEXT_FONT_SIZE = 36;
+const TEMPLATE_TEXT_FONT_SIZE_MIN = 8;
+const TEMPLATE_TEXT_FONT_SIZE_MAX = 160;
+const TEMPLATE_TEXT_PADDING = 10;
+const TEMPLATE_TEXT_MAX_DIMENSION = 1000;
+const TEMPLATE_TEXT_HARD_EDGE_ALPHA_THRESHOLD = 128;
+const TEMPLATE_TEXT_HARD_EDGE_ALPHA_THRESHOLD_SMALL = 72;
+const TEMPLATE_TEXT_HARD_EDGE_ALPHA_THRESHOLD_SMALL_PIXEL = 56;
+const TEMPLATE_TEXT_HARD_EDGE_SMALL_FONT_MAX = 10;
+const TEMPLATE_TEXT_SMALL_FONT_WEIGHT_MIN = 500;
+const TEMPLATE_TEXT_FONT_LOAD_TIMEOUT_MS = 1200;
+const TEMPLATE_TILE_SIZE = 1000;
+const TEMPLATE_TEXT_WINDOW_DEFAULT_W = 440;
+const TEMPLATE_TEXT_WINDOW_DEFAULT_H = 440;
+const TEMPLATE_TEXT_WINDOW_MIN_W = 320;
+const TEMPLATE_TEXT_WINDOW_MIN_H = 320;
+const TEMPLATE_TEXT_PREVIEW_MIN_W = 240;
+const TEMPLATE_TEXT_PREVIEW_MIN_H = 150;
+const TEMPLATE_TEXT_PREVIEW_ZOOM_MIN = 0.0001;
+const TEMPLATE_TEXT_PREVIEW_ZOOM_DEFAULT = 1;
+const TEMPLATE_TEXT_PREVIEW_MAX_TILE_REQUESTS = 256;
+const TEMPLATE_PREVIEW_TILE_BASE_URL = 'https://backend.wplace.live/files/s0/tiles';
+const TEMPLATE_TEXT_WEB_FONT_LINK_ID = 'bm-text-template-web-fonts';
+const TEMPLATE_TEXT_WEB_FONT_HREF = 'https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&family=Silkscreen:wght@400;700&display=swap';
+
+const templateTextPaletteOptions = (() => {
+  const options = [];
+  const seen = new Set();
+  for (const color of colorpalette) {
+    const colorName = String(color?.name || '').trim();
+    if (!Array.isArray(color?.rgb) || color.rgb.length < 3) continue;
+    if (colorName.toLowerCase() === 'transparent') continue;
+    const rgb = color.rgb.slice(0, 3).map((value) => Math.max(0, Math.min(255, Number(value) || 0)));
+    const key = rgb.join(',');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    options.push({
+      id: Number(color?.id),
+      name: colorName || `Color ${color?.id ?? '?'}`,
+      rgb,
+      key,
+    });
+  }
+  if (!options.length) {
+    options.push({ id: 1, name: 'Black', rgb: [0, 0, 0], key: '0,0,0' });
+  }
+  return options;
+})();
+const templateTextPaletteMap = new Map(templateTextPaletteOptions.map((entry) => [entry.key, entry]));
+const TEMPLATE_TEXT_FONT_DEFAULT_KEY = 'segoe-bold';
+const TEMPLATE_TEXT_LINE_HEIGHT_DEFAULT = 1.2;
+const templateTextFontOptions = [
+  {
+    key: 'segoe-bold',
+    name: 'Segoe UI Bold',
+    family: '"Segoe UI", "Helvetica Neue", Arial, sans-serif',
+    weight: 700,
+    lineHeight: 1.2,
+  },
+  {
+    key: 'arial-bold',
+    name: 'Arial Bold',
+    family: 'Arial, "Helvetica Neue", sans-serif',
+    weight: 700,
+    lineHeight: 1.2,
+  },
+  {
+    key: 'verdana-bold',
+    name: 'Verdana Bold',
+    family: 'Verdana, Geneva, sans-serif',
+    weight: 700,
+    lineHeight: 1.2,
+  },
+  {
+    key: 'tahoma-bold',
+    name: 'Tahoma Bold',
+    family: 'Tahoma, "Segoe UI", sans-serif',
+    weight: 700,
+    lineHeight: 1.2,
+  },
+  {
+    key: 'trebuchet-bold',
+    name: 'Trebuchet Bold',
+    family: '"Trebuchet MS", Tahoma, sans-serif',
+    weight: 700,
+    lineHeight: 1.2,
+  },
+  {
+    key: 'georgia-bold',
+    name: 'Georgia Bold',
+    family: 'Georgia, "Times New Roman", serif',
+    weight: 700,
+    lineHeight: 1.2,
+  },
+  {
+    key: 'courier-bold',
+    name: 'Courier New Bold',
+    family: '"Courier New", Consolas, monospace',
+    weight: 700,
+    lineHeight: 1.2,
+  },
+  {
+    key: 'press-start-2p',
+    name: 'Press Start 2P',
+    family: '"Press Start 2P", "Courier New", monospace',
+    weight: 400,
+    lineHeight: 1.12,
+  },
+  {
+    key: 'pixel-operator',
+    name: 'Pixel Operator',
+    family: '"Pixel Operator", "PixelOperator", "VT323", "Courier New", monospace',
+    weight: 400,
+    lineHeight: 1.08,
+  },
+  {
+    key: 'vt323',
+    name: 'VT323',
+    family: '"VT323", "Courier New", monospace',
+    weight: 400,
+    lineHeight: 1.08,
+  },
+  {
+    key: 'silkscreen',
+    name: 'Silkscreen',
+    family: '"Silkscreen", "Press Start 2P", "Courier New", monospace',
+    weight: 400,
+    lineHeight: 1.1,
+  },
+  {
+    key: 'pixel-retro',
+    name: 'Pixel Retro',
+    family: '"Press Start 2P", "Pixelify Sans", "VT323", "Courier New", monospace',
+    weight: 400,
+    lineHeight: 1.12,
+  },
+  {
+    key: 'pixel-saver',
+    name: 'Pixel Saver (Narrow)',
+    family: '"Arial Narrow", "Liberation Sans Narrow", "Nimbus Sans Narrow", Arial, sans-serif',
+    weight: 400,
+    lineHeight: 1.08,
+  },
+];
+const templateTextFontMap = new Map(templateTextFontOptions.map((entry) => [entry.key, entry]));
+const templateTextPixelFontKeys = new Set(['press-start-2p', 'pixel-operator', 'vt323', 'silkscreen', 'pixel-retro']);
+const resolveTemplateTextFont = (options = {}) => {
+  const optionKey = String(options?.fontKey || '').trim();
+  const fromKey = templateTextFontMap.get(optionKey);
+  if (fromKey) return fromKey;
+  return templateTextFontMap.get(TEMPLATE_TEXT_FONT_DEFAULT_KEY) || templateTextFontOptions[0];
+};
+let templateTextWebFontsLoaded = false;
+const templateTextFontLoadCache = new Map();
+const ensureTemplateTextWebFontsLoaded = () => {
+  if (templateTextWebFontsLoaded) return;
+  if (typeof document === 'undefined' || !document.head) return;
+  const existing = document.getElementById(TEMPLATE_TEXT_WEB_FONT_LINK_ID);
+  if (existing) {
+    templateTextWebFontsLoaded = true;
+    return;
+  }
+  const link = document.createElement('link');
+  link.id = TEMPLATE_TEXT_WEB_FONT_LINK_ID;
+  link.rel = 'stylesheet';
+  link.href = TEMPLATE_TEXT_WEB_FONT_HREF;
+  document.head.appendChild(link);
+  templateTextWebFontsLoaded = true;
+};
+const ensureTemplateTextFontReady = async (fontShorthand, sampleText = 'Hg') => {
+  if (typeof document === 'undefined' || !document.fonts || typeof document.fonts.load !== 'function') {
+    return;
+  }
+  if (typeof document.fonts.check === 'function' && document.fonts.check(fontShorthand, sampleText)) {
+    return;
+  }
+  let loadPromise = templateTextFontLoadCache.get(fontShorthand);
+  if (!loadPromise) {
+    const timeoutPromise = new Promise((resolve) => {
+      window.setTimeout(resolve, TEMPLATE_TEXT_FONT_LOAD_TIMEOUT_MS);
+    });
+    loadPromise = Promise.race([
+      document.fonts.load(fontShorthand, sampleText),
+      timeoutPromise,
+    ]).catch(() => undefined);
+    templateTextFontLoadCache.set(fontShorthand, loadPromise);
+  }
+  await loadPromise;
+};
 
 const normalizeLayoutTheme = (value) => {
   const key = String(value ?? '').toLowerCase();
@@ -88,6 +284,944 @@ const normalizeLayoutTheme = (value) => {
 const normalizeTemplateDisplay = (value) => {
   const key = String(value ?? '').toLowerCase();
   return templateDisplayOptions[key] ? key : 'cross';
+};
+
+const clampNumber = (value, min, max, fallback) => {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(max, Math.max(min, number));
+};
+const rgbToKey = (rgb) => {
+  if (!Array.isArray(rgb) || rgb.length < 3) return '';
+  const channels = rgb.slice(0, 3).map((value) => Math.max(0, Math.min(255, Number(value) || 0)));
+  return channels.join(',');
+};
+const rgbToCss = (rgb) => {
+  const channels = Array.isArray(rgb) ? rgb : [0, 0, 0];
+  return `rgb(${channels[0]}, ${channels[1]}, ${channels[2]})`;
+};
+
+const getCurrentTemplateTextColor = () => {
+  const currentColorId = getCurrentColor();
+  for (const option of templateTextPaletteOptions) {
+    if (Number(option.id) === currentColorId) {
+      return option.rgb.slice();
+    }
+  }
+  return templateTextPaletteOptions[0]?.rgb?.slice() ?? [0, 0, 0];
+};
+const getCurrentTemplateTextColorKey = () => rgbToKey(getCurrentTemplateTextColor());
+const resolveTemplateTextColor = (options = {}) => {
+  const optionKey = String(options?.colorKey || '').trim();
+  const fromKey = templateTextPaletteMap.get(optionKey);
+  if (fromKey) return fromKey.rgb.slice();
+  if (Array.isArray(options?.colorRgb) && options.colorRgb.length >= 3) {
+    return options.colorRgb
+      .slice(0, 3)
+      .map((value) => Math.max(0, Math.min(255, Math.round(Number(value) || 0))));
+  }
+  return getCurrentTemplateTextColor();
+};
+
+const buildTextTemplateName = (text) => {
+  const compact = String(text ?? '').replace(/\s+/g, ' ').trim();
+  if (!compact) return 'Text Template';
+  return compact.length <= 24 ? `Text: ${compact}` : `Text: ${compact.slice(0, 24)}...`;
+};
+
+const createTextTemplateBlob = async (rawText, options = {}) => {
+  const text = String(rawText ?? '').replace(/\r\n?/g, '\n').trim();
+  if (!text) {
+    throw new Error('Text template is empty.');
+  }
+  if (text.length > TEMPLATE_TEXT_MAX_CHARS) {
+    throw new Error(`Text is too long. Max ${TEMPLATE_TEXT_MAX_CHARS} characters.`);
+  }
+  const fontSize = clampNumber(
+    options?.fontSize,
+    TEMPLATE_TEXT_FONT_SIZE_MIN,
+    TEMPLATE_TEXT_FONT_SIZE_MAX,
+    TEMPLATE_TEXT_FONT_SIZE
+  );
+  const fontOption = resolveTemplateTextFont(options);
+  const isSmallFont = fontSize <= TEMPLATE_TEXT_HARD_EDGE_SMALL_FONT_MAX;
+  const isPixelFont = templateTextPixelFontKeys.has(String(fontOption?.key || '').trim());
+  const lineHeightFactor = Number(fontOption?.lineHeight);
+  const lineHeight = Math.max(
+    1,
+    Math.ceil(fontSize * (Number.isFinite(lineHeightFactor) && lineHeightFactor > 0 ? lineHeightFactor : TEMPLATE_TEXT_LINE_HEIGHT_DEFAULT))
+  );
+  const colorRgb = resolveTemplateTextColor(options);
+
+  const lines = text.split('\n').map(line => line.trimEnd());
+  const baseFontWeight = clampNumber(fontOption?.weight, 100, 900, 700);
+  const fontWeight = isSmallFont
+    ? (isPixelFont ? baseFontWeight : Math.max(TEMPLATE_TEXT_SMALL_FONT_WEIGHT_MIN, baseFontWeight))
+    : baseFontWeight;
+  const fontFamily = String(fontOption?.family || '"Segoe UI", sans-serif');
+  const font = `${fontWeight} ${fontSize}px ${fontFamily}`;
+  ensureTemplateTextWebFontsLoaded();
+  const sampleText = (lines.join(' ').trim() || 'Hg').slice(0, 64);
+  await ensureTemplateTextFontReady(font, sampleText);
+
+  const measureCanvas = document.createElement('canvas');
+  measureCanvas.width = 1;
+  measureCanvas.height = 1;
+  const measureContext = measureCanvas.getContext('2d');
+  if (!measureContext) {
+    throw new Error('Unable to prepare text template canvas.');
+  }
+  measureContext.font = font;
+
+  const contentWidth = Math.max(...lines.map(line => Math.ceil(measureContext.measureText(line || ' ').width)), 1);
+  const width = contentWidth + TEMPLATE_TEXT_PADDING * 2;
+  const height = lines.length * lineHeight + TEMPLATE_TEXT_PADDING * 2;
+  if (width > TEMPLATE_TEXT_MAX_DIMENSION || height > TEMPLATE_TEXT_MAX_DIMENSION) {
+    throw new Error(`Text template is too large (${width}x${height}).`);
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d');
+  if (!context) {
+    throw new Error('Unable to draw text template.');
+  }
+
+  context.clearRect(0, 0, width, height);
+  context.font = font;
+  context.textBaseline = 'top';
+  context.fillStyle = rgbToCss(colorRgb);
+  context.imageSmoothingEnabled = false;
+  lines.forEach((line, index) => {
+    context.fillText(line || ' ', TEMPLATE_TEXT_PADDING, TEMPLATE_TEXT_PADDING + index * lineHeight);
+  });
+  // Convert antialiased font edges into hard pixels for pixel-art templates.
+  const imageData = context.getImageData(0, 0, width, height);
+  const pixels = imageData.data;
+  const colorR = colorRgb[0];
+  const colorG = colorRgb[1];
+  const colorB = colorRgb[2];
+  const hardEdgeThreshold = isSmallFont
+    ? (isPixelFont ? TEMPLATE_TEXT_HARD_EDGE_ALPHA_THRESHOLD_SMALL_PIXEL : TEMPLATE_TEXT_HARD_EDGE_ALPHA_THRESHOLD_SMALL)
+    : TEMPLATE_TEXT_HARD_EDGE_ALPHA_THRESHOLD;
+  for (let i = 0; i < pixels.length; i += 4) {
+    const alpha = pixels[i + 3];
+    if (alpha < hardEdgeThreshold) {
+      pixels[i + 3] = 0;
+      continue;
+    }
+    pixels[i] = colorR;
+    pixels[i + 1] = colorG;
+    pixels[i + 2] = colorB;
+    pixels[i + 3] = 255;
+  }
+  context.putImageData(imageData, 0, 0);
+
+  const blob = await new Promise((resolve, reject) => {
+    canvas.toBlob((encodedBlob) => {
+      if (!encodedBlob) {
+        reject(new Error('Failed to encode text template image.'));
+        return;
+      }
+      resolve(encodedBlob);
+    }, 'image/png');
+  });
+
+  canvas.width = 0;
+  canvas.height = 0;
+  measureCanvas.width = 0;
+  measureCanvas.height = 0;
+
+  return {
+    blob,
+    text,
+    width,
+    height,
+    colorRgb,
+    fontSize,
+    fontKey: fontOption?.key || TEMPLATE_TEXT_FONT_DEFAULT_KEY,
+    fontName: fontOption?.name || 'Segoe UI Bold',
+  };
+};
+const templatePreviewTileImageCache = new Map();
+const normalizePreviewTileX = (value) => {
+  const number = Math.trunc(Number(value) || 0);
+  return ((number % 2048) + 2048) % 2048;
+};
+const parsePreviewTileY = (value) => Math.trunc(Number(value) || 0);
+const normalizePreviewTileY = (value) => {
+  const number = parsePreviewTileY(value);
+  return Math.max(0, number);
+};
+const normalizePreviewTilePixel = (value) => {
+  const number = Math.trunc(Number(value) || 0);
+  return Math.max(0, Math.min(TEMPLATE_TILE_SIZE - 1, number));
+};
+const getPreviewTileUrl = (tileX, tileY) => {
+  const safeX = normalizePreviewTileX(tileX);
+  const safeY = parsePreviewTileY(tileY);
+  return `${TEMPLATE_PREVIEW_TILE_BASE_URL}/${safeX}/${safeY}.png`;
+};
+const loadPreviewTileImage = async (tileX, tileY) => {
+  const safeX = normalizePreviewTileX(tileX);
+  const safeY = parsePreviewTileY(tileY);
+  if (safeY < 0) {
+    return null;
+  }
+  const cacheKey = `${safeX},${safeY}`;
+  if (templatePreviewTileImageCache.has(cacheKey)) {
+    return templatePreviewTileImageCache.get(cacheKey);
+  }
+  const tileUrl = getPreviewTileUrl(safeX, safeY);
+  const loadPromise = new Promise((resolve, reject) => {
+    const image = new Image();
+    image.crossOrigin = 'anonymous';
+    image.decoding = 'async';
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error(`Failed to load tile preview: ${tileUrl}`));
+    image.src = tileUrl;
+  }).catch((error) => {
+    templatePreviewTileImageCache.delete(cacheKey);
+    throw error;
+  });
+  templatePreviewTileImageCache.set(cacheKey, loadPromise);
+  return loadPromise;
+};
+
+const applyOverlayVarsToFloatingElement = (element) => {
+  const overlayRoot = document.getElementById('bm-overlay');
+  if (!overlayRoot || !element) return;
+  const computed = getComputedStyle(overlayRoot);
+  for (let i = 0; i < computed.length; i++) {
+    const propName = computed[i];
+    if (!propName || !propName.startsWith('--bm-')) continue;
+    const propValue = computed.getPropertyValue(propName);
+    if (!propValue) continue;
+    element.style.setProperty(propName, propValue);
+  }
+};
+
+let textTemplateBuilderSession = null;
+const openTextTemplateBuilder = (options = {}) => {
+  ensureTemplateTextWebFontsLoaded();
+  if (textTemplateBuilderSession?.close) {
+    textTemplateBuilderSession.close(null);
+  }
+
+  const initialText = String(options?.initialText ?? '').slice(0, TEMPLATE_TEXT_MAX_CHARS);
+  const initialFontSize = clampNumber(
+    options?.initialFontSize,
+    TEMPLATE_TEXT_FONT_SIZE_MIN,
+    TEMPLATE_TEXT_FONT_SIZE_MAX,
+    TEMPLATE_TEXT_FONT_SIZE
+  );
+  const initialFontKeyOption = String(options?.initialFontKey || '').trim();
+  const initialFontKey = templateTextFontMap.has(initialFontKeyOption)
+    ? initialFontKeyOption
+    : TEMPLATE_TEXT_FONT_DEFAULT_KEY;
+  const initialColorRgb = resolveTemplateTextColor(options);
+  const initialColorKeyOption = String(options?.initialColorKey || '').trim();
+  const initialColorKey = (() => {
+    if (templateTextPaletteMap.has(initialColorKeyOption)) return initialColorKeyOption;
+    const fromRgb = rgbToKey(initialColorRgb);
+    if (templateTextPaletteMap.has(fromRgb)) return fromRgb;
+    return templateTextPaletteOptions[0]?.key ?? '0,0,0';
+  })();
+  const previewTileX = normalizePreviewTileX(options?.previewTileX);
+  const previewTileY = normalizePreviewTileY(options?.previewTileY);
+  const previewPixelX = normalizePreviewTilePixel(options?.previewPixelX);
+  const previewPixelY = normalizePreviewTilePixel(options?.previewPixelY);
+  const initialPreviewZoom = (() => {
+    const numeric = Number(options?.previewZoom);
+    if (!Number.isFinite(numeric)) return TEMPLATE_TEXT_PREVIEW_ZOOM_DEFAULT;
+    return Math.max(TEMPLATE_TEXT_PREVIEW_ZOOM_MIN, numeric);
+  })();
+
+  return new Promise((resolve) => {
+    const panel = document.createElement('section');
+    panel.id = 'bm-text-template-window';
+    panel.className = 'bm-text-template-window';
+    panel.style.width = `${TEMPLATE_TEXT_WINDOW_DEFAULT_W}px`;
+    panel.style.height = `${TEMPLATE_TEXT_WINDOW_DEFAULT_H}px`;
+    panel.style.minWidth = `${TEMPLATE_TEXT_WINDOW_MIN_W}px`;
+    panel.style.minHeight = `${TEMPLATE_TEXT_WINDOW_MIN_H}px`;
+    panel.style.right = '20px';
+    panel.style.bottom = '20px';
+
+    const head = document.createElement('div');
+    head.className = 'bm-text-template-window-head';
+    head.title = 'Drag to move';
+    const title = document.createElement('span');
+    title.className = 'bm-text-template-window-title';
+    title.textContent = 'Text Template';
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'bm-text-template-window-close';
+    closeBtn.textContent = '✖';
+    closeBtn.title = 'Close';
+    head.appendChild(title);
+    head.appendChild(closeBtn);
+    panel.appendChild(head);
+
+    const body = document.createElement('div');
+    body.className = 'bm-text-template-window-body';
+
+    const textLabel = document.createElement('label');
+    textLabel.className = 'bm-text-template-window-label';
+    textLabel.textContent = `Text (max ${TEMPLATE_TEXT_MAX_CHARS})`;
+    body.appendChild(textLabel);
+
+    const textInput = document.createElement('textarea');
+    textInput.className = 'bm-text-template-window-input';
+    textInput.maxLength = TEMPLATE_TEXT_MAX_CHARS;
+    textInput.placeholder = 'Enter template text...';
+    textInput.value = initialText;
+    body.appendChild(textInput);
+
+    const controlRow = document.createElement('div');
+    controlRow.className = 'bm-text-template-window-controls';
+
+    const colorGroup = document.createElement('div');
+    colorGroup.className = 'bm-text-template-window-control';
+    const colorLabel = document.createElement('label');
+    colorLabel.className = 'bm-text-template-window-label';
+    colorLabel.textContent = 'Color';
+    const colorSelect = document.createElement('select');
+    colorSelect.className = 'bm-text-template-window-select';
+    templateTextPaletteOptions.forEach((option) => {
+      const optionElement = document.createElement('option');
+      optionElement.value = option.key;
+      optionElement.textContent = option.name;
+      colorSelect.appendChild(optionElement);
+    });
+    colorSelect.value = initialColorKey;
+    if (!colorSelect.value) {
+      colorSelect.value = templateTextPaletteOptions[0]?.key ?? '0,0,0';
+    }
+    const colorSwatch = document.createElement('span');
+    colorSwatch.className = 'bm-text-template-window-swatch';
+    colorGroup.appendChild(colorLabel);
+    colorGroup.appendChild(colorSelect);
+    colorGroup.appendChild(colorSwatch);
+    controlRow.appendChild(colorGroup);
+
+    const fontFamilyGroup = document.createElement('div');
+    fontFamilyGroup.className = 'bm-text-template-window-control';
+    const fontFamilyLabel = document.createElement('label');
+    fontFamilyLabel.className = 'bm-text-template-window-label';
+    fontFamilyLabel.textContent = 'Font';
+    const fontFamilySelect = document.createElement('select');
+    fontFamilySelect.className = 'bm-text-template-window-select';
+    templateTextFontOptions.forEach((option) => {
+      const optionElement = document.createElement('option');
+      optionElement.value = option.key;
+      optionElement.textContent = option.name;
+      fontFamilySelect.appendChild(optionElement);
+    });
+    fontFamilySelect.value = initialFontKey;
+    if (!fontFamilySelect.value) {
+      fontFamilySelect.value = TEMPLATE_TEXT_FONT_DEFAULT_KEY;
+    }
+    fontFamilyGroup.appendChild(fontFamilyLabel);
+    fontFamilyGroup.appendChild(fontFamilySelect);
+    controlRow.appendChild(fontFamilyGroup);
+
+    const fontGroup = document.createElement('div');
+    fontGroup.className = 'bm-text-template-window-control';
+    const fontLabel = document.createElement('label');
+    fontLabel.className = 'bm-text-template-window-label';
+    fontLabel.textContent = 'Font Size';
+    const fontSizeNumber = document.createElement('input');
+    fontSizeNumber.className = 'bm-text-template-window-number';
+    fontSizeNumber.type = 'number';
+    fontSizeNumber.min = String(TEMPLATE_TEXT_FONT_SIZE_MIN);
+    fontSizeNumber.max = String(TEMPLATE_TEXT_FONT_SIZE_MAX);
+    fontSizeNumber.step = '1';
+    fontSizeNumber.value = String(initialFontSize);
+    const fontSizeRange = document.createElement('input');
+    fontSizeRange.className = 'bm-text-template-window-range';
+    fontSizeRange.type = 'range';
+    fontSizeRange.min = String(TEMPLATE_TEXT_FONT_SIZE_MIN);
+    fontSizeRange.max = String(TEMPLATE_TEXT_FONT_SIZE_MAX);
+    fontSizeRange.step = '1';
+    fontSizeRange.value = String(initialFontSize);
+    fontGroup.appendChild(fontLabel);
+    fontGroup.appendChild(fontSizeNumber);
+    fontGroup.appendChild(fontSizeRange);
+    controlRow.appendChild(fontGroup);
+
+    const positionGroup = document.createElement('div');
+    positionGroup.className = 'bm-text-template-window-control';
+    const positionLabel = document.createElement('label');
+    positionLabel.className = 'bm-text-template-window-label';
+    positionLabel.textContent = 'Position (Px)';
+    const positionRow = document.createElement('div');
+    positionRow.className = 'bm-text-template-window-pair';
+    const positionXInput = document.createElement('input');
+    positionXInput.className = 'bm-text-template-window-number';
+    positionXInput.type = 'number';
+    positionXInput.min = '0';
+    positionXInput.max = String(TEMPLATE_TILE_SIZE - 1);
+    positionXInput.step = '1';
+    positionXInput.placeholder = 'Px X';
+    positionXInput.value = String(previewPixelX);
+    positionXInput.title = 'Pixel X in tile';
+    const positionYInput = document.createElement('input');
+    positionYInput.className = 'bm-text-template-window-number';
+    positionYInput.type = 'number';
+    positionYInput.min = '0';
+    positionYInput.max = String(TEMPLATE_TILE_SIZE - 1);
+    positionYInput.step = '1';
+    positionYInput.placeholder = 'Px Y';
+    positionYInput.value = String(previewPixelY);
+    positionYInput.title = 'Pixel Y in tile';
+    positionRow.appendChild(positionXInput);
+    positionRow.appendChild(positionYInput);
+    positionGroup.appendChild(positionLabel);
+    positionGroup.appendChild(positionRow);
+    controlRow.appendChild(positionGroup);
+
+    body.appendChild(controlRow);
+
+    const previewMeta = document.createElement('div');
+    previewMeta.className = 'bm-text-template-window-meta';
+    previewMeta.textContent = 'Enter text to preview.';
+    body.appendChild(previewMeta);
+
+    const previewWrap = document.createElement('div');
+    previewWrap.className = 'bm-text-template-window-preview';
+    const previewCanvas = document.createElement('canvas');
+    previewCanvas.className = 'bm-text-template-window-canvas';
+    previewWrap.appendChild(previewCanvas);
+    body.appendChild(previewWrap);
+
+    const errorOutput = document.createElement('div');
+    errorOutput.className = 'bm-text-template-window-error';
+    body.appendChild(errorOutput);
+
+    const actions = document.createElement('div');
+    actions.className = 'bm-text-template-window-actions';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.textContent = 'Cancel';
+    const createBtn = document.createElement('button');
+    createBtn.type = 'button';
+    createBtn.textContent = 'Create Template';
+    createBtn.disabled = true;
+    actions.appendChild(cancelBtn);
+    actions.appendChild(createBtn);
+    body.appendChild(actions);
+
+    panel.appendChild(body);
+
+    let closed = false;
+    let dragState = null;
+    let moveHandler = null;
+    let upHandler = null;
+    let resizeObserver = null;
+    let renderToken = 0;
+    let renderQueued = false;
+
+    const getSelectedColor = () => {
+      const key = colorSelect.value;
+      const option = templateTextPaletteMap.get(key);
+      if (option) return option.rgb.slice();
+      return templateTextPaletteOptions[0]?.rgb?.slice() ?? [0, 0, 0];
+    };
+    const getSelectedFontKey = () => {
+      const key = String(fontFamilySelect.value || '').trim();
+      if (templateTextFontMap.has(key)) return key;
+      return TEMPLATE_TEXT_FONT_DEFAULT_KEY;
+    };
+    const getSelectedFontSize = () => clampNumber(
+      fontSizeNumber.value,
+      TEMPLATE_TEXT_FONT_SIZE_MIN,
+      TEMPLATE_TEXT_FONT_SIZE_MAX,
+      TEMPLATE_TEXT_FONT_SIZE
+    );
+
+    const syncColorSwatch = () => {
+      const color = getSelectedColor();
+      colorSwatch.style.backgroundColor = rgbToCss(color);
+      const optionName = templateTextPaletteMap.get(colorSelect.value)?.name;
+      colorSwatch.title = optionName ? `${optionName} (${color.join(', ')})` : color.join(', ');
+    };
+
+    const syncFontInputs = (value) => {
+      const safeValue = clampNumber(
+        value,
+        TEMPLATE_TEXT_FONT_SIZE_MIN,
+        TEMPLATE_TEXT_FONT_SIZE_MAX,
+        TEMPLATE_TEXT_FONT_SIZE
+      );
+      fontSizeNumber.value = String(safeValue);
+      fontSizeRange.value = String(safeValue);
+      return safeValue;
+    };
+    let previewZoomValue = initialPreviewZoom;
+    const setPreviewZoom = (value) => {
+      const numericValue = Number(value);
+      if (!Number.isFinite(numericValue)) {
+        previewZoomValue = TEMPLATE_TEXT_PREVIEW_ZOOM_DEFAULT;
+        return previewZoomValue;
+      }
+      previewZoomValue = Math.max(TEMPLATE_TEXT_PREVIEW_ZOOM_MIN, numericValue);
+      return previewZoomValue;
+    };
+    const getPreviewZoom = () => previewZoomValue;
+    const syncPreviewPositionInputs = () => {
+      const x = normalizePreviewTilePixel(positionXInput.value);
+      const y = normalizePreviewTilePixel(positionYInput.value);
+      positionXInput.value = String(x);
+      positionYInput.value = String(y);
+      return { x, y };
+    };
+    const getPreviewPosition = () => syncPreviewPositionInputs();
+    const getPreviewSummary = () => {
+      const { x, y } = getPreviewPosition();
+      const zoom = getPreviewZoom();
+      return `Tile ${previewTileX}, ${previewTileY} • Px ${x}, ${y} • Zoom ${zoom.toFixed(1)}x`;
+    };
+
+    const resizePreviewCanvas = () => {
+      const width = Math.max(TEMPLATE_TEXT_PREVIEW_MIN_W, Math.floor(previewWrap.clientWidth || TEMPLATE_TEXT_PREVIEW_MIN_W));
+      const height = Math.max(TEMPLATE_TEXT_PREVIEW_MIN_H, Math.floor(previewWrap.clientHeight || TEMPLATE_TEXT_PREVIEW_MIN_H));
+      const dpr = Math.max(1, window.devicePixelRatio || 1);
+      const targetWidth = Math.floor(width * dpr);
+      const targetHeight = Math.floor(height * dpr);
+      if (previewCanvas.width !== targetWidth || previewCanvas.height !== targetHeight) {
+        previewCanvas.width = targetWidth;
+        previewCanvas.height = targetHeight;
+      }
+      previewCanvas.style.width = `${width}px`;
+      previewCanvas.style.height = `${height}px`;
+      const context = previewCanvas.getContext('2d');
+      if (context) {
+        context.setTransform(dpr, 0, 0, dpr, 0, 0);
+        context.clearRect(0, 0, width, height);
+      }
+      return { width, height, context };
+    };
+
+    const drawPreviewPlaceholder = () => {
+      const { width, height, context } = resizePreviewCanvas();
+      if (!context) return;
+      context.fillStyle = 'rgba(0, 0, 0, 0.25)';
+      context.font = '600 12px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
+      context.textAlign = 'center';
+      context.textBaseline = 'middle';
+      context.fillText('Preview', width / 2, height / 2);
+    };
+    const computePreviewCropBounds = (previewData, textTileX, textTileY, zoomValue) => {
+      const textTileW = Math.max(1, previewData.width);
+      const textTileH = Math.max(1, previewData.height);
+      const margin = Math.max(20, Math.min(220, Math.round(Math.max(textTileW, textTileH) * 0.75)));
+      const baseLeft = textTileX - margin;
+      const baseTop = textTileY - margin;
+      const baseRight = textTileX + textTileW + margin;
+      const baseBottom = textTileY + textTileH + margin;
+      const baseWidth = Math.max(1, baseRight - baseLeft);
+      const baseHeight = Math.max(1, baseBottom - baseTop);
+      const zoom = Number.isFinite(Number(zoomValue)) && Number(zoomValue) > TEMPLATE_TEXT_PREVIEW_ZOOM_MIN
+        ? Number(zoomValue)
+        : TEMPLATE_TEXT_PREVIEW_ZOOM_DEFAULT;
+      const cropWidth = Math.max(textTileW, Math.round(baseWidth / zoom));
+      const cropHeight = Math.max(textTileH, Math.round(baseHeight / zoom));
+      const centerX = textTileX + textTileW / 2;
+      const centerY = textTileY + textTileH / 2;
+      const cropLeft = Math.round(centerX - cropWidth / 2);
+      const cropTop = Math.round(centerY - cropHeight / 2);
+      return { cropLeft, cropTop, cropWidth, cropHeight };
+    };
+    const getPreviewTileOffsetRange = (cropLeft, cropTop, cropWidth, cropHeight) => {
+      const cropRight = cropLeft + cropWidth;
+      const cropBottom = cropTop + cropHeight;
+      return {
+        dxMin: Math.floor(cropLeft / TEMPLATE_TILE_SIZE),
+        dxMax: Math.floor((cropRight - 1) / TEMPLATE_TILE_SIZE),
+        dyMin: Math.floor(cropTop / TEMPLATE_TILE_SIZE),
+        dyMax: Math.floor((cropBottom - 1) / TEMPLATE_TILE_SIZE),
+      };
+    };
+    const drawPreviewTileRegion = (context, width, height, tileSet, previewData, textTileX, textTileY, zoomValue) => {
+      const { cropLeft, cropTop, cropWidth, cropHeight } = computePreviewCropBounds(
+        previewData,
+        textTileX,
+        textTileY,
+        zoomValue
+      );
+
+      const frameX = 0;
+      const frameY = 0;
+      const frameWidth = Math.max(1, width);
+      const frameHeight = Math.max(1, height);
+      // Cover mode: fill the preview frame without letterboxing.
+      const scale = Math.max(frameWidth / cropWidth, frameHeight / cropHeight);
+      const renderedWidth = cropWidth * scale;
+      const renderedHeight = cropHeight * scale;
+      const renderX = frameX + (frameWidth - renderedWidth) / 2;
+      const renderY = frameY + (frameHeight - renderedHeight) / 2;
+
+      context.clearRect(0, 0, width, height);
+      context.fillStyle = 'rgba(0, 0, 0, 0.26)';
+      context.fillRect(frameX, frameY, frameWidth, frameHeight);
+      context.imageSmoothingEnabled = false;
+
+      const cropRight = cropLeft + cropWidth;
+      const cropBottom = cropTop + cropHeight;
+      const tileRange = getPreviewTileOffsetRange(cropLeft, cropTop, cropWidth, cropHeight);
+      context.save();
+      context.beginPath();
+      context.rect(frameX, frameY, frameWidth, frameHeight);
+      context.clip();
+      for (let dy = tileRange.dyMin; dy <= tileRange.dyMax; dy++) {
+        for (let dx = tileRange.dxMin; dx <= tileRange.dxMax; dx++) {
+          const tileImage = tileSet.get(`${dx},${dy}`);
+          if (!tileImage) continue;
+          const tileLeft = dx * TEMPLATE_TILE_SIZE;
+          const tileTop = dy * TEMPLATE_TILE_SIZE;
+          const intersectLeft = Math.max(cropLeft, tileLeft);
+          const intersectTop = Math.max(cropTop, tileTop);
+          const intersectRight = Math.min(cropRight, tileLeft + TEMPLATE_TILE_SIZE);
+          const intersectBottom = Math.min(cropBottom, tileTop + TEMPLATE_TILE_SIZE);
+          const intersectWidth = intersectRight - intersectLeft;
+          const intersectHeight = intersectBottom - intersectTop;
+          if (intersectWidth <= 0 || intersectHeight <= 0) continue;
+          const srcX = intersectLeft - tileLeft;
+          const srcY = intersectTop - tileTop;
+          const dstX = renderX + (intersectLeft - cropLeft) * scale;
+          const dstY = renderY + (intersectTop - cropTop) * scale;
+          const dstW = Math.max(1, intersectWidth * scale);
+          const dstH = Math.max(1, intersectHeight * scale);
+          context.drawImage(tileImage, srcX, srcY, intersectWidth, intersectHeight, dstX, dstY, dstW, dstH);
+        }
+      }
+      context.restore();
+      return {
+        clipX: frameX,
+        clipY: frameY,
+        clipWidth: frameWidth,
+        clipHeight: frameHeight,
+        renderX,
+        renderY,
+        scale,
+        cropLeft,
+        cropTop,
+        cropWidth,
+        cropHeight,
+      };
+    };
+
+    const renderPreview = async () => {
+      if (closed) return;
+      const token = ++renderToken;
+      const text = textInput.value;
+      if (!text.trim()) {
+        errorOutput.textContent = '';
+        previewMeta.textContent = `${getPreviewSummary()} • Enter text to preview.`;
+        createBtn.disabled = true;
+        drawPreviewPlaceholder();
+        return;
+      }
+
+      const selectedColor = getSelectedColor();
+      const selectedFontSize = getSelectedFontSize();
+      let previewData = null;
+      try {
+        previewData = await createTextTemplateBlob(text, {
+          colorRgb: selectedColor,
+          fontSize: selectedFontSize,
+          fontKey: getSelectedFontKey(),
+        });
+      } catch (error) {
+        if (closed || token !== renderToken) return;
+        previewMeta.textContent = `${getPreviewSummary()} • Preview unavailable.`;
+        errorOutput.textContent = error?.message || 'Failed to render preview.';
+        createBtn.disabled = true;
+        drawPreviewPlaceholder();
+        return;
+      }
+      if (closed || token !== renderToken) return;
+
+      const { x: currentPreviewPixelX, y: currentPreviewPixelY } = getPreviewPosition();
+      const currentPreviewZoom = getPreviewZoom();
+      errorOutput.textContent = '';
+      createBtn.disabled = false;
+
+      const previewCrop = computePreviewCropBounds(
+        previewData,
+        currentPreviewPixelX,
+        currentPreviewPixelY,
+        currentPreviewZoom
+      );
+      const tileRange = getPreviewTileOffsetRange(
+        previewCrop.cropLeft,
+        previewCrop.cropTop,
+        previewCrop.cropWidth,
+        previewCrop.cropHeight
+      );
+      const requiredTileCount =
+        (tileRange.dxMax - tileRange.dxMin + 1) *
+        (tileRange.dyMax - tileRange.dyMin + 1);
+      const tileSet = new Map();
+      let tileUnavailable = false;
+      let tilePreviewLimited = false;
+      if (requiredTileCount > TEMPLATE_TEXT_PREVIEW_MAX_TILE_REQUESTS) {
+        tilePreviewLimited = true;
+        try {
+          const centerImage = await loadPreviewTileImage(previewTileX, previewTileY);
+          if (centerImage) {
+            tileSet.set('0,0', centerImage);
+          } else {
+            tileUnavailable = true;
+          }
+        } catch (_) {
+          tileUnavailable = true;
+        }
+      } else {
+        const tileLoadTasks = [];
+        for (let dy = tileRange.dyMin; dy <= tileRange.dyMax; dy++) {
+          for (let dx = tileRange.dxMin; dx <= tileRange.dxMax; dx++) {
+            tileLoadTasks.push((async () => {
+              try {
+                const image = await loadPreviewTileImage(previewTileX + dx, previewTileY + dy);
+                return { dx, dy, image };
+              } catch (_) {
+                return { dx, dy, image: null };
+              }
+            })());
+          }
+        }
+        const tileResults = await Promise.all(tileLoadTasks);
+        tileResults.forEach(({ dx, dy, image }) => {
+          tileSet.set(`${dx},${dy}`, image || null);
+          if (!image) {
+            tileUnavailable = true;
+          }
+        });
+      }
+      if (closed || token !== renderToken) return;
+      previewMeta.textContent = `${getPreviewSummary()} • Result: ${previewData.width} x ${previewData.height}px${tilePreviewLimited ? ' • Tile preview limited' : tileUnavailable ? ' • Tile preview unavailable' : ''}`;
+
+      const { width, height, context } = resizePreviewCanvas();
+      if (!context) return;
+      const bitmap = await createImageBitmap(previewData.blob);
+      if (closed || token !== renderToken) {
+        bitmap.close();
+        return;
+      }
+      const region = drawPreviewTileRegion(
+        context,
+        width,
+        height,
+        tileSet,
+        previewData,
+        currentPreviewPixelX,
+        currentPreviewPixelY,
+        currentPreviewZoom
+      );
+      const textDrawX = region.renderX + (currentPreviewPixelX - region.cropLeft) * region.scale;
+      const textDrawY = region.renderY + (currentPreviewPixelY - region.cropTop) * region.scale;
+      const textDrawW = Math.max(1, Math.round(previewData.width * region.scale));
+      const textDrawH = Math.max(1, Math.round(previewData.height * region.scale));
+      context.save();
+      context.beginPath();
+      context.rect(region.clipX, region.clipY, region.clipWidth, region.clipHeight);
+      context.clip();
+      context.imageSmoothingEnabled = false;
+      context.drawImage(bitmap, textDrawX, textDrawY, textDrawW, textDrawH);
+      context.restore();
+      bitmap.close();
+    };
+
+    const queuePreviewRender = () => {
+      if (renderQueued) return;
+      renderQueued = true;
+      requestAnimationFrame(() => {
+        renderQueued = false;
+        void renderPreview();
+      });
+    };
+
+    const applyTheme = () => {
+      applyOverlayVarsToFloatingElement(panel);
+    };
+    const handleThemeChanged = () => {
+      applyTheme();
+      queuePreviewRender();
+    };
+
+    const cleanupDragHandlers = () => {
+      if (moveHandler) {
+        window.removeEventListener('mousemove', moveHandler);
+        moveHandler = null;
+      }
+      if (upHandler) {
+        window.removeEventListener('mouseup', upHandler);
+        upHandler = null;
+      }
+      dragState = null;
+    };
+
+    const close = (result = null) => {
+      if (closed) return;
+      closed = true;
+      renderToken++;
+      cleanupDragHandlers();
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+        resizeObserver = null;
+      }
+      document.removeEventListener('bm-layout-theme-changed', handleThemeChanged);
+      window.removeEventListener('resize', queuePreviewRender);
+      window.removeEventListener('keydown', handleKeyDown, true);
+      panel.remove();
+      if (textTemplateBuilderSession?.panel === panel) {
+        textTemplateBuilderSession = null;
+      }
+      resolve(result);
+    };
+
+    const handleKeyDown = (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      close(null);
+    };
+
+    closeBtn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      close(null);
+    });
+    cancelBtn.addEventListener('click', () => close(null));
+
+    createBtn.addEventListener('click', async () => {
+      createBtn.disabled = true;
+      errorOutput.textContent = '';
+      try {
+        const { x: resultPreviewPixelX, y: resultPreviewPixelY } = getPreviewPosition();
+        const resultPreviewZoom = getPreviewZoom();
+        const result = await createTextTemplateBlob(textInput.value, {
+          colorRgb: getSelectedColor(),
+          fontSize: getSelectedFontSize(),
+          fontKey: getSelectedFontKey(),
+        });
+        close({
+          ...result,
+          previewTileX,
+          previewTileY,
+          previewPixelX: resultPreviewPixelX,
+          previewPixelY: resultPreviewPixelY,
+          previewZoom: resultPreviewZoom,
+        });
+      } catch (error) {
+        errorOutput.textContent = error?.message || 'Failed to create text template.';
+        queuePreviewRender();
+      }
+    });
+
+    textInput.addEventListener('input', queuePreviewRender);
+    textInput.addEventListener('keydown', (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+        event.preventDefault();
+        if (!createBtn.disabled) {
+          createBtn.click();
+        }
+      }
+    });
+    colorSelect.addEventListener('change', () => {
+      syncColorSwatch();
+      queuePreviewRender();
+    });
+    fontFamilySelect.addEventListener('change', () => {
+      queuePreviewRender();
+    });
+    fontSizeNumber.addEventListener('input', () => {
+      syncFontInputs(fontSizeNumber.value);
+      queuePreviewRender();
+    });
+    fontSizeNumber.addEventListener('change', () => {
+      syncFontInputs(fontSizeNumber.value);
+      queuePreviewRender();
+    });
+    fontSizeRange.addEventListener('input', () => {
+      syncFontInputs(fontSizeRange.value);
+      queuePreviewRender();
+    });
+    previewWrap.addEventListener('wheel', (event) => {
+      event.preventDefault();
+      const factor = event.shiftKey ? 1.35 : 1.15;
+      const nextZoom = event.deltaY < 0
+        ? getPreviewZoom() * factor
+        : getPreviewZoom() / factor;
+      setPreviewZoom(nextZoom);
+      queuePreviewRender();
+    }, { passive: false });
+    positionXInput.addEventListener('input', () => {
+      syncPreviewPositionInputs();
+      queuePreviewRender();
+    });
+    positionXInput.addEventListener('change', () => {
+      syncPreviewPositionInputs();
+      queuePreviewRender();
+    });
+    positionYInput.addEventListener('input', () => {
+      syncPreviewPositionInputs();
+      queuePreviewRender();
+    });
+    positionYInput.addEventListener('change', () => {
+      syncPreviewPositionInputs();
+      queuePreviewRender();
+    });
+
+    head.addEventListener('mousedown', (event) => {
+      if (event.button !== 0) return;
+      if (event.target instanceof Element && event.target.closest('button')) return;
+      const rect = panel.getBoundingClientRect();
+      dragState = {
+        offsetX: event.clientX - rect.left,
+        offsetY: event.clientY - rect.top
+      };
+      moveHandler = (moveEvent) => {
+        if (!dragState) return;
+        const currentRect = panel.getBoundingClientRect();
+        const maxLeft = Math.max(8, window.innerWidth - currentRect.width - 8);
+        const maxTop = Math.max(8, window.innerHeight - currentRect.height - 8);
+        const left = Math.min(maxLeft, Math.max(8, moveEvent.clientX - dragState.offsetX));
+        const top = Math.min(maxTop, Math.max(8, moveEvent.clientY - dragState.offsetY));
+        panel.style.left = `${left}px`;
+        panel.style.top = `${top}px`;
+        panel.style.right = 'auto';
+        panel.style.bottom = 'auto';
+      };
+      upHandler = () => {
+        cleanupDragHandlers();
+      };
+      window.addEventListener('mousemove', moveHandler);
+      window.addEventListener('mouseup', upHandler);
+      event.preventDefault();
+    });
+
+    document.body.appendChild(panel);
+    textTemplateBuilderSession = { panel, close };
+    applyTheme();
+    document.addEventListener('bm-layout-theme-changed', handleThemeChanged);
+    window.addEventListener('resize', queuePreviewRender);
+    window.addEventListener('keydown', handleKeyDown, true);
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => queuePreviewRender());
+      resizeObserver.observe(previewWrap);
+    }
+
+    syncColorSwatch();
+    syncFontInputs(initialFontSize);
+    setPreviewZoom(initialPreviewZoom);
+    syncPreviewPositionInputs();
+    queuePreviewRender();
+    textInput.focus();
+    textInput.select();
+  });
 };
 
 const normalizeFlag = (value) => value === true || value === 'true' || value === 1 || value === '1';
@@ -1718,6 +2852,17 @@ function initChat() {
     }
     pendingSendRestore = null;
   };
+  const clearPendingSendRestoreIfMatch = (user, text, payloadReplyTo) => {
+    if (!pendingSendRestore) return;
+    const sameText = String(pendingSendRestore.text || '') === String(text || '');
+    const sameUser = String(user || '') === String(getUserName() || '');
+    const pendingReply = pendingSendRestore.replyToId ? String(pendingSendRestore.replyToId) : '';
+    const incomingReply = payloadReplyTo ? String(payloadReplyTo) : '';
+    const sameReply = pendingReply === incomingReply;
+    if (sameText && sameUser && sameReply) {
+      pendingSendRestore = null;
+    }
+  };
 
   const appendMessage = (payload, options = {}) => {
     const isSystem = Boolean(options?.isSystem);
@@ -1738,6 +2883,21 @@ function initChat() {
     const user = payload.user;
     const text = payload?.text || '';
     const ts = payload?.ts ? new Date(payload.ts) : new Date();
+    const messageId = payload?.id !== undefined && payload?.id !== null && String(payload.id) !== ''
+      ? String(payload.id)
+      : null;
+    if (messageId) {
+      messageCache.set(messageId, payload);
+      const existingLine = Array.from(messagesEl.querySelectorAll('.bm-chat-message[data-msg-id]'))
+        .find((item) => item.getAttribute('data-msg-id') === messageId);
+      if (existingLine) {
+        if (!isSystem) {
+          upsertMapCommentSafe(payload, 'appendMessage:duplicate');
+          clearPendingSendRestoreIfMatch(user, text, payload?.reply_to);
+        }
+        return;
+      }
+    }
     const line = document.createElement('div');
     line.className = 'bm-chat-message';
     if (isSystem) {
@@ -1748,10 +2908,8 @@ function initChat() {
         line.classList.add('bm-chat-system-rate-limit');
       }
     }
-    if (payload?.id !== undefined && payload?.id !== null) {
-      const messageId = String(payload.id);
+    if (messageId) {
       line.setAttribute('data-msg-id', messageId);
-      messageCache.set(messageId, payload);
     }
     if (!isSystem) {
       upsertMapCommentSafe(payload, 'appendMessage');
@@ -1800,16 +2958,7 @@ function initChat() {
     }
     messagesEl.scrollTop = messagesEl.scrollHeight;
     if (!isSystem) {
-      if (pendingSendRestore) {
-        const sameText = String(pendingSendRestore.text || '') === String(text || '');
-        const sameUser = String(user || '') === String(getUserName() || '');
-        const pendingReply = pendingSendRestore.replyToId ? String(pendingSendRestore.replyToId) : '';
-        const incomingReply = payload?.reply_to ? String(payload.reply_to) : '';
-        const sameReply = pendingReply === incomingReply;
-        if (sameText && sameUser && sameReply) {
-          pendingSendRestore = null;
-        }
-      }
+      clearPendingSendRestoreIfMatch(user, text, payload?.reply_to);
       ensureDeleteButton(line);
       line.addEventListener('dblclick', () => {
         const id = line.getAttribute('data-msg-id');
@@ -2888,6 +4037,108 @@ function normalizeTilePixelCoords(rawCoords) {
   return [tx, ty, px, py];
 }
 
+function parseTemplateChunkKey(tileKey) {
+  const parts = String(tileKey || '').split(',').map(Number);
+  if (parts.length < 4 || !parts.slice(0, 4).every(Number.isFinite)) return null;
+  return [Math.trunc(parts[0]), Math.trunc(parts[1]), Math.trunc(parts[2]), Math.trunc(parts[3])];
+}
+
+function formatTemplateChunkKey(coords) {
+  if (!Array.isArray(coords) || coords.length < 4) return null;
+  const tx = Math.trunc(Number(coords[0]) || 0);
+  const ty = Math.trunc(Number(coords[1]) || 0);
+  const px = ((Math.trunc(Number(coords[2]) || 0) % TEMPLATE_TILE_SIZE) + TEMPLATE_TILE_SIZE) % TEMPLATE_TILE_SIZE;
+  const py = ((Math.trunc(Number(coords[3]) || 0) % TEMPLATE_TILE_SIZE) + TEMPLATE_TILE_SIZE) % TEMPLATE_TILE_SIZE;
+  return `${tx.toString().padStart(4, '0')},${ty.toString().padStart(4, '0')},${px.toString().padStart(3, '0')},${py.toString().padStart(3, '0')}`;
+}
+
+function computeWrappedWorldDeltaX(currentWorldX, targetWorldX) {
+  const world = MAP_WORLD_WIDTH_PX;
+  let delta = Math.trunc(Number(targetWorldX) || 0) - Math.trunc(Number(currentWorldX) || 0);
+  if (delta > world / 2) delta -= world;
+  if (delta < -world / 2) delta += world;
+  return delta;
+}
+
+function shiftTemplateChunkKey(tileKey, deltaWorldX, deltaWorldY) {
+  const parsed = parseTemplateChunkKey(tileKey);
+  if (!parsed) return null;
+  const [tx, ty, px, py] = parsed;
+  const rawShiftX = tx * TEMPLATE_TILE_SIZE + px + Math.trunc(Number(deltaWorldX) || 0);
+  const wrappedX = ((rawShiftX % MAP_WORLD_WIDTH_PX) + MAP_WORLD_WIDTH_PX) % MAP_WORLD_WIDTH_PX;
+  const nextTx = Math.floor(wrappedX / TEMPLATE_TILE_SIZE);
+  const nextPx = wrappedX % TEMPLATE_TILE_SIZE;
+
+  const shiftedY = ty * TEMPLATE_TILE_SIZE + py + Math.trunc(Number(deltaWorldY) || 0);
+  const nextTy = Math.floor(shiftedY / TEMPLATE_TILE_SIZE);
+  const nextPy = ((shiftedY % TEMPLATE_TILE_SIZE) + TEMPLATE_TILE_SIZE) % TEMPLATE_TILE_SIZE;
+  return formatTemplateChunkKey([nextTx, nextTy, nextPx, nextPy]);
+}
+
+function rekeyTemplateChunkMap(sourceMap, deltaWorldX, deltaWorldY) {
+  const entries = Object.entries(sourceMap || {});
+  const result = {};
+  entries.forEach(([oldKey, value]) => {
+    const shiftedKey = shiftTemplateChunkKey(oldKey, deltaWorldX, deltaWorldY);
+    if (!shiftedKey) return;
+    result[shiftedKey] = value;
+  });
+  return result;
+}
+
+function shiftTilePixelCoordsByPixels(rawCoords, deltaPixelX, deltaPixelY) {
+  const coords = normalizeTilePixelCoords(rawCoords);
+  if (!coords) return null;
+  const worldX = ((coords[0] * TEMPLATE_TILE_SIZE + coords[2] + Math.trunc(Number(deltaPixelX) || 0)) % MAP_WORLD_WIDTH_PX + MAP_WORLD_WIDTH_PX) % MAP_WORLD_WIDTH_PX;
+  const unclampedY = coords[1] * TEMPLATE_TILE_SIZE + coords[3] + Math.trunc(Number(deltaPixelY) || 0);
+  const worldY = Math.max(0, Math.min(MAP_WORLD_HEIGHT_PX - 1, unclampedY));
+  const tx = Math.floor(worldX / TEMPLATE_TILE_SIZE);
+  const ty = Math.floor(worldY / TEMPLATE_TILE_SIZE);
+  const px = worldX % TEMPLATE_TILE_SIZE;
+  const py = worldY % TEMPLATE_TILE_SIZE;
+  return [tx, ty, px, py];
+}
+
+function resolveTemplateFocusCoords(rawCoords, imageWidth, imageHeight) {
+  const coords = normalizeTilePixelCoords(rawCoords);
+  if (!coords) return null;
+  const width = Number(imageWidth);
+  const height = Number(imageHeight);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return coords;
+  }
+  const shiftX = Math.floor((Math.max(1, Math.trunc(width)) - 1) / 2);
+  const shiftY = Math.floor((Math.max(1, Math.trunc(height)) - 1) / 2);
+  return shiftTilePixelCoordsByPixels(coords, shiftX, shiftY);
+}
+
+function resolveTemplateFocusZoom(imageWidth, imageHeight) {
+  const width = Number(imageWidth);
+  const height = Number(imageHeight);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null;
+  }
+  const usableViewportWidth = Math.max(240, Math.floor(window.innerWidth * TEMPLATE_FOCUS_VIEWPORT_RATIO));
+  const usableViewportHeight = Math.max(180, Math.floor(window.innerHeight * TEMPLATE_FOCUS_VIEWPORT_RATIO));
+  const fitScale = Math.min(
+    usableViewportWidth / Math.max(1, Math.trunc(width)),
+    usableViewportHeight / Math.max(1, Math.trunc(height))
+  );
+  if (!Number.isFinite(fitScale) || fitScale <= 0) return null;
+  const targetScale = Math.max(TEMPLATE_FOCUS_SCALE_MIN, fitScale / TEMPLATE_FOCUS_SCALE_PADDING);
+  const dpr = Math.max(0.25, Number(window.devicePixelRatio) || 1);
+  const focusZoom = Math.log2((4000 * targetScale) / dpr);
+  if (!Number.isFinite(focusZoom)) return null;
+  return Math.max(TEMPLATE_FOCUS_ZOOM_MIN, Math.min(TEMPLATE_FOCUS_ZOOM_MAX, focusZoom));
+}
+
+function applyTemplateFocusZoom(imageWidth, imageHeight) {
+  const focusZoom = resolveTemplateFocusZoom(imageWidth, imageHeight);
+  if (!Number.isFinite(focusZoom)) return false;
+  setZoom(focusZoom);
+  return true;
+}
+
 function resolveDistanceMapInstance() {
   const direct = document.head?.['__bmmap'];
   if (direct && typeof direct['project'] === 'function') return direct;
@@ -3924,12 +5175,35 @@ async function buildOverlayMain() {
               const coordPxY = document.querySelector('#bm-input-py');
               if (!coordPxY.checkValidity()) {coordPxY.reportValidity(); instance.handleDisplayError('Coordinates are malformed! Did you try clicking on the canvas first?'); return;}
 
-              // Kills itself if there is no file
-              if (!input?.files[0]) {instance.handleDisplayError(`No file selected!`); return;}
+              let sourceFile = input?.files?.[0] ?? null;
+              let templateName = sourceFile?.name?.replace(/\.[^/.]+$/, '') || '';
+              if (!sourceFile) {
+                const textTemplate = await openTextTemplateBuilder({
+                  initialColorKey: getCurrentTemplateTextColorKey(),
+                  initialFontSize: TEMPLATE_TEXT_FONT_SIZE,
+                  previewTileX: Number(coordTlX.value),
+                  previewTileY: Number(coordTlY.value),
+                  previewPixelX: Number(coordPxX.value),
+                  previewPixelY: Number(coordPxY.value),
+                });
+                if (!textTemplate) {
+                  return;
+                }
+                sourceFile = textTemplate.blob;
+                templateName = buildTextTemplateName(textTemplate.text);
+                if (Number.isFinite(Number(textTemplate.previewPixelX))) {
+                  coordPxX.value = String(normalizePreviewTilePixel(textTemplate.previewPixelX));
+                }
+                if (Number.isFinite(Number(textTemplate.previewPixelY))) {
+                  coordPxY.value = String(normalizePreviewTilePixel(textTemplate.previewPixelY));
+                }
+                apiManager.updateDownloadButton();
+                persistCoords();
+              }
 
               await templateManager.createTemplate(
-                input.files[0],
-                input.files[0]?.name.replace(/\.[^/.]+$/, ''),
+                sourceFile,
+                templateName,
                 [
                   Number(coordTlX.value),
                   Number(coordTlY.value),
@@ -3944,7 +5218,7 @@ async function buildOverlayMain() {
               // console.log(`TCoords: ${apiManager.templateCoordsTilePixel}\nCoords: ${apiManager.coordsTilePixel}`);
               // templateManager.setTemplateImage(input.files[0]);
 
-              instance.handleDisplayStatus(`Drew to canvas!`);
+              instance.handleDisplayStatus('Template created!');
             }
             }).buildElement()
           .addButton({'id': 'bm-button-sync-templates', 'textContent': '🔄'}, (instance, button) => {
@@ -4133,6 +5407,271 @@ async function buildOverlayMain() {
     } catch (_) {};
   };
   window.syncToggleList = syncToggleList;
+  let templatePositionEditStorageKey = null;
+  const getOverlayCoordinateInputs = () => ({
+    tx: document.querySelector('#bm-input-tx'),
+    ty: document.querySelector('#bm-input-ty'),
+    px: document.querySelector('#bm-input-px'),
+    py: document.querySelector('#bm-input-py'),
+  });
+  const getOverlayCoordsFromInputsNormalized = () => {
+    const { tx, ty, px, py } = getOverlayCoordinateInputs();
+    if (!tx || !ty || !px || !py) return null;
+    return normalizeTilePixelCoords([tx.value, ty.value, px.value, py.value]);
+  };
+  const setOverlayCoordsInputs = (coords) => {
+    const normalized = normalizeTilePixelCoords(coords);
+    if (!normalized) return false;
+    const { tx, ty, px, py } = getOverlayCoordinateInputs();
+    if (!tx || !ty || !px || !py) return false;
+    tx.value = String(normalized[0]);
+    ty.value = String(normalized[1]);
+    px.value = String(normalized[2]);
+    py.value = String(normalized[3]);
+    apiManager.updateDownloadButton();
+    persistCoords();
+    return true;
+  };
+  const moveTemplateToCoords = async (template, targetCoords, options = {}) => {
+    const refreshLists = options?.refreshLists !== false;
+    const overlayMode = options?.overlayMode === 'single' ? 'single' : 'visible-first';
+    if (isTemplateRemote(template)) {
+      return { ok: false, moved: false, message: 'Remote templates cannot be repositioned.' };
+    }
+    const currentCoords = normalizeTilePixelCoords(template?.coords);
+    const nextCoords = normalizeTilePixelCoords(targetCoords);
+    if (!currentCoords || !nextCoords) {
+      return { ok: false, moved: false, message: 'Template coordinates are malformed.' };
+    }
+    const currentWorldX = currentCoords[0] * TEMPLATE_TILE_SIZE + currentCoords[2];
+    const nextWorldX = nextCoords[0] * TEMPLATE_TILE_SIZE + nextCoords[2];
+    const currentWorldY = currentCoords[1] * TEMPLATE_TILE_SIZE + currentCoords[3];
+    const nextWorldY = nextCoords[1] * TEMPLATE_TILE_SIZE + nextCoords[3];
+    const deltaX = computeWrappedWorldDeltaX(currentWorldX, nextWorldX);
+    const deltaY = nextWorldY - currentWorldY;
+    if (deltaX === 0 && deltaY === 0) {
+      return { ok: true, moved: false, message: 'Template is already at that position.' };
+    }
+
+    const shiftedChunked = rekeyTemplateChunkMap(template.chunked, deltaX, deltaY);
+    const shiftedChunkedBuffer = rekeyTemplateChunkMap(template.chunkedBuffer, deltaX, deltaY);
+    const nextTilePrefixes = new Set(
+      Object.keys(shiftedChunked).map((key) => key.split(',').slice(0, 2).join(','))
+    );
+    if (!nextTilePrefixes.size) {
+      return { ok: false, moved: false, message: 'Unable to move template: no chunks were shifted.' };
+    }
+
+    templateManager.clearTileProgress(template);
+    removeLayer(null, template.sortID);
+
+    template.chunked = shiftedChunked;
+    template.chunkedBuffer = shiftedChunkedBuffer;
+    template.tilePrefixes = nextTilePrefixes;
+    template.coords = nextCoords;
+    template.storageTimeString = Date.now().toString();
+    template._tileKeysByPrefix = null;
+    template._tileKeysByPrefixVersion = null;
+
+    const templateJSON = templateManager.templatesJSON?.templates?.[template.storageKey];
+    if (templateJSON) {
+      templateJSON.coords = nextCoords.join(', ');
+      templateJSON.tiles = rekeyTemplateChunkMap(templateJSON.tiles, deltaX, deltaY);
+    }
+
+    await templateManager.storeTemplates();
+    if (overlayMode === 'single') {
+      await templateManager.createOverlayOnMap(template.sortID, { immediate: true });
+    } else {
+      await templateManager.createOverlayOnMapVisibleFirst(template.sortID);
+    }
+    if (refreshLists) {
+      buildColorFilterList();
+      buildTemplateFilterList();
+    }
+    return { ok: true, moved: true, message: 'Template position updated.' };
+  };
+  let templatePositionJoystickWindow = null;
+  let templatePositionJoystickPendingDeltaX = 0;
+  let templatePositionJoystickPendingDeltaY = 0;
+  let templatePositionJoystickIsProcessing = false;
+  let templatePositionJoystickTrailingTimer = null;
+  const TEMPLATE_POSITION_JOYSTICK_TRAILING_MS = 90;
+  function isTemplateRemote(template) {
+    if (!template) return false;
+    const templateStore = templateManager.templatesJSON?.templates?.[template.storageKey] ?? {};
+    return template.isRemote === true || templateStore.remote === true;
+  }
+  const clearTemplatePositionJoystickPending = () => {
+    templatePositionJoystickPendingDeltaX = 0;
+    templatePositionJoystickPendingDeltaY = 0;
+    if (templatePositionJoystickTrailingTimer) {
+      clearTimeout(templatePositionJoystickTrailingTimer);
+      templatePositionJoystickTrailingTimer = null;
+    }
+  };
+  const scheduleTemplatePositionJoystickTrailingMove = () => {
+    if (templatePositionJoystickTrailingTimer) {
+      clearTimeout(templatePositionJoystickTrailingTimer);
+    }
+    templatePositionJoystickTrailingTimer = setTimeout(() => {
+      templatePositionJoystickTrailingTimer = null;
+      void runTemplatePositionJoystickMove();
+    }, TEMPLATE_POSITION_JOYSTICK_TRAILING_MS);
+  };
+  const runTemplatePositionJoystickMove = async () => {
+    if (templatePositionJoystickIsProcessing) return;
+    if (!templatePositionEditStorageKey) return;
+    if (templatePositionJoystickPendingDeltaX === 0 && templatePositionJoystickPendingDeltaY === 0) return;
+    templatePositionJoystickIsProcessing = true;
+    const aggregateDeltaX = templatePositionJoystickPendingDeltaX;
+    const aggregateDeltaY = templatePositionJoystickPendingDeltaY;
+    templatePositionJoystickPendingDeltaX = 0;
+    templatePositionJoystickPendingDeltaY = 0;
+    try {
+      const activeTemplate = (templateManager.templatesArray ?? [])
+        .find((template) => template.storageKey === templatePositionEditStorageKey);
+      if (!activeTemplate) return;
+      if (isTemplateRemote(activeTemplate)) {
+        templatePositionEditStorageKey = null;
+        clearTemplatePositionJoystickPending();
+        syncTemplatePositionJoystickWindow();
+        buildTemplateFilterList();
+        overlayMain.handleDisplayStatus('Remote templates cannot be repositioned.');
+        return;
+      }
+      const current = getOverlayCoordsFromInputsNormalized()
+        || normalizeTilePixelCoords(activeTemplate.coords);
+      if (!current) {
+        overlayMain.handleDisplayError('Coordinates are malformed.');
+        return;
+      }
+      const next = shiftTilePixelCoordsByPixels(current, aggregateDeltaX, aggregateDeltaY);
+      if (!next) {
+        overlayMain.handleDisplayError('Failed to update position from joystick.');
+        return;
+      }
+      const moveResult = await moveTemplateToCoords(activeTemplate, next, {
+        refreshLists: false,
+        overlayMode: 'single',
+      });
+      if (!moveResult.ok) {
+        overlayMain.handleDisplayError(moveResult.message || 'Failed to reposition template.');
+        return;
+      }
+      setOverlayCoordsInputs(activeTemplate.coords);
+    } finally {
+      templatePositionJoystickIsProcessing = false;
+      if (
+        templatePositionEditStorageKey &&
+        (templatePositionJoystickPendingDeltaX !== 0 || templatePositionJoystickPendingDeltaY !== 0)
+      ) {
+        scheduleTemplatePositionJoystickTrailingMove();
+      }
+    }
+  };
+  const positionTemplateJoystickWindow = () => {
+    const panel = templatePositionJoystickWindow;
+    if (!panel) return;
+    if (panel.style.display === 'none') return;
+    const overlayRoot = document.getElementById('bm-overlay');
+    if (!overlayRoot) return;
+    const rect = overlayRoot.getBoundingClientRect();
+    const panelWidth = panel.offsetWidth || 128;
+    const maxLeft = Math.max(8, window.innerWidth - panelWidth - 8);
+    const preferredLeft = Math.round(rect.left - panelWidth - 10);
+    const left = Math.min(maxLeft, Math.max(8, preferredLeft));
+    const top = Math.min(Math.max(8, Math.round(rect.top)), Math.max(8, window.innerHeight - (panel.offsetHeight || 120) - 8));
+    panel.style.left = `${left}px`;
+    panel.style.top = `${top}px`;
+  };
+  const shiftCoordsFromJoystick = (event, dx, dy) => {
+    event.preventDefault();
+    const isCtrl = event.ctrlKey;
+    const step = isCtrl ? 10 : 1;
+    templatePositionJoystickPendingDeltaX += dx * step;
+    templatePositionJoystickPendingDeltaY += dy * step;
+    if (!templatePositionJoystickIsProcessing && !templatePositionJoystickTrailingTimer) {
+      void runTemplatePositionJoystickMove();
+      return;
+    }
+    scheduleTemplatePositionJoystickTrailingMove();
+  };
+  const ensureTemplatePositionJoystickWindow = () => {
+    if (templatePositionJoystickWindow) return templatePositionJoystickWindow;
+    const panel = document.createElement('section');
+    panel.id = 'bm-template-position-joystick';
+    panel.className = 'bm-template-position-joystick';
+    applyOverlayVarsToFloatingElement(panel);
+
+    const hint = document.createElement('div');
+    hint.className = 'bm-template-position-joystick-hint';
+    hint.textContent = 'Ctrl+Click = 10px';
+    panel.appendChild(hint);
+
+    const center = document.createElement('div');
+    center.className = 'bm-template-position-joystick-center';
+    center.textContent = '•';
+    panel.appendChild(center);
+
+    const up = document.createElement('button');
+    up.type = 'button';
+    up.className = 'bm-template-position-joystick-btn bm-template-position-joystick-up';
+    up.textContent = '▲';
+    up.title = 'Move up by 1px (Ctrl+Click = 10px)';
+    up.addEventListener('click', (event) => shiftCoordsFromJoystick(event, 0, -1));
+    panel.appendChild(up);
+
+    const left = document.createElement('button');
+    left.type = 'button';
+    left.className = 'bm-template-position-joystick-btn bm-template-position-joystick-left';
+    left.textContent = '▲';
+    left.title = 'Move left by 1px (Ctrl+Click = 10px)';
+    left.addEventListener('click', (event) => shiftCoordsFromJoystick(event, -1, 0));
+    panel.appendChild(left);
+
+    const right = document.createElement('button');
+    right.type = 'button';
+    right.className = 'bm-template-position-joystick-btn bm-template-position-joystick-right';
+    right.textContent = '▲';
+    right.title = 'Move right by 1px (Ctrl+Click = 10px)';
+    right.addEventListener('click', (event) => shiftCoordsFromJoystick(event, 1, 0));
+    panel.appendChild(right);
+
+    const down = document.createElement('button');
+    down.type = 'button';
+    down.className = 'bm-template-position-joystick-btn bm-template-position-joystick-down';
+    down.textContent = '▲';
+    down.title = 'Move down by 1px (Ctrl+Click = 10px)';
+    down.addEventListener('click', (event) => shiftCoordsFromJoystick(event, 0, 1));
+    panel.appendChild(down);
+
+    panel.style.display = 'none';
+    document.body.appendChild(panel);
+    window.addEventListener('resize', positionTemplateJoystickWindow);
+    templatePositionJoystickWindow = panel;
+    return panel;
+  };
+  const syncTemplatePositionJoystickWindow = () => {
+    const panel = ensureTemplatePositionJoystickWindow();
+    let isActive = Boolean(templatePositionEditStorageKey);
+    if (isActive) {
+      const activeTemplate = (templateManager.templatesArray ?? [])
+        .find((template) => template.storageKey === templatePositionEditStorageKey);
+      if (!activeTemplate || isTemplateRemote(activeTemplate)) {
+        templatePositionEditStorageKey = null;
+        clearTemplatePositionJoystickPending();
+        isActive = false;
+      }
+    }
+    panel.style.display = isActive ? 'grid' : 'none';
+    panel.classList.toggle('bm-template-position-joystick-active', isActive);
+    if (isActive) {
+      applyOverlayVarsToFloatingElement(panel);
+      positionTemplateJoystickWindow();
+    }
+  };
+  syncTemplatePositionJoystickWindow();
 
   const buildColorFilterList = () => {
     const listContainer = document.querySelector('#bm-colorfilter-list');
@@ -4289,8 +5828,19 @@ async function buildOverlayMain() {
     const listContainer = document.querySelector('#bm-templatefilter-list');
     consoleLog(templateManager);
     if (templateManager.templatesArray?.length === 0) {
+      templatePositionEditStorageKey = null;
+      clearTemplatePositionJoystickPending();
+      syncTemplatePositionJoystickWindow();
       if (listContainer) { listContainer.innerHTML = '<small>No templates to display.</small>'; }
       return;
+    }
+    const activePositionTemplate = templatePositionEditStorageKey
+      ? (templateManager.templatesArray ?? []).find((template) => template.storageKey === templatePositionEditStorageKey)
+      : null;
+    if (templatePositionEditStorageKey && (!activePositionTemplate || isTemplateRemote(activePositionTemplate))) {
+      templatePositionEditStorageKey = null;
+      clearTemplatePositionJoystickPending();
+      syncTemplatePositionJoystickWindow();
     }
 
     listContainer.innerHTML = '';
@@ -4338,6 +5888,14 @@ async function buildOverlayMain() {
 
       for (const entry of entriesIndexed) {
         const template = entry.t;
+      const templateName = template["displayName"];
+      const templateStore = templateManager.templatesJSON?.templates?.[template.storageKey] ?? {};
+      const isRemote = isTemplateRemote(template);
+      const storedWidth = Number(templateStore.width);
+      const storedHeight = Number(templateStore.height);
+      const imageWidth = Number.isFinite(Number(template.imageWidth)) ? Number(template.imageWidth) : storedWidth;
+      const imageHeight = Number.isFinite(Number(template.imageHeight)) ? Number(template.imageHeight) : storedHeight;
+      const isPositionEditing = templatePositionEditStorageKey === template.storageKey;
       let row = document.createElement('div');
       row.style.display = 'flex';
       row.style.alignItems = 'center';
@@ -4363,6 +5921,76 @@ async function buildOverlayMain() {
         teleportToTileCoords(template.coords.slice(0, 2), template.coords.slice(2, 4));
       }
 
+      let positionButton = document.createElement('a');
+      positionButton.className = 'bm-icon-link bm-template-position-button';
+      positionButton.title = isRemote
+        ? 'Remote templates cannot be repositioned.'
+        : (isPositionEditing
+          ? 'Apply position from coordinate inputs. Right-click to cancel.'
+          : 'Adjust template position.');
+      positionButton.textContent = isPositionEditing ? "✅" : "⚙️";
+      positionButton.style.fontSize = '12px';
+      positionButton.onclick = async () => {
+        if (isRemote) {
+          overlayMain.handleDisplayStatus('Remote templates cannot be repositioned.');
+          return;
+        }
+        if (templatePositionEditStorageKey !== template.storageKey) {
+          templatePositionEditStorageKey = template.storageKey;
+          clearTemplatePositionJoystickPending();
+          if (!setOverlayCoordsInputs(template.coords)) {
+            templatePositionEditStorageKey = null;
+            syncTemplatePositionJoystickWindow();
+            overlayMain.handleDisplayError('Unable to load template coordinates into inputs.');
+            return;
+          }
+          syncTemplatePositionJoystickWindow();
+          const focusCoords = resolveTemplateFocusCoords(
+            template.coords,
+            imageWidth,
+            imageHeight
+          );
+          const targetCoords = focusCoords || normalizeTilePixelCoords(template.coords) || template.coords;
+          await teleportToTileCoords(targetCoords.slice(0, 2), targetCoords.slice(2, 4));
+          applyTemplateFocusZoom(imageWidth, imageHeight);
+          buildTemplateFilterList();
+          overlayMain.handleDisplayStatus(`Adjusting "${templateName}". Update coords on the map, then click ⚙️ again to apply.`);
+          return;
+        }
+        const nextCoords = getOverlayCoordsFromInputsNormalized();
+        if (!nextCoords) {
+          overlayMain.handleDisplayError('Coordinates are malformed.');
+          return;
+        }
+        templatePositionEditStorageKey = null;
+        clearTemplatePositionJoystickPending();
+        syncTemplatePositionJoystickWindow();
+        const moveResult = await moveTemplateToCoords(template, nextCoords);
+        if (!moveResult.ok) {
+          overlayMain.handleDisplayError(moveResult.message || 'Failed to reposition template.');
+          buildTemplateFilterList();
+          return;
+        }
+        if (moveResult.moved) {
+          overlayMain.handleDisplayStatus(`Template "${templateName}" moved to ${nextCoords.join(', ')}.`);
+          const targetCoords = resolveTemplateFocusCoords(nextCoords, imageWidth, imageHeight) || nextCoords;
+          await teleportToTileCoords(targetCoords.slice(0, 2), targetCoords.slice(2, 4));
+          applyTemplateFocusZoom(imageWidth, imageHeight);
+        } else {
+          overlayMain.handleDisplayStatus(moveResult.message || 'Template position unchanged.');
+          buildTemplateFilterList();
+        }
+      };
+      positionButton.addEventListener('contextmenu', (event) => {
+        if (templatePositionEditStorageKey !== template.storageKey) return;
+        event.preventDefault();
+        templatePositionEditStorageKey = null;
+        clearTemplatePositionJoystickPending();
+        syncTemplatePositionJoystickWindow();
+        buildTemplateFilterList();
+        overlayMain.handleDisplayStatus(`Canceled position edit for "${templateName}".`);
+      });
+
         let label = document.createElement('span');
         label.style.fontSize = '12px';
         const paletteTotal = template?.colorPalette
@@ -4372,9 +6000,6 @@ async function buildOverlayMain() {
           Number(template.requiredPixelCount ?? template.pixelCount ?? paletteTotal) || 0;
         const totalLabelText = totalCount.toLocaleString();
 
-        const templateName = template["displayName"];
-        const templateStore = templateManager.templatesJSON?.templates?.[template.storageKey] ?? {};
-        const isRemote = template.isRemote === true || templateStore.remote === true;
         const isHighlighted = normalizeFlag(template.remoteHighlighted) || normalizeFlag(templateStore.remoteHighlighted);
         const filledCount = combinedTemplate[template.storageKey]?.painted ?? 0;
         const filledLabelText = `${filledCount.toLocaleString()}`;
@@ -4441,6 +6066,9 @@ async function buildOverlayMain() {
         if (isHighlighted) {
           row.classList.add('bm-template-highlight');
         }
+      if (isPositionEditing) {
+        row.classList.add('bm-template-position-editing');
+      }
       label.appendChild(renameElement);
       const countSpan = document.createElement('span');
       countSpan.className = 'bm-template-count';
@@ -4472,9 +6100,13 @@ async function buildOverlayMain() {
       row.appendChild(toggle);
       row.appendChild(removeButton);
       row.appendChild(teleportButton);
+      if (!isRemote) {
+        row.appendChild(positionButton);
+      }
       row.appendChild(label);
       listContainer.appendChild(row);
     }
+    syncTemplatePositionJoystickWindow();
   };
   window.buildTemplateFilterList = buildTemplateFilterList;
 
