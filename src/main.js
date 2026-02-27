@@ -1845,6 +1845,7 @@ function initChat() {
   let reconnectTimer = null;
   let reconnectAttempts = 0;
   let replyToId = null;
+  let chatConnectionNonce = 0;
   const chatUserColors = new Map();
   let chatUserColorsPersistTimer = null;
   const messageCache = new Map();
@@ -1934,8 +1935,18 @@ function initChat() {
   if (!messagesEl || !textInput) return;
   const normalizeMessageId = (value) => {
     const normalized = String(value ?? '').trim();
-    return normalized || null;
+    if (!normalized) return null;
+    if (/^[0-9]+$/.test(normalized)) {
+      return normalized.replace(/^0+(?=\d)/, '');
+    }
+    return normalized;
   };
+  const resolveIncomingMessageId = (payload) => normalizeMessageId(
+    payload?.id
+    ?? payload?.message_id
+    ?? payload?.msg_id
+    ?? payload?.messageId
+  );
   const isNumericMessageId = (value) => /^[0-9]+$/.test(value);
   const compareMessageIds = (leftValue, rightValue) => {
     const left = normalizeMessageId(leftValue);
@@ -2994,10 +3005,16 @@ function initChat() {
     const user = payload.user;
     const text = payload?.text || '';
     const ts = payload?.ts ? new Date(payload.ts) : new Date();
-    const messageId = payload?.id !== undefined && payload?.id !== null && String(payload.id) !== ''
-      ? String(payload.id)
-      : null;
+    const messageId = resolveIncomingMessageId(payload);
     if (messageId) {
+      payload.id = messageId;
+      if (messageCache.has(messageId)) {
+        if (!isSystem) {
+          upsertMapCommentSafe(payload, 'appendMessage:duplicate');
+          clearPendingSendRestoreIfMatch(user, text, payload?.reply_to);
+        }
+        return;
+      }
       messageCache.set(messageId, payload);
       const existingLine = Array.from(messagesEl.querySelectorAll('.bm-chat-message[data-msg-id]'))
         .find((item) => item.getAttribute('data-msg-id') === messageId);
@@ -3144,9 +3161,8 @@ function initChat() {
   };
 
   const handleDeleted = (payload) => {
-    const messageId = payload?.id;
-    if (messageId === undefined || messageId === null || messageId === '') return;
-    const messageIdText = String(messageId);
+    const messageIdText = resolveIncomingMessageId(payload);
+    if (!messageIdText) return;
     const row = messagesEl.querySelector(`.bm-chat-message[data-msg-id="${messageIdText}"]`);
     if (row) row.remove();
     if (unreadMessageIds.delete(messageIdText)) {
@@ -3194,15 +3210,19 @@ function initChat() {
         return `${CHAT_WS_URL}${sep}user=${encodeURIComponent(getUserName())}${extra}`;
       }
     };
-    chatSocket = new WebSocket(buildChatUrl());
-    chatSocket.onopen = () => {
+    const socket = new WebSocket(buildChatUrl());
+    const connectionNonce = ++chatConnectionNonce;
+    chatSocket = socket;
+    socket.onopen = () => {
+      if (socket !== chatSocket || connectionNonce !== chatConnectionNonce) return;
       reconnectAttempts = 0;
       clearRateLimitState();
       bannedInfo = null;
       restoreChatInputState();
       setStatus('connected');
     };
-    chatSocket.onclose = () => {
+    socket.onclose = () => {
+      if (socket !== chatSocket || connectionNonce !== chatConnectionNonce) return;
       if (isBanned()) {
         setStatus(`banned (${bannedInfo?.scope || 'chat'})`);
         return;
@@ -3210,12 +3230,14 @@ function initChat() {
       setStatus('disconnected');
       scheduleReconnect();
     };
-    chatSocket.onerror = () => {
+    socket.onerror = () => {
+      if (socket !== chatSocket || connectionNonce !== chatConnectionNonce) return;
       if (!isBanned()) {
         setStatus('error');
       }
     };
-    chatSocket.onmessage = (event) => {
+    socket.onmessage = (event) => {
+      if (socket !== chatSocket || connectionNonce !== chatConnectionNonce) return;
       try {
         const payload = JSON.parse(event.data);
         if (payload?.type === 'chat') {
