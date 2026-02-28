@@ -3,6 +3,29 @@ import { base64ToUint8, numberToEncoded, cleanUpCanvas, rgbToMeta, sortByOptions
 import { themeList, addTemplateCanvas, removeLayer, doAfterMapFound, forceRefreshTiles, coordsGeoCoordsToTileCoords, getMapBounds } from './utilsMaptiler.js';
 
 const normalizeFlagValue = (value) => value === true || value === 'true' || value === 1 || value === '1';
+const normalizeTimeArchiveMeta = (value) => {
+  if (!value || typeof value !== 'object') return null;
+  const source = String(value?.source || '').trim().toLowerCase();
+  if (source !== 'time-archive') return null;
+  const archiveVersion = String(value?.archiveVersion || '').trim();
+  if (!archiveVersion) return null;
+  const archiveDate = String(value?.archiveDate || '').trim();
+  const archiveBaseUrl = String(value?.archiveBaseUrl || '').trim().replace(/\/+$/, '');
+  const width = Number.isFinite(Number(value?.width))
+    ? Math.max(1, Math.trunc(Number(value.width)))
+    : null;
+  const height = Number.isFinite(Number(value?.height))
+    ? Math.max(1, Math.trunc(Number(value.height)))
+    : null;
+  return {
+    source: 'time-archive',
+    archiveVersion,
+    archiveDate,
+    archiveBaseUrl,
+    width,
+    height,
+  };
+};
 
 
 /** Manages the template system.
@@ -156,7 +179,11 @@ export default class TemplateManager {
       file: file,
       coords: coords,
       tileSize: this.tileSize,
+      forcePaletteConversion: Boolean(options?.convertToPalette),
+      paletteConversionOptions: options?.convertOptions || null,
     });
+    const timeArchiveMeta = normalizeTimeArchiveMeta(options?.timeArchiveMeta);
+    template.timeArchiveMeta = timeArchiveMeta;
     this.largestSeenSortID++;
     template.shreadSize = this.drawMult; // Copy to template's shread Size
     //template.chunked = await template.createTemplateTiles(this.tileSize); // Chunks the tiles
@@ -196,6 +223,9 @@ export default class TemplateManager {
       "palette": template.colorPalette, // Persist palette and enabled flags
       "shreadSize": template.shreadSize // Record shread size of the created template
     };
+    if (timeArchiveMeta) {
+      this.templatesJSON.templates[storageKey].timeArchiveMeta = timeArchiveMeta;
+    }
     template.enabled = templateEnabled;
     if (options?.remote) {
       template.isRemote = true;
@@ -1095,6 +1125,7 @@ export default class TemplateManager {
             template.remoteHighlighted = normalizeFlagValue(templateValue.remoteHighlighted);
             template.remoteHighlightedAt = templateValue.remoteHighlightedAt ?? null;
             template.remoteOrder = templateValue.remoteOrder ?? null;
+            template.timeArchiveMeta = normalizeTimeArchiveMeta(templateValue.timeArchiveMeta);
           if (inferredImageWidth > 0) {
             template.imageWidth = inferredImageWidth;
             templates[templateKey].width = inferredImageWidth;

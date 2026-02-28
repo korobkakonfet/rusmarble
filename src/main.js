@@ -6,10 +6,11 @@ import Overlay from './Overlay.js';
 // import Observers from './observers.js';
 import ApiManager from './apiManager.js';
 import TemplateManager from './templateManager.js';
+import { convertImageDataToWplacePalette, normalizeTemplatePaletteConversionOptions, templatePaletteConversionDefaults } from './Template.js';
 import { buildUserSettingsSection } from './userSettings.js';
 import { createTemplateSync, normalizeRemoteOrder } from './templateSync.js';
 import { createMapCommentManager } from './mapComments.js';
-import { consoleLog, consoleWarn, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor } from './utils.js';
+import { consoleLog, consoleWarn, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile } from './utils.js';
 import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getCurrentTileSize} from './utilsMaptiler.js';
 // import { getCenterGeoCoords, addTemplate } from './utilsMaptiler.js';
 
@@ -110,6 +111,15 @@ const TEMPLATE_TEXT_PREVIEW_MAX_TILE_REQUESTS = 256;
 const TEMPLATE_PREVIEW_TILE_BASE_URL = 'https://backend.wplace.live/files/s0/tiles';
 const TEMPLATE_TEXT_WEB_FONT_LINK_ID = 'bm-text-template-web-fonts';
 const TEMPLATE_TEXT_WEB_FONT_HREF = 'https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&family=Silkscreen:wght@400;700&display=swap';
+const TEMPLATE_PALETTE_PREVIEW_MAX_DIMENSION = 240;
+const TEMPLATE_PRE_SCAN_MAX_PIXELS = 200000;
+const TEMPLATE_CREATE_MODE_IMAGE = 'image';
+const TEMPLATE_CREATE_MODE_TEXT = 'text';
+const TEMPLATE_CREATE_MODE_TIME_ARCHIVE = 'time-archive';
+const TEMPLATE_ARCHIVE_BASE_URL = 'https://wplace.eralyon.net';
+const TEMPLATE_ARCHIVE_PREVIEW_MAX_DIMENSION = 360;
+const TEMPLATE_ARCHIVE_PREVIEW_MAX_TILE_REQUESTS = 256;
+const TEMPLATE_ARCHIVE_PREVIEW_DOWNLOAD_CONCURRENCY = 8;
 
 const templateTextPaletteOptions = (() => {
   const options = [];
@@ -135,6 +145,90 @@ const templateTextPaletteOptions = (() => {
   return options;
 })();
 const templateTextPaletteMap = new Map(templateTextPaletteOptions.map((entry) => [entry.key, entry]));
+const detectTemplateImageOtherColors = async (sourceFile) => {
+  if (!sourceFile) {
+    return {
+      otherPixelCount: 0,
+      otherColorCount: 0,
+      skipped: false,
+      pixelCount: 0,
+    };
+  }
+
+  const bitmap = await createImageBitmap(sourceFile, { colorSpaceConversion: 'none' });
+  const pixelCount = Math.max(0, (bitmap.width || 0) * (bitmap.height || 0));
+  if (pixelCount > TEMPLATE_PRE_SCAN_MAX_PIXELS) {
+    bitmap.close?.();
+    return {
+      otherPixelCount: 0,
+      otherColorCount: 0,
+      skipped: true,
+      pixelCount,
+    };
+  }
+  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) {
+    bitmap.close?.();
+    throw new Error('Could not initialize canvas context for palette scan.');
+  }
+  context.imageSmoothingEnabled = false;
+  context.clearRect(0, 0, bitmap.width, bitmap.height);
+  context.drawImage(bitmap, 0, 0);
+  bitmap.close?.();
+
+  const imageData = context.getImageData(0, 0, bitmap.width, bitmap.height);
+  const pixels = imageData.data;
+  const otherColorKeys = new Set();
+  let otherPixelCount = 0;
+  for (let i = 0; i < pixels.length; i += 4) {
+    if (pixels[i + 3] === 0) continue;
+    const key = `${pixels[i]},${pixels[i + 1]},${pixels[i + 2]}`;
+    if (rgbToMeta.has(key)) continue;
+    otherPixelCount++;
+    otherColorKeys.add(key);
+  }
+
+  canvas.width = 0;
+  canvas.height = 0;
+  return {
+    otherPixelCount,
+    otherColorCount: otherColorKeys.size,
+    skipped: false,
+    pixelCount,
+  };
+};
+const convertTemplateImageFileToPaletteBlob = async (sourceFile, options = {}) => {
+  if (!sourceFile) {
+    throw new Error('No source image provided for palette conversion.');
+  }
+  const normalizedOptions = normalizeTemplatePaletteConversionOptions(options || templatePaletteConversionDefaults);
+  const bitmap = await createImageBitmap(sourceFile, { colorSpaceConversion: 'none' });
+  let canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) {
+    bitmap.close?.();
+    cleanUpCanvas(canvas);
+    canvas = null;
+    throw new Error('Could not initialize canvas for conversion download.');
+  }
+  context.imageSmoothingEnabled = false;
+  context.clearRect(0, 0, bitmap.width, bitmap.height);
+  context.drawImage(bitmap, 0, 0);
+  bitmap.close?.();
+
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+  const conversion = convertImageDataToWplacePalette(imageData, normalizedOptions);
+  context.putImageData(conversion.imageData, 0, 0);
+  const blob = await canvas.convertToBlob({ type: 'image/png' });
+  cleanUpCanvas(canvas);
+  canvas = null;
+  return {
+    blob,
+    options: conversion.options || normalizedOptions,
+    stats: conversion.stats || null,
+  };
+};
 const TEMPLATE_TEXT_FONT_DEFAULT_KEY = 'segoe-bold';
 const TEMPLATE_TEXT_LINE_HEIGHT_DEFAULT = 1.2;
 const templateTextFontOptions = [
@@ -500,6 +594,1326 @@ const applyOverlayVarsToFloatingElement = (element) => {
     if (!propValue) continue;
     element.style.setProperty(propName, propValue);
   }
+};
+const normalizeTemplateCreateMode = (value) => {
+  const mode = String(value || '').trim().toLowerCase();
+  if (mode === TEMPLATE_CREATE_MODE_TEXT) return TEMPLATE_CREATE_MODE_TEXT;
+  if (mode === TEMPLATE_CREATE_MODE_TIME_ARCHIVE) return TEMPLATE_CREATE_MODE_TIME_ARCHIVE;
+  return TEMPLATE_CREATE_MODE_IMAGE;
+};
+const normalizeArchiveTemplateBaseUrl = (rawUrl = TEMPLATE_ARCHIVE_BASE_URL) => {
+  const fallback = String(TEMPLATE_ARCHIVE_BASE_URL || '').trim();
+  const value = String(rawUrl ?? '').trim();
+  return (value || fallback).replace(/\/+$/, '');
+};
+const normalizeTimeArchiveMeta = (value) => {
+  if (!value || typeof value !== 'object') return null;
+  const source = String(value?.source || '').trim().toLowerCase();
+  if (source !== 'time-archive') return null;
+  const archiveVersion = String(value?.archiveVersion || '').trim();
+  if (!archiveVersion) return null;
+  const archiveDate = String(value?.archiveDate || '').trim();
+  const archiveBaseUrl = normalizeArchiveTemplateBaseUrl(value?.archiveBaseUrl || TEMPLATE_ARCHIVE_BASE_URL);
+  const width = Number.isFinite(Number(value?.width)) ? Math.max(1, Math.trunc(Number(value.width))) : null;
+  const height = Number.isFinite(Number(value?.height)) ? Math.max(1, Math.trunc(Number(value.height))) : null;
+  return {
+    source: 'time-archive',
+    archiveVersion,
+    archiveDate,
+    archiveBaseUrl,
+    width,
+    height,
+  };
+};
+const getTemplateTimeArchiveMeta = (template) => {
+  if (!template) return null;
+  const direct = normalizeTimeArchiveMeta(template?.timeArchiveMeta);
+  if (direct) return direct;
+  const templateStore = templateManager?.templatesJSON?.templates?.[template?.storageKey] ?? null;
+  return normalizeTimeArchiveMeta(templateStore?.timeArchiveMeta);
+};
+const resolveTemplateArchiveBounds = (template) => {
+  const topLeft = normalizeTilePixelCoords(template?.coords);
+  if (!topLeft) return null;
+  const templateStore = templateManager?.templatesJSON?.templates?.[template?.storageKey] ?? {};
+  const timeArchiveMeta = getTemplateTimeArchiveMeta(template);
+  const width = Number.isFinite(Number(template?.imageWidth))
+    ? Math.max(1, Math.trunc(Number(template.imageWidth)))
+    : (Number.isFinite(Number(templateStore?.width))
+      ? Math.max(1, Math.trunc(Number(templateStore.width)))
+      : (Number.isFinite(Number(timeArchiveMeta?.width)) ? Math.max(1, Math.trunc(Number(timeArchiveMeta.width))) : null));
+  const height = Number.isFinite(Number(template?.imageHeight))
+    ? Math.max(1, Math.trunc(Number(template.imageHeight)))
+    : (Number.isFinite(Number(templateStore?.height))
+      ? Math.max(1, Math.trunc(Number(templateStore.height)))
+      : (Number.isFinite(Number(timeArchiveMeta?.height)) ? Math.max(1, Math.trunc(Number(timeArchiveMeta.height))) : null));
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null;
+  }
+  const leftWorldX = topLeft[0] * TEMPLATE_TILE_SIZE + topLeft[2];
+  const topWorldY = topLeft[1] * TEMPLATE_TILE_SIZE + topLeft[3];
+  const maxWorldX = leftWorldX + width - 1;
+  const maxWorldY = topWorldY + height - 1;
+  const tx2 = Math.floor(maxWorldX / TEMPLATE_TILE_SIZE);
+  const ty2 = Math.floor(maxWorldY / TEMPLATE_TILE_SIZE);
+  const px2 = ((maxWorldX % TEMPLATE_TILE_SIZE) + TEMPLATE_TILE_SIZE) % TEMPLATE_TILE_SIZE;
+  const py2 = ((maxWorldY % TEMPLATE_TILE_SIZE) + TEMPLATE_TILE_SIZE) % TEMPLATE_TILE_SIZE;
+  const bottomRight = normalizeTilePixelCoords([tx2, ty2, px2, py2]);
+  if (!bottomRight) return null;
+  return { topLeft, bottomRight, width, height };
+};
+const archiveTemplateVersionCache = new Map();
+const archiveTemplatePointCaptureState = {
+  active: false,
+  points: [],
+  overlayInstance: null,
+  lastCoordsKey: '',
+  lastCoordsAt: 0,
+};
+let archiveTemplateWindowSession = null;
+const ARCHIVE_TEMPLATE_CAPTURE_HINT_ID = 'bm-archive-template-capture-hint';
+
+const fetchArchiveTemplateVersions = async (rawBaseUrl = TEMPLATE_ARCHIVE_BASE_URL, force = false) => {
+  const baseUrl = normalizeArchiveTemplateBaseUrl(rawBaseUrl);
+  if (!force && archiveTemplateVersionCache.has(baseUrl)) {
+    return archiveTemplateVersionCache.get(baseUrl);
+  }
+  const response = await gmRequest(`${baseUrl}/`, 'text');
+  const status = Number(response?.status);
+  if (status < 200 || status >= 300) {
+    throw new Error(`Archive index request failed (${status}).`);
+  }
+  const html = String(response?.responseText || response?.response || '');
+  const listMatch = html.match(/const\s+WPLACE_VERSIONS\s*=\s*\[([\s\S]*?)\];/);
+  if (!listMatch) {
+    throw new Error('Archive version list was not found.');
+  }
+  const versions = [];
+  const entryRegex = /\{[^{}]*version:\s*['"]([^'"]+)['"][^{}]*date:\s*['"]([^'"]*)['"][^{}]*\}/g;
+  let match;
+  while ((match = entryRegex.exec(listMatch[1])) !== null) {
+    const version = String(match[1] || '').trim();
+    const date = String(match[2] || '').trim();
+    if (!version) continue;
+    versions.push({ version, date });
+  }
+  if (!versions.length) {
+    throw new Error('Archive version list is empty.');
+  }
+  archiveTemplateVersionCache.set(baseUrl, versions);
+  return versions;
+};
+
+const buildArchiveTemplateRectFromPoints = (pointA, pointB) => {
+  const first = normalizeTilePixelCoords(pointA);
+  const second = normalizeTilePixelCoords(pointB);
+  if (!first || !second) return null;
+  const [[left, top], [width, height]] = calculateTopLeftAndSize(
+    [[first[0], first[1]], [first[2], first[3]]],
+    [[second[0], second[1]], [second[2], second[3]]]
+  );
+  const tx1 = Math.floor(left / TEMPLATE_TILE_SIZE);
+  const ty1 = Math.floor(top / TEMPLATE_TILE_SIZE);
+  const px1 = left % TEMPLATE_TILE_SIZE;
+  const py1 = top % TEMPLATE_TILE_SIZE;
+  const maxX = left + width - 1;
+  const maxY = top + height - 1;
+  const tx2 = Math.floor(maxX / TEMPLATE_TILE_SIZE);
+  const ty2 = Math.floor(maxY / TEMPLATE_TILE_SIZE);
+  const tileWidth = tx2 - tx1 + 1;
+  const tileHeight = ty2 - ty1 + 1;
+  const safeMaxX = ((maxX % MAP_WORLD_WIDTH_PX) + MAP_WORLD_WIDTH_PX) % MAP_WORLD_WIDTH_PX;
+  const displayTx2 = Math.floor(safeMaxX / TEMPLATE_TILE_SIZE);
+  const displayPx2 = safeMaxX % TEMPLATE_TILE_SIZE;
+  const displayPy2 = ((maxY % TEMPLATE_TILE_SIZE) + TEMPLATE_TILE_SIZE) % TEMPLATE_TILE_SIZE;
+  return {
+    left,
+    top,
+    width,
+    height,
+    tx1,
+    ty1,
+    px1,
+    py1,
+    tx2,
+    ty2,
+    tileWidth,
+    tileHeight,
+    tileCount: tileWidth * tileHeight,
+    displayBottomRight: [displayTx2, ty2, displayPx2, displayPy2],
+  };
+};
+
+const iterateArchiveTemplateTiles = async (rect, options = {}) => {
+  const archiveVersion = String(options?.archiveVersion || '').trim();
+  const archiveBaseUrl = normalizeArchiveTemplateBaseUrl(options?.archiveBaseUrl);
+  const requestedConcurrency = Math.trunc(Number(options?.concurrency) || 1);
+  const concurrency = Math.max(1, Math.min(16, requestedConcurrency));
+  if (!archiveVersion) {
+    throw new Error('Archive version is required.');
+  }
+  if (!rect || !Number.isFinite(rect.tx1) || !Number.isFinite(rect.ty1) || !Number.isFinite(rect.tx2) || !Number.isFinite(rect.ty2)) {
+    throw new Error('Archive selection is invalid.');
+  }
+  const onTile = typeof options?.onTile === 'function' ? options.onTile : null;
+  const onProgress = typeof options?.onProgress === 'function' ? options.onProgress : null;
+  const tileTasks = [];
+  for (let ty = rect.ty1; ty <= rect.ty2; ty++) {
+    for (let tx = rect.tx1; tx <= rect.tx2; tx++) {
+      tileTasks.push({ tx, ty });
+    }
+  }
+  if (!tileTasks.length) return;
+  let taskCursor = 0;
+  let completed = 0;
+  const runWorker = async () => {
+    while (true) {
+      const index = taskCursor++;
+      if (index >= tileTasks.length) return;
+      const { tx, ty } = tileTasks[index];
+      const image = await downloadTile(tx % 2048, ty, {
+        source: 'archive',
+        archiveBaseUrl,
+        archiveVersion,
+      });
+      if (onTile) {
+        await onTile({ image, tx, ty });
+      }
+      completed++;
+      if (onProgress) {
+        onProgress(completed, rect.tileCount);
+      }
+    }
+  };
+  const workerCount = Math.min(concurrency, tileTasks.length);
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+};
+
+const openArchiveTemplateBuilder = ({ firstPoint, secondPoint, overlayInstance = null, targetTemplate = null } = {}) => {
+  const activeOverlay = overlayInstance || overlayMain;
+  const rect = buildArchiveTemplateRectFromPoints(firstPoint, secondPoint);
+  if (!rect) {
+    activeOverlay?.handleDisplayError('Could not read the selected archive range.');
+    return Promise.resolve(null);
+  }
+  const targetTemplateMeta = getTemplateTimeArchiveMeta(targetTemplate);
+  const targetTemplateName = String(targetTemplate?.displayName || '').trim();
+  const targetTemplateStorageKey = String(targetTemplate?.storageKey || '').trim();
+  const isUpdateMode = Boolean(targetTemplateStorageKey);
+  if (archiveTemplateWindowSession?.close) {
+    archiveTemplateWindowSession.close(null);
+  }
+  const archiveBaseUrl = normalizeArchiveTemplateBaseUrl(TEMPLATE_ARCHIVE_BASE_URL);
+  const numberFmt = new Intl.NumberFormat();
+  let supportsCreate = false;
+  try {
+    supportsCreate = testCanvasSize(rect.width, rect.height);
+  } catch (_) {
+    supportsCreate = false;
+  }
+
+  return new Promise((resolve) => {
+    const backdrop = document.createElement('div');
+    backdrop.style.position = 'fixed';
+    backdrop.style.left = '0';
+    backdrop.style.top = '0';
+    backdrop.style.right = '0';
+    backdrop.style.bottom = '0';
+    backdrop.style.display = 'flex';
+    backdrop.style.alignItems = 'center';
+    backdrop.style.justifyContent = 'center';
+    backdrop.style.padding = '12px';
+    backdrop.style.background = 'rgba(0, 0, 0, 0.45)';
+    backdrop.style.zIndex = '10055';
+
+    const panel = document.createElement('section');
+    panel.style.width = 'min(760px, calc(100vw - 24px))';
+    panel.style.maxHeight = 'calc(100vh - 24px)';
+    panel.style.overflow = 'auto';
+    panel.style.background = 'var(--bm-bg, rgba(20, 20, 20, 0.95))';
+    panel.style.color = 'var(--bm-fg, #fff)';
+    panel.style.border = '1px solid var(--bm-border-strong, rgba(255, 255, 255, 0.25))';
+    panel.style.borderRadius = '10px';
+    panel.style.boxShadow = '0 10px 30px rgba(0, 0, 0, 0.35)';
+    panel.style.padding = '12px';
+    panel.style.display = 'flex';
+    panel.style.flexDirection = 'column';
+    panel.style.gap = '10px';
+    panel.style.pointerEvents = 'auto';
+    panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-modal', 'true');
+    panel.setAttribute('aria-label', 'Time archive template builder');
+    applyOverlayVarsToFloatingElement(panel);
+
+    const headingRow = document.createElement('div');
+    headingRow.style.display = 'flex';
+    headingRow.style.alignItems = 'center';
+    headingRow.style.gap = '8px';
+    const title = document.createElement('strong');
+    title.style.fontSize = '13px';
+    title.textContent = isUpdateMode ? 'Time-Archive Template Update' : 'Time-Archive Template';
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.textContent = '✖';
+    closeBtn.style.marginLeft = 'auto';
+    headingRow.appendChild(title);
+    headingRow.appendChild(closeBtn);
+    panel.appendChild(headingRow);
+
+    const rangeInfo = document.createElement('div');
+    rangeInfo.style.whiteSpace = 'pre-line';
+    rangeInfo.style.fontSize = '12px';
+    rangeInfo.style.lineHeight = '1.35';
+    const [brTx, brTy, brPx, brPy] = rect.displayBottomRight;
+    rangeInfo.textContent = [
+      `Top Left: Tl X ${rect.tx1}, Tl Y ${rect.ty1}, Px X ${rect.px1}, Px Y ${rect.py1}`,
+      `Bottom Right: Tl X ${brTx}, Tl Y ${brTy}, Px X ${brPx}, Px Y ${brPy}`,
+      `Size: ${numberFmt.format(rect.width)} x ${numberFmt.format(rect.height)} px`,
+      `Tiles: ${numberFmt.format(rect.tileCount)} (${numberFmt.format(rect.tileWidth)} x ${numberFmt.format(rect.tileHeight)})`,
+      `Provider: ${archiveBaseUrl}`,
+    ].join('\n');
+    panel.appendChild(rangeInfo);
+
+    const controls = document.createElement('div');
+    controls.style.display = 'grid';
+    controls.style.gridTemplateColumns = 'auto minmax(220px, 1fr) auto auto';
+    controls.style.gap = '8px';
+    controls.style.alignItems = 'center';
+    const versionLabel = document.createElement('label');
+    versionLabel.textContent = 'Date';
+    const versionRange = document.createElement('input');
+    versionRange.type = 'range';
+    versionRange.min = '0';
+    versionRange.max = '0';
+    versionRange.step = '1';
+    versionRange.value = '0';
+    versionRange.style.width = '100%';
+    versionRange.style.margin = '0';
+    versionRange.disabled = true;
+    const versionValue = document.createElement('span');
+    versionValue.style.fontSize = '12px';
+    versionValue.style.fontVariantNumeric = 'tabular-nums';
+    versionValue.style.whiteSpace = 'nowrap';
+    versionValue.textContent = 'Loading...';
+    const refreshBtn = document.createElement('button');
+    refreshBtn.type = 'button';
+    refreshBtn.textContent = 'Refresh';
+    controls.appendChild(versionLabel);
+    controls.appendChild(versionRange);
+    controls.appendChild(versionValue);
+    controls.appendChild(refreshBtn);
+    panel.appendChild(controls);
+
+    const versionMeta = document.createElement('div');
+    versionMeta.style.fontSize = '11px';
+    versionMeta.style.color = 'var(--bm-muted)';
+    panel.appendChild(versionMeta);
+
+    const statusOutput = document.createElement('div');
+    statusOutput.style.fontSize = '11px';
+    statusOutput.style.color = 'var(--bm-muted)';
+    panel.appendChild(statusOutput);
+
+    const previewWrap = document.createElement('div');
+    previewWrap.style.display = 'flex';
+    previewWrap.style.justifyContent = 'center';
+    previewWrap.style.alignItems = 'center';
+    previewWrap.style.minHeight = '170px';
+    previewWrap.style.padding = '8px';
+    previewWrap.style.border = '1px solid var(--bm-border-strong, rgba(255, 255, 255, 0.25))';
+    previewWrap.style.borderRadius = '8px';
+    previewWrap.style.background = 'var(--bm-subtle-bg, rgba(255, 255, 255, 0.04))';
+    const previewCanvas = document.createElement('canvas');
+    previewCanvas.style.maxWidth = '100%';
+    previewCanvas.style.maxHeight = '320px';
+    previewCanvas.style.border = '1px solid rgba(255, 255, 255, 0.15)';
+    previewCanvas.style.borderRadius = '6px';
+    previewCanvas.style.background = 'rgba(0, 0, 0, 0.2)';
+    previewWrap.appendChild(previewCanvas);
+    panel.appendChild(previewWrap);
+
+    const progress = document.createElement('progress');
+    progress.max = 1;
+    progress.value = 0;
+    progress.hidden = true;
+    panel.appendChild(progress);
+
+    const progressText = document.createElement('div');
+    progressText.style.fontSize = '11px';
+    progressText.style.color = 'var(--bm-muted)';
+    progressText.hidden = true;
+    panel.appendChild(progressText);
+
+    const actions = document.createElement('div');
+    actions.style.display = 'flex';
+    actions.style.justifyContent = 'flex-end';
+    actions.style.gap = '8px';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.textContent = 'Cancel';
+    const createBtn = document.createElement('button');
+    createBtn.type = 'button';
+    createBtn.textContent = isUpdateMode ? 'Update Template' : 'Create Template';
+    actions.appendChild(cancelBtn);
+    actions.appendChild(createBtn);
+    panel.appendChild(actions);
+    backdrop.appendChild(panel);
+
+    let closed = false;
+    let busy = false;
+    let loadingVersions = false;
+    let previewToken = 0;
+    let archiveVersions = [];
+    let selectedVersionValue = String(targetTemplateMeta?.archiveVersion || '').trim();
+    let selectedVersionDate = '';
+    let selectedVersionLabel = '';
+
+    const setStatus = (message, isError = false) => {
+      statusOutput.textContent = message;
+      statusOutput.style.color = isError ? 'var(--bm-danger)' : 'var(--bm-muted)';
+    };
+    const setProgress = (done = 0, total = 0, label = '') => {
+      const safeTotal = Math.max(1, Number(total) || 1);
+      const safeDone = Math.max(0, Math.min(safeTotal, Number(done) || 0));
+      progress.max = safeTotal;
+      progress.value = safeDone;
+      progress.hidden = false;
+      progressText.hidden = false;
+      progressText.textContent = `${label}${safeDone} / ${safeTotal}`;
+    };
+    const clearProgress = () => {
+      progress.hidden = true;
+      progressText.hidden = true;
+      progress.max = 1;
+      progress.value = 0;
+      progressText.textContent = '';
+    };
+    const drawPreviewPlaceholder = (message = 'Preview unavailable') => {
+      previewCanvas.width = 320;
+      previewCanvas.height = 180;
+      const context = previewCanvas.getContext('2d');
+      if (!context) return;
+      context.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+      context.fillStyle = 'rgba(0, 0, 0, 0.35)';
+      context.fillRect(0, 0, previewCanvas.width, previewCanvas.height);
+      context.fillStyle = 'rgba(255, 255, 255, 0.78)';
+      context.font = '600 12px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
+      context.textAlign = 'center';
+      context.textBaseline = 'middle';
+      context.fillText(message, previewCanvas.width / 2, previewCanvas.height / 2);
+    };
+    const getSelectedVersionEntry = () => {
+      if (!archiveVersions.length) return null;
+      const index = Math.max(
+        0,
+        Math.min(archiveVersions.length - 1, Math.trunc(Number(versionRange.value) || 0))
+      );
+      return archiveVersions[index] || null;
+    };
+    const syncSelectedVersionFromTimeline = () => {
+      const selected = getSelectedVersionEntry();
+      if (!selected) {
+        selectedVersionValue = '';
+        selectedVersionDate = '';
+        selectedVersionLabel = '';
+        versionValue.textContent = 'No date';
+        versionMeta.textContent = '';
+        return null;
+      }
+      selectedVersionValue = String(selected.version || '').trim();
+      selectedVersionDate = String(selected.date || '').trim();
+      selectedVersionLabel = `${selectedVersionDate || selectedVersionValue} (${selectedVersionValue})`;
+      versionValue.textContent = selectedVersionDate || selectedVersionValue;
+      versionMeta.textContent = selectedVersionValue ? `Version: ${selectedVersionValue}` : '';
+      return selected;
+    };
+    const populateVersionTimeline = (versions, preferredVersion = '') => {
+      archiveVersions = Array.isArray(versions) ? versions.slice() : [];
+      if (!archiveVersions.length) {
+        versionRange.min = '0';
+        versionRange.max = '0';
+        versionRange.step = '1';
+        versionRange.value = '0';
+        versionRange.disabled = true;
+        syncSelectedVersionFromTimeline();
+        return;
+      }
+      versionRange.min = '0';
+      versionRange.max = String(archiveVersions.length - 1);
+      versionRange.step = '1';
+      versionRange.disabled = false;
+      let selectedIndex = archiveVersions.length - 1;
+      const preferred = String(preferredVersion || selectedVersionValue || '').trim();
+      if (preferred) {
+        const found = archiveVersions.findIndex((entry) => String(entry?.version || '').trim() === preferred);
+        if (found >= 0) {
+          selectedIndex = found;
+        }
+      }
+      versionRange.value = String(selectedIndex);
+      syncSelectedVersionFromTimeline();
+    };
+    const updateActionState = () => {
+      const hasVersion = Boolean(getSelectedVersionEntry()?.version);
+      closeBtn.disabled = busy;
+      cancelBtn.disabled = busy;
+      versionRange.disabled = busy || loadingVersions || !archiveVersions.length;
+      refreshBtn.disabled = busy || loadingVersions;
+      createBtn.disabled = busy || !hasVersion || !supportsCreate;
+    };
+    const close = (result = null) => {
+      if (closed) return;
+      closed = true;
+      previewToken++;
+      document.removeEventListener('keydown', onKeyDown, true);
+      backdrop.remove();
+      if (archiveTemplateWindowSession?.panel === panel) {
+        archiveTemplateWindowSession = null;
+      }
+      resolve(result);
+    };
+    const onKeyDown = (event) => {
+      if (event.key !== 'Escape' || busy) return;
+      event.preventDefault();
+      close(null);
+    };
+
+    const renderPreview = async () => {
+      const selectedEntry = syncSelectedVersionFromTimeline();
+      const archiveVersion = String(selectedEntry?.version || '').trim();
+      if (!archiveVersion) {
+        drawPreviewPlaceholder('No archive date available');
+        updateActionState();
+        return;
+      }
+      if (rect.tileCount > TEMPLATE_ARCHIVE_PREVIEW_MAX_TILE_REQUESTS) {
+        setStatus(
+          `Preview skipped (${numberFmt.format(rect.tileCount)} tiles > ${numberFmt.format(TEMPLATE_ARCHIVE_PREVIEW_MAX_TILE_REQUESTS)} limit). You can still create the template.`,
+          false
+        );
+        drawPreviewPlaceholder('Preview skipped for large range');
+        updateActionState();
+        return;
+      }
+      const token = ++previewToken;
+      busy = true;
+      updateActionState();
+      setStatus(`Rendering preview for ${selectedVersionLabel || archiveVersion}...`, false);
+      setProgress(0, rect.tileCount, 'Preview: ');
+      const previewScale = Math.min(1, TEMPLATE_ARCHIVE_PREVIEW_MAX_DIMENSION / Math.max(rect.width, rect.height));
+      const previewWidth = Math.max(1, Math.round(rect.width * previewScale));
+      const previewHeight = Math.max(1, Math.round(rect.height * previewScale));
+      previewCanvas.width = previewWidth;
+      previewCanvas.height = previewHeight;
+      const context = previewCanvas.getContext('2d');
+      if (!context) {
+        busy = false;
+        clearProgress();
+        setStatus('Could not initialize preview canvas.', true);
+        updateActionState();
+        return;
+      }
+      context.imageSmoothingEnabled = false;
+      context.clearRect(0, 0, previewWidth, previewHeight);
+      try {
+        const previewConcurrency = rect.tileCount > 10
+          ? TEMPLATE_ARCHIVE_PREVIEW_DOWNLOAD_CONCURRENCY
+          : 3;
+        await iterateArchiveTemplateTiles(rect, {
+          archiveVersion,
+          archiveBaseUrl,
+          concurrency: previewConcurrency,
+          onProgress: (done, total) => {
+            if (token !== previewToken) return;
+            setProgress(done, total, 'Preview: ');
+          },
+          onTile: ({ image, tx, ty }) => {
+            if (token !== previewToken) return;
+            const tileLeft = tx * TEMPLATE_TILE_SIZE;
+            const tileTop = ty * TEMPLATE_TILE_SIZE;
+            const intersectLeft = Math.max(rect.left, tileLeft);
+            const intersectTop = Math.max(rect.top, tileTop);
+            const intersectRight = Math.min(rect.left + rect.width, tileLeft + TEMPLATE_TILE_SIZE);
+            const intersectBottom = Math.min(rect.top + rect.height, tileTop + TEMPLATE_TILE_SIZE);
+            const intersectWidth = intersectRight - intersectLeft;
+            const intersectHeight = intersectBottom - intersectTop;
+            if (intersectWidth <= 0 || intersectHeight <= 0) return;
+            const srcX = intersectLeft - tileLeft;
+            const srcY = intersectTop - tileTop;
+            const dstX = (intersectLeft - rect.left) * previewScale;
+            const dstY = (intersectTop - rect.top) * previewScale;
+            const dstW = intersectWidth * previewScale;
+            const dstH = intersectHeight * previewScale;
+            context.drawImage(image, srcX, srcY, intersectWidth, intersectHeight, dstX, dstY, dstW, dstH);
+          },
+        });
+        if (token !== previewToken) return;
+        setStatus(`Preview ready: ${numberFmt.format(previewWidth)} x ${numberFmt.format(previewHeight)} px`, false);
+      } catch (error) {
+        if (token !== previewToken) return;
+        drawPreviewPlaceholder('Preview failed');
+        setStatus(`Preview failed: ${error?.message || error}`, true);
+      } finally {
+        if (token === previewToken) {
+          clearProgress();
+          busy = false;
+          updateActionState();
+        }
+      }
+    };
+
+    const loadVersions = async (force = false) => {
+      loadingVersions = true;
+      updateActionState();
+      setStatus('Loading archive versions...');
+      try {
+        const versions = await fetchArchiveTemplateVersions(archiveBaseUrl, force);
+        const preferred = String(selectedVersionValue || '').trim();
+        populateVersionTimeline(versions, preferred);
+        setStatus(`Loaded ${numberFmt.format(versions.length)} archive versions.`);
+        void renderPreview();
+      } catch (error) {
+        archiveVersions = [];
+        selectedVersionValue = '';
+        selectedVersionDate = '';
+        selectedVersionLabel = '';
+        versionRange.min = '0';
+        versionRange.max = '0';
+        versionRange.step = '1';
+        versionRange.value = '0';
+        versionRange.disabled = true;
+        versionValue.textContent = 'Unavailable';
+        versionMeta.textContent = '';
+        drawPreviewPlaceholder('No versions loaded');
+        setStatus(`Failed to load archive versions: ${error?.message || error}`, true);
+      } finally {
+        loadingVersions = false;
+        updateActionState();
+      }
+    };
+
+    const createArchiveTemplate = async () => {
+      const selectedEntry = syncSelectedVersionFromTimeline();
+      const archiveVersion = String(selectedEntry?.version || '').trim();
+      if (!archiveVersion) {
+        setStatus('Select an archive date first.', true);
+        return;
+      }
+      if (!supportsCreate) {
+        setStatus('Selection is too large for this browser to build a template image.', true);
+        return;
+      }
+      busy = true;
+      updateActionState();
+      setStatus(`Building archive snapshot (${numberFmt.format(rect.tileCount)} tiles)...`);
+      setProgress(0, rect.tileCount, 'Create: ');
+      let resultCanvas = new OffscreenCanvas(rect.width, rect.height);
+      try {
+        const context = resultCanvas.getContext('2d');
+        if (!context) {
+          throw new Error('Failed to initialize template canvas.');
+        }
+        context.imageSmoothingEnabled = false;
+        context.clearRect(0, 0, rect.width, rect.height);
+        await iterateArchiveTemplateTiles(rect, {
+          archiveVersion,
+          archiveBaseUrl,
+          onProgress: (done, total) => setProgress(done, total, 'Create: '),
+          onTile: ({ image, tx, ty }) => {
+            context.drawImage(
+              image,
+              tx * TEMPLATE_TILE_SIZE - rect.left,
+              ty * TEMPLATE_TILE_SIZE - rect.top
+            );
+          },
+        });
+        const blob = await resultCanvas.convertToBlob({ type: 'image/png' });
+        const sourceTag = (selectedVersionDate || archiveVersion).replace(/[^a-z0-9._-]+/gi, '_');
+        const fileName = `archive_${sourceTag}_${rect.tx1}_${rect.ty1}_${rect.px1}_${rect.py1}.png`;
+        const file = new File([blob], fileName, { type: 'image/png' });
+        const templateName = targetTemplateName || (
+          selectedVersionDate
+            ? `Archive ${selectedVersionDate}`
+            : `Archive ${archiveVersion}`
+        );
+        const timeArchiveMeta = normalizeTimeArchiveMeta({
+          source: 'time-archive',
+          archiveBaseUrl,
+          archiveVersion,
+          archiveDate: selectedVersionDate,
+          width: rect.width,
+          height: rect.height,
+        });
+        const createdTemplate = await templateManager.createTemplate(
+          file,
+          templateName,
+          [rect.tx1, rect.ty1, rect.px1, rect.py1],
+          'lt',
+          {
+            enabled: targetTemplate?.enabled ?? true,
+            timeArchiveMeta,
+          }
+        );
+        if (isUpdateMode && targetTemplateStorageKey && targetTemplateStorageKey !== createdTemplate?.storageKey) {
+          try {
+            await templateManager.deleteTemplate(targetTemplateStorageKey);
+          } catch (_) {}
+        }
+        activeOverlay?.handleDisplayStatus(
+          isUpdateMode
+            ? `Updated "${templateName}" to archive ${selectedVersionDate || archiveVersion}.`
+            : `Archive template created from ${templateName}.`
+        );
+        close({
+          created: true,
+          updated: isUpdateMode,
+          storageKey: createdTemplate?.storageKey || '',
+          archiveVersion,
+          archiveDate: selectedVersionDate,
+        });
+      } catch (error) {
+        consoleWarn('Failed to create archive template from selected range.', error);
+        setStatus(`Template creation failed: ${error?.message || error}`, true);
+      } finally {
+        cleanUpCanvas(resultCanvas);
+        resultCanvas = null;
+        if (!closed) {
+          clearProgress();
+          busy = false;
+          updateActionState();
+        }
+      }
+    };
+
+    closeBtn.addEventListener('click', () => {
+      if (!busy) close(null);
+    });
+    cancelBtn.addEventListener('click', () => {
+      if (!busy) close(null);
+    });
+    refreshBtn.addEventListener('click', () => {
+      void loadVersions(true);
+    });
+    versionRange.addEventListener('input', () => {
+      syncSelectedVersionFromTimeline();
+    });
+    versionRange.addEventListener('change', () => {
+      syncSelectedVersionFromTimeline();
+      void renderPreview();
+    });
+    createBtn.addEventListener('click', () => {
+      void createArchiveTemplate();
+    });
+    backdrop.addEventListener('click', (event) => {
+      if (event.target === backdrop && !busy) {
+        close(null);
+      }
+    });
+
+    document.body.appendChild(backdrop);
+    archiveTemplateWindowSession = { panel, close };
+    document.addEventListener('keydown', onKeyDown, true);
+
+    if (!supportsCreate) {
+      setStatus(
+        `Selection ${numberFmt.format(rect.width)} x ${numberFmt.format(rect.height)} is too large for template creation in this browser.`,
+        true
+      );
+      drawPreviewPlaceholder('Selection too large for create');
+    } else {
+      setStatus('Loading archive versions...');
+      drawPreviewPlaceholder('Loading preview...');
+    }
+    updateActionState();
+    void loadVersions(false);
+  });
+};
+
+const removeArchiveTemplatePointCaptureHint = () => {
+  const hint = document.getElementById(ARCHIVE_TEMPLATE_CAPTURE_HINT_ID);
+  if (hint) {
+    hint.remove();
+  }
+};
+
+const ensureArchiveTemplatePointCaptureHint = () => {
+  let hint = document.getElementById(ARCHIVE_TEMPLATE_CAPTURE_HINT_ID);
+  if (hint) return hint;
+  hint = document.createElement('div');
+  hint.id = ARCHIVE_TEMPLATE_CAPTURE_HINT_ID;
+  hint.style.position = 'fixed';
+  hint.style.top = '14px';
+  hint.style.left = '50%';
+  hint.style.transform = 'translateX(-50%)';
+  hint.style.zIndex = '10070';
+  hint.style.pointerEvents = 'auto';
+  hint.style.minWidth = '300px';
+  hint.style.maxWidth = 'min(92vw, 520px)';
+  hint.style.padding = '10px 12px';
+  hint.style.borderRadius = '10px';
+  hint.style.border = '1px solid var(--bm-border-strong, rgba(255, 255, 255, 0.26))';
+  hint.style.background = 'var(--bm-bg, rgba(18, 18, 18, 0.95))';
+  hint.style.color = 'var(--bm-fg, #fff)';
+  hint.style.boxShadow = '0 10px 26px rgba(0, 0, 0, 0.4)';
+  hint.style.display = 'flex';
+  hint.style.flexDirection = 'column';
+  hint.style.gap = '6px';
+  hint.style.fontSize = '12px';
+  hint.style.lineHeight = '1.35';
+  applyOverlayVarsToFloatingElement(hint);
+
+  const headingRow = document.createElement('div');
+  headingRow.style.display = 'flex';
+  headingRow.style.alignItems = 'center';
+  headingRow.style.gap = '8px';
+  const title = document.createElement('strong');
+  title.dataset.role = 'title';
+  title.textContent = 'Time-archive capture';
+  title.style.fontSize = '12px';
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.textContent = 'Cancel';
+  closeBtn.style.marginLeft = 'auto';
+  closeBtn.style.border = '1px solid var(--bm-border, rgba(255, 255, 255, 0.22))';
+  closeBtn.style.borderRadius = '6px';
+  closeBtn.style.background = 'var(--bm-btn-bg, rgba(255, 255, 255, 0.12))';
+  closeBtn.style.color = 'var(--bm-btn-text, #fff)';
+  closeBtn.style.padding = '1px 8px';
+  closeBtn.addEventListener('click', () => {
+    cancelArchiveTemplatePointCapture('Time-archive point capture cancelled.');
+  });
+  headingRow.appendChild(title);
+  headingRow.appendChild(closeBtn);
+  hint.appendChild(headingRow);
+
+  const body = document.createElement('div');
+  body.dataset.role = 'body';
+  body.style.whiteSpace = 'pre-line';
+  body.textContent = 'Click two points on the map.';
+  hint.appendChild(body);
+
+  const tip = document.createElement('div');
+  tip.style.fontSize = '11px';
+  tip.style.color = 'var(--bm-muted)';
+  tip.textContent = 'Tip: press Esc to cancel capture.';
+  hint.appendChild(tip);
+
+  document.body.appendChild(hint);
+  return hint;
+};
+
+const updateArchiveTemplatePointCaptureHint = () => {
+  if (!archiveTemplatePointCaptureState.active) {
+    removeArchiveTemplatePointCaptureHint();
+    return;
+  }
+  const hint = ensureArchiveTemplatePointCaptureHint();
+  applyOverlayVarsToFloatingElement(hint);
+  const title = hint.querySelector('[data-role="title"]');
+  const body = hint.querySelector('[data-role="body"]');
+  const pointCount = archiveTemplatePointCaptureState.points.length;
+  if (title) {
+    title.textContent = pointCount > 0 ? 'Time-archive capture (2/2)' : 'Time-archive capture (1/2)';
+  }
+  if (body) {
+    if (pointCount > 0) {
+      const firstText = formatTilePixelCoords(archiveTemplatePointCaptureState.points[0]);
+      body.textContent = `First point saved:\n${firstText}\nNow click the second point on the map (opposite corner).`;
+    } else {
+      body.textContent = 'Click the first point on the map.\nUsually start with the top-left corner.';
+    }
+  }
+};
+
+window.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape') return;
+  if (!archiveTemplatePointCaptureState.active) return;
+  event.preventDefault();
+  cancelArchiveTemplatePointCapture('Time-archive point capture cancelled.');
+});
+
+const cancelArchiveTemplatePointCapture = (message = '') => {
+  const overlayInstance = archiveTemplatePointCaptureState.overlayInstance || overlayMain;
+  archiveTemplatePointCaptureState.active = false;
+  archiveTemplatePointCaptureState.points = [];
+  archiveTemplatePointCaptureState.overlayInstance = null;
+  archiveTemplatePointCaptureState.lastCoordsKey = '';
+  archiveTemplatePointCaptureState.lastCoordsAt = 0;
+  removeArchiveTemplatePointCaptureHint();
+  if (message) {
+    overlayInstance?.handleDisplayStatus(message);
+  }
+};
+
+const startArchiveTemplatePointCapture = (overlayInstance = null) => {
+  const activeOverlay = overlayInstance || overlayMain;
+  if (archiveTemplateWindowSession?.close) {
+    archiveTemplateWindowSession.close(null);
+  }
+  archiveTemplatePointCaptureState.active = true;
+  archiveTemplatePointCaptureState.points = [];
+  archiveTemplatePointCaptureState.overlayInstance = activeOverlay;
+  archiveTemplatePointCaptureState.lastCoordsKey = '';
+  archiveTemplatePointCaptureState.lastCoordsAt = 0;
+  updateArchiveTemplatePointCaptureHint();
+  activeOverlay?.handleDisplayStatus('Time-archive template mode: click first point on the map, then click second point.');
+};
+
+function handleArchiveTemplatePointCapture(rawCoords) {
+  if (!archiveTemplatePointCaptureState.active) return;
+  const coords = normalizeTilePixelCoords(rawCoords);
+  if (!coords) return;
+  const key = coords.join(',');
+  const now = Date.now();
+  if (
+    key === archiveTemplatePointCaptureState.lastCoordsKey &&
+    now - archiveTemplatePointCaptureState.lastCoordsAt < 250
+  ) {
+    return;
+  }
+  archiveTemplatePointCaptureState.lastCoordsKey = key;
+  archiveTemplatePointCaptureState.lastCoordsAt = now;
+  const activeOverlay = archiveTemplatePointCaptureState.overlayInstance || overlayMain;
+  archiveTemplatePointCaptureState.points.push(coords);
+  updateArchiveTemplatePointCaptureHint();
+  if (archiveTemplatePointCaptureState.points.length === 1) {
+    activeOverlay?.handleDisplayStatus(`First point captured: ${formatTilePixelCoords(coords)}. Click the second point.`);
+    return;
+  }
+  const [firstPoint, secondPoint] = archiveTemplatePointCaptureState.points;
+  cancelArchiveTemplatePointCapture('');
+  activeOverlay?.handleDisplayStatus(`Second point captured: ${formatTilePixelCoords(secondPoint)}. Opening archive template window...`);
+  void openArchiveTemplateBuilder({ firstPoint, secondPoint, overlayInstance: activeOverlay }).catch((error) => {
+    consoleWarn('Failed to open archive template builder window.', error);
+    activeOverlay?.handleDisplayError('Could not open archive template window.');
+  });
+}
+const openTemplatePaletteConversionPreview = async ({
+  sourceFile = null,
+  otherPixelCount = 0,
+  otherColorCount = 0,
+  postCreation = false,
+  initialOptions = null,
+} = {}) => {
+  const safePixelCount = Math.max(0, Number(otherPixelCount) || 0);
+  const safeColorCount = Math.max(0, Number(otherColorCount) || 0);
+  const pixelText = new Intl.NumberFormat().format(safePixelCount);
+  const colorText = new Intl.NumberFormat().format(safeColorCount);
+  const defaults = normalizeTemplatePaletteConversionOptions(initialOptions || templatePaletteConversionDefaults);
+
+  let previewImageData = null;
+  let previewWidth = 0;
+  let previewHeight = 0;
+  if (sourceFile) {
+    try {
+      const sourceBitmap = await createImageBitmap(sourceFile, { colorSpaceConversion: 'none' });
+      const maxDimension = Math.max(1, Math.max(sourceBitmap.width, sourceBitmap.height));
+      const ratio = Math.min(1, TEMPLATE_PALETTE_PREVIEW_MAX_DIMENSION / maxDimension);
+      previewWidth = Math.max(1, Math.round(sourceBitmap.width * ratio));
+      previewHeight = Math.max(1, Math.round(sourceBitmap.height * ratio));
+      const sourceCanvas = new OffscreenCanvas(previewWidth, previewHeight);
+      const sourceCtx = sourceCanvas.getContext('2d', { willReadFrequently: true });
+      if (sourceCtx) {
+        sourceCtx.clearRect(0, 0, previewWidth, previewHeight);
+        sourceCtx.imageSmoothingEnabled = true;
+        sourceCtx.drawImage(sourceBitmap, 0, 0, previewWidth, previewHeight);
+        previewImageData = sourceCtx.getImageData(0, 0, previewWidth, previewHeight);
+      }
+      sourceBitmap.close?.();
+      cleanUpCanvas(sourceCanvas);
+    } catch (error) {
+      consoleWarn('Could not render conversion preview image.', error);
+    }
+  }
+
+  return new Promise((resolve) => {
+    const backdrop = document.createElement('div');
+    backdrop.style.position = 'fixed';
+    backdrop.style.left = '0';
+    backdrop.style.top = '0';
+    backdrop.style.right = '0';
+    backdrop.style.bottom = '0';
+    backdrop.style.display = 'flex';
+    backdrop.style.alignItems = 'center';
+    backdrop.style.justifyContent = 'center';
+    backdrop.style.padding = '12px';
+    backdrop.style.background = 'rgba(0, 0, 0, 0.45)';
+    backdrop.style.zIndex = '10050';
+
+    const panel = document.createElement('section');
+    panel.style.width = previewImageData
+      ? 'min(900px, calc(100vw - 24px))'
+      : 'min(560px, calc(100vw - 24px))';
+    panel.style.maxHeight = 'calc(100vh - 24px)';
+    panel.style.overflow = 'auto';
+    panel.style.background = 'var(--bm-panel-bg, rgba(20, 20, 20, 0.95))';
+    panel.style.color = 'var(--bm-fg, #fff)';
+    panel.style.border = '1px solid var(--bm-border-strong, rgba(255, 255, 255, 0.25))';
+    panel.style.borderRadius = '10px';
+    panel.style.boxShadow = '0 10px 30px rgba(0, 0, 0, 0.35)';
+    panel.style.padding = '12px';
+    panel.style.display = 'flex';
+    panel.style.flexDirection = 'column';
+    panel.style.gap = '10px';
+    panel.style.pointerEvents = 'auto';
+    panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-modal', 'true');
+    panel.setAttribute('aria-label', 'Template color conversion preview');
+    applyOverlayVarsToFloatingElement(panel);
+
+    const title = document.createElement('div');
+    title.textContent = postCreation
+      ? 'Template still has "other" pixels'
+      : 'Non-palette colors detected';
+    title.style.fontWeight = '700';
+    title.style.fontSize = '13px';
+    panel.appendChild(title);
+
+    const text = document.createElement('div');
+    text.style.fontSize = '12px';
+    text.style.lineHeight = '1.4';
+    text.style.whiteSpace = 'pre-line';
+    text.textContent = postCreation
+      ? [
+          `The created template has ${pixelText} pixel${safePixelCount === 1 ? '' : 's'} in "other".`,
+          'Preview settings below, then convert and recreate.'
+        ].join('\n')
+      : [
+          `${pixelText} pixel${safePixelCount === 1 ? '' : 's'} use ${colorText} non-palette color${safeColorCount === 1 ? '' : 's'}.`,
+          'Tune conversion settings and preview the result before applying.'
+        ].join('\n');
+    panel.appendChild(text);
+
+    const controls = document.createElement('div');
+    controls.style.display = 'grid';
+    controls.style.gridTemplateColumns = 'repeat(auto-fit, minmax(180px, 1fr))';
+    controls.style.gap = '10px';
+    controls.style.border = '1px solid var(--bm-border, rgba(255, 255, 255, 0.15))';
+    controls.style.borderRadius = '8px';
+    controls.style.padding = '10px';
+
+    const buildControlLabel = (labelText) => {
+      const label = document.createElement('label');
+      label.style.display = 'flex';
+      label.style.flexDirection = 'column';
+      label.style.gap = '5px';
+      const titleEl = document.createElement('span');
+      titleEl.textContent = labelText;
+      titleEl.style.fontSize = '11px';
+      titleEl.style.opacity = '0.9';
+      label.appendChild(titleEl);
+      return { label, titleEl };
+    };
+
+    const { label: ditherLabel } = buildControlLabel('Dithering');
+    const ditherModeSelect = document.createElement('select');
+    ditherModeSelect.innerHTML = [
+      '<option value="none">Off</option>',
+      '<option value="floyd-steinberg">Floyd-Steinberg</option>'
+    ].join('');
+    ditherModeSelect.value = defaults.ditherMode;
+    ditherLabel.appendChild(ditherModeSelect);
+    controls.appendChild(ditherLabel);
+
+    const { label: ditherStrengthLabel, titleEl: ditherStrengthTitle } = buildControlLabel('Dither Strength');
+    const ditherStrengthRange = document.createElement('input');
+    ditherStrengthRange.type = 'range';
+    ditherStrengthRange.min = '0';
+    ditherStrengthRange.max = '100';
+    ditherStrengthRange.step = '1';
+    ditherStrengthRange.value = String(Math.round(defaults.ditherStrength * 100));
+    ditherStrengthLabel.appendChild(ditherStrengthRange);
+    controls.appendChild(ditherStrengthLabel);
+
+    const { label: distanceLabel } = buildControlLabel('Distance');
+    const distanceSelect = document.createElement('select');
+    distanceSelect.innerHTML = [
+      '<option value="weighted">Perceptual</option>',
+      '<option value="euclidean">RGB Euclidean</option>'
+    ].join('');
+    distanceSelect.value = defaults.distanceMode;
+    distanceLabel.appendChild(distanceSelect);
+    controls.appendChild(distanceLabel);
+
+    const { label: alphaLabel, titleEl: alphaTitle } = buildControlLabel('Alpha Threshold');
+    const alphaRange = document.createElement('input');
+    alphaRange.type = 'range';
+    alphaRange.min = '0';
+    alphaRange.max = '255';
+    alphaRange.step = '1';
+    alphaRange.value = String(defaults.alphaThreshold);
+    alphaLabel.appendChild(alphaRange);
+    controls.appendChild(alphaLabel);
+
+    const { label: antiLabel, titleEl: antiTitle } = buildControlLabel('Anti-Dither (Smooth)');
+    const antiRange = document.createElement('input');
+    antiRange.type = 'range';
+    antiRange.min = '0';
+    antiRange.max = '100';
+    antiRange.step = '1';
+    antiRange.value = String(Math.round(defaults.antiDitherStrength * 100));
+    antiLabel.appendChild(antiRange);
+    controls.appendChild(antiLabel);
+
+    const serpentineWrap = document.createElement('label');
+    serpentineWrap.style.display = 'flex';
+    serpentineWrap.style.alignItems = 'center';
+    serpentineWrap.style.gap = '8px';
+    serpentineWrap.style.fontSize = '11px';
+    serpentineWrap.style.opacity = '0.9';
+    const serpentineCheckbox = document.createElement('input');
+    serpentineCheckbox.type = 'checkbox';
+    serpentineCheckbox.checked = defaults.serpentine;
+    serpentineWrap.appendChild(serpentineCheckbox);
+    serpentineWrap.appendChild(document.createTextNode('Serpentine Dither Scan'));
+    controls.appendChild(serpentineWrap);
+    panel.appendChild(controls);
+
+    const previewMeta = document.createElement('div');
+    previewMeta.style.fontSize = '11px';
+    previewMeta.style.opacity = '0.9';
+    panel.appendChild(previewMeta);
+
+    let originalCanvas = null;
+    let convertedCanvas = null;
+    let originalCtx = null;
+    let convertedCtx = null;
+    if (previewImageData) {
+      const previewGrid = document.createElement('div');
+      previewGrid.style.display = 'grid';
+      previewGrid.style.gridTemplateColumns = 'repeat(auto-fit, minmax(240px, 1fr))';
+      previewGrid.style.gap = '10px';
+
+      const makePreviewBlock = (labelText) => {
+        const block = document.createElement('div');
+        block.style.display = 'flex';
+        block.style.flexDirection = 'column';
+        block.style.gap = '6px';
+        const blockLabel = document.createElement('div');
+        blockLabel.textContent = labelText;
+        blockLabel.style.fontSize = '11px';
+        blockLabel.style.opacity = '0.9';
+        const canvas = document.createElement('canvas');
+        canvas.width = previewWidth;
+        canvas.height = previewHeight;
+        canvas.style.width = '100%';
+        canvas.style.maxWidth = `${Math.max(120, previewWidth * 2)}px`;
+        canvas.style.imageRendering = 'pixelated';
+        canvas.style.border = '1px solid var(--bm-border, rgba(255, 255, 255, 0.2))';
+        canvas.style.borderRadius = '6px';
+        canvas.style.background = 'rgba(0, 0, 0, 0.15)';
+        block.appendChild(blockLabel);
+        block.appendChild(canvas);
+        return { block, canvas };
+      };
+
+      const originalBlock = makePreviewBlock('Original');
+      const convertedBlock = makePreviewBlock('Converted Preview');
+      previewGrid.appendChild(originalBlock.block);
+      previewGrid.appendChild(convertedBlock.block);
+      panel.appendChild(previewGrid);
+      originalCanvas = originalBlock.canvas;
+      convertedCanvas = convertedBlock.canvas;
+      originalCtx = originalCanvas.getContext('2d');
+      convertedCtx = convertedCanvas.getContext('2d');
+      if (originalCtx) {
+        originalCtx.putImageData(previewImageData, 0, 0);
+      }
+    } else {
+      previewMeta.textContent = 'Preview unavailable for this image; settings will still apply.';
+    }
+
+    const actions = document.createElement('div');
+    actions.style.display = 'flex';
+    actions.style.justifyContent = 'flex-end';
+    actions.style.gap = '8px';
+
+    const keepButton = document.createElement('button');
+    keepButton.type = 'button';
+    keepButton.textContent = postCreation ? 'Keep Current' : 'Keep Original';
+    keepButton.style.border = '1px solid var(--bm-border-strong, rgba(255, 255, 255, 0.3))';
+    keepButton.style.background = 'transparent';
+    keepButton.style.color = 'inherit';
+    keepButton.style.padding = '6px 10px';
+    keepButton.style.borderRadius = '6px';
+    keepButton.style.cursor = 'pointer';
+
+    const downloadButton = document.createElement('button');
+    downloadButton.type = 'button';
+    downloadButton.textContent = 'Download Result';
+    downloadButton.style.border = '1px solid var(--bm-border-strong, rgba(255, 255, 255, 0.3))';
+    downloadButton.style.background = 'var(--bm-subtle-bg, rgba(0, 0, 0, 0.2))';
+    downloadButton.style.color = 'inherit';
+    downloadButton.style.padding = '6px 10px';
+    downloadButton.style.borderRadius = '6px';
+    downloadButton.style.cursor = 'pointer';
+    if (!sourceFile) {
+      downloadButton.disabled = true;
+      downloadButton.style.opacity = '0.55';
+      downloadButton.title = 'No source image available to download.';
+    } else {
+      downloadButton.title = 'Download converted PNG with current settings.';
+    }
+
+    const convertButton = document.createElement('button');
+    convertButton.type = 'button';
+    convertButton.textContent = postCreation ? 'Convert & Recreate' : 'Apply Conversion';
+    convertButton.style.border = '1px solid var(--bm-btn-bg, #8b1e2f)';
+    convertButton.style.background = 'var(--bm-btn-bg, #8b1e2f)';
+    convertButton.style.color = 'var(--bm-btn-text, #fff)';
+    convertButton.style.padding = '6px 10px';
+    convertButton.style.borderRadius = '6px';
+    convertButton.style.cursor = 'pointer';
+
+    actions.appendChild(keepButton);
+    actions.appendChild(downloadButton);
+    actions.appendChild(convertButton);
+    panel.appendChild(actions);
+    backdrop.appendChild(panel);
+
+    const getSelectedOptions = () => normalizeTemplatePaletteConversionOptions({
+      ditherMode: ditherModeSelect.value,
+      ditherStrength: Number(ditherStrengthRange.value) / 100,
+      distanceMode: distanceSelect.value,
+      alphaThreshold: Number(alphaRange.value),
+      serpentine: serpentineCheckbox.checked,
+      antiDitherStrength: Number(antiRange.value) / 100,
+    });
+    const getDownloadFileName = () => {
+      const sourceName = String(sourceFile?.name || 'template');
+      const baseName = sourceName.replace(/\.[^/.]+$/, '') || 'template';
+      return `${baseName}_wplace_palette.png`;
+    };
+    let downloadInProgress = false;
+    const onDownloadClick = async () => {
+      if (!sourceFile || downloadInProgress) return;
+      downloadInProgress = true;
+      const previousText = downloadButton.textContent;
+      downloadButton.textContent = 'Preparing...';
+      downloadButton.disabled = true;
+      try {
+        const selectedOptions = getSelectedOptions();
+        const conversion = await convertTemplateImageFileToPaletteBlob(sourceFile, selectedOptions);
+        const url = URL.createObjectURL(conversion.blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = getDownloadFileName();
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+        const convertedPixels = new Intl.NumberFormat().format(Number(conversion?.stats?.convertedPixels) || 0);
+        previewMeta.textContent = `Downloaded converted PNG (${convertedPixels} pixels changed).`;
+      } catch (error) {
+        consoleWarn('Failed to prepare converted image download.', error);
+        previewMeta.textContent = 'Failed to prepare converted image download.';
+      } finally {
+        downloadInProgress = false;
+        downloadButton.textContent = previousText;
+        downloadButton.disabled = !sourceFile;
+      }
+    };
+
+    const updateControlMeta = () => {
+      ditherStrengthTitle.textContent = `Dither Strength (${ditherStrengthRange.value}%)`;
+      alphaTitle.textContent = `Alpha Threshold (${alphaRange.value})`;
+      antiTitle.textContent = `Anti-Dither (Smooth) (${antiRange.value}%)`;
+      const ditheringEnabled = ditherModeSelect.value === 'floyd-steinberg';
+      ditherStrengthRange.disabled = !ditheringEnabled;
+      serpentineCheckbox.disabled = !ditheringEnabled;
+      if (!ditheringEnabled) {
+        serpentineWrap.style.opacity = '0.6';
+        ditherStrengthLabel.style.opacity = '0.6';
+      } else {
+        serpentineWrap.style.opacity = '0.9';
+        ditherStrengthLabel.style.opacity = '1';
+      }
+    };
+
+    let renderToken = 0;
+    const renderPreview = () => {
+      updateControlMeta();
+      if (!previewImageData || !convertedCtx) {
+        const selected = getSelectedOptions();
+        previewMeta.textContent = `Dithering: ${selected.ditherMode === 'none' ? 'Off' : 'Floyd-Steinberg'} • Anti-dither: ${Math.round(selected.antiDitherStrength * 100)}% • Distance: ${selected.distanceMode}`;
+        return;
+      }
+      const token = ++renderToken;
+      const options = getSelectedOptions();
+      const workingImageData = new ImageData(
+        new Uint8ClampedArray(previewImageData.data),
+        previewWidth,
+        previewHeight
+      );
+      const conversion = convertImageDataToWplacePalette(workingImageData, options);
+      if (token !== renderToken) return;
+      convertedCtx.clearRect(0, 0, previewWidth, previewHeight);
+      convertedCtx.putImageData(conversion.imageData, 0, 0);
+      const stats = conversion.stats || {};
+      const convertedText = new Intl.NumberFormat().format(Number(stats.convertedPixels) || 0);
+      const otherText = new Intl.NumberFormat().format(Number(stats.remainingOtherPixels) || 0);
+      previewMeta.textContent = [
+        `Preview size ${previewWidth}x${previewHeight}`,
+        `changed: ${convertedText}`,
+        `remaining other: ${otherText}`,
+        `anti-dither: ${Math.round(options.antiDitherStrength * 100)}%`,
+      ].join(' • ');
+    };
+
+    const onInput = () => renderPreview();
+    [
+      ditherModeSelect,
+      ditherStrengthRange,
+      distanceSelect,
+      alphaRange,
+      antiRange,
+      serpentineCheckbox,
+    ].forEach((control) => control.addEventListener('input', onInput));
+    downloadButton.addEventListener('click', onDownloadClick);
+    renderPreview();
+
+    let closed = false;
+    const cleanup = () => {
+      [
+        ditherModeSelect,
+        ditherStrengthRange,
+        distanceSelect,
+        alphaRange,
+        antiRange,
+        serpentineCheckbox,
+      ].forEach((control) => control.removeEventListener('input', onInput));
+      downloadButton.removeEventListener('click', onDownloadClick);
+      document.removeEventListener('keydown', onKeyDown, true);
+      backdrop.remove();
+    };
+    const close = (applyConversion) => {
+      if (closed) return;
+      closed = true;
+      const selectedOptions = getSelectedOptions();
+      cleanup();
+      resolve({
+        convert: Boolean(applyConversion),
+        options: selectedOptions,
+      });
+    };
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        close(false);
+      }
+    };
+    keepButton.addEventListener('click', () => close(false));
+    convertButton.addEventListener('click', () => close(true));
+    backdrop.addEventListener('click', (event) => {
+      if (event.target === backdrop) {
+        close(false);
+      }
+    });
+    document.addEventListener('keydown', onKeyDown, true);
+
+    document.body.appendChild(backdrop);
+    convertButton.focus();
+  });
 };
 
 let textTemplateBuilderSession = null;
@@ -3713,7 +5127,10 @@ const overlayMain = new Overlay(name, version); // Constructs a new Overlay obje
 const templateManager = new TemplateManager(name, version, overlayMain); // Constructs a new TemplateManager object
 templateManagerRef = templateManager;
 const apiManager = new ApiManager(templateManager); // Constructs a new ApiManager object
-apiManager.onCoordsUpdated = handleDistanceToolCoordsUpdate;
+apiManager.onCoordsUpdated = (rawCoords) => {
+  handleDistanceToolCoordsUpdate(rawCoords);
+  handleArchiveTemplatePointCapture(rawCoords);
+};
 
 overlayMain.setApiManager(apiManager); // Sets the API manager
 const templateSync = createTemplateSync({
@@ -5163,66 +6580,200 @@ async function buildOverlayMain() {
       })
         // Template buttons
         .addDiv({'id': 'bm-contain-buttons-template', 'style': 'margin-bottom: 3px;'})
-          .addInputFile({'id': 'bm-input-file-template', 'textContent': 'Select Img', 'accept': 'image/png, image/jpeg, image/webp, image/bmp, image/gif'}) // .buildElement()
-          .addButton({'id': 'bm-button-create', 'textContent': 'Create', 'style': 'margin: 0 1ch;'}, (instance, button) => {
-            button.onclick = async () => {
-              const input = document.querySelector('#bm-input-file-template');
+          .addInput({'type': 'file', 'id': 'bm-input-file-template', 'accept': 'image/png, image/jpeg, image/webp, image/bmp, image/gif', 'style': 'display: none;'}).buildElement()
+          .addSelect({'id': 'bm-template-create-mode', 'style': 'margin: 0 0.5ch; min-width: 15ch;'}, (instance, select) => {
+            const getTemplateFileInput = () => document.querySelector('#bm-input-file-template');
+            let createFlowBusy = false;
+            const runTemplateCreationFlow = async ({ mode, imageFile = null } = {}) => {
+              const createMode = normalizeTemplateCreateMode(mode);
+              if (createMode === TEMPLATE_CREATE_MODE_TIME_ARCHIVE) {
+                startArchiveTemplatePointCapture(instance);
+                return;
+              }
+              if (createFlowBusy) {
+                instance.handleDisplayStatus('Template creation is already in progress.');
+                return;
+              }
+              createFlowBusy = true;
+              try {
+                const coordTlX = document.querySelector('#bm-input-tx');
+                if (!coordTlX.checkValidity()) {coordTlX.reportValidity(); instance.handleDisplayError('Coordinates are malformed! Did you try clicking on the canvas first?'); return;}
+                const coordTlY = document.querySelector('#bm-input-ty');
+                if (!coordTlY.checkValidity()) {coordTlY.reportValidity(); instance.handleDisplayError('Coordinates are malformed! Did you try clicking on the canvas first?'); return;}
+                const coordPxX = document.querySelector('#bm-input-px');
+                if (!coordPxX.checkValidity()) {coordPxX.reportValidity(); instance.handleDisplayError('Coordinates are malformed! Did you try clicking on the canvas first?'); return;}
+                const coordPxY = document.querySelector('#bm-input-py');
+                if (!coordPxY.checkValidity()) {coordPxY.reportValidity(); instance.handleDisplayError('Coordinates are malformed! Did you try clicking on the canvas first?'); return;}
 
-              const coordTlX = document.querySelector('#bm-input-tx');
-              if (!coordTlX.checkValidity()) {coordTlX.reportValidity(); instance.handleDisplayError('Coordinates are malformed! Did you try clicking on the canvas first?'); return;}
-              const coordTlY = document.querySelector('#bm-input-ty');
-              if (!coordTlY.checkValidity()) {coordTlY.reportValidity(); instance.handleDisplayError('Coordinates are malformed! Did you try clicking on the canvas first?'); return;}
-              const coordPxX = document.querySelector('#bm-input-px');
-              if (!coordPxX.checkValidity()) {coordPxX.reportValidity(); instance.handleDisplayError('Coordinates are malformed! Did you try clicking on the canvas first?'); return;}
-              const coordPxY = document.querySelector('#bm-input-py');
-              if (!coordPxY.checkValidity()) {coordPxY.reportValidity(); instance.handleDisplayError('Coordinates are malformed! Did you try clicking on the canvas first?'); return;}
+                let sourceFile = createMode === TEMPLATE_CREATE_MODE_IMAGE ? imageFile : null;
+                const sourceIsUploadedImage = createMode === TEMPLATE_CREATE_MODE_IMAGE && Boolean(sourceFile);
+                const originalUploadedFile = sourceIsUploadedImage ? sourceFile : null;
+                let preConversionPromptShown = false;
+                let createWithPaletteConversion = false;
+                let paletteConversionOptions = null;
+                let templateName = sourceFile?.name?.replace(/\.[^/.]+$/, '') || '';
 
-              let sourceFile = input?.files?.[0] ?? null;
-              let templateName = sourceFile?.name?.replace(/\.[^/.]+$/, '') || '';
-              if (!sourceFile) {
-                const textTemplate = await openTextTemplateBuilder({
-                  initialColorKey: getCurrentTemplateTextColorKey(),
-                  initialFontSize: TEMPLATE_TEXT_FONT_SIZE,
-                  previewTileX: Number(coordTlX.value),
-                  previewTileY: Number(coordTlY.value),
-                  previewPixelX: Number(coordPxX.value),
-                  previewPixelY: Number(coordPxY.value),
-                });
-                if (!textTemplate) {
+                if (createMode === TEMPLATE_CREATE_MODE_IMAGE && !sourceFile) {
+                  instance.handleDisplayError('Image file was not selected.');
                   return;
                 }
-                sourceFile = textTemplate.blob;
-                templateName = buildTextTemplateName(textTemplate.text);
-                if (Number.isFinite(Number(textTemplate.previewPixelX))) {
-                  coordPxX.value = String(normalizePreviewTilePixel(textTemplate.previewPixelX));
-                }
-                if (Number.isFinite(Number(textTemplate.previewPixelY))) {
-                  coordPxY.value = String(normalizePreviewTilePixel(textTemplate.previewPixelY));
-                }
-                apiManager.updateDownloadButton();
-                persistCoords();
-              }
 
-              await templateManager.createTemplate(
-                sourceFile,
-                templateName,
-                [
+                if (!sourceFile) {
+                  const textTemplate = await openTextTemplateBuilder({
+                    initialColorKey: getCurrentTemplateTextColorKey(),
+                    initialFontSize: TEMPLATE_TEXT_FONT_SIZE,
+                    previewTileX: Number(coordTlX.value),
+                    previewTileY: Number(coordTlY.value),
+                    previewPixelX: Number(coordPxX.value),
+                    previewPixelY: Number(coordPxY.value),
+                  });
+                  if (!textTemplate) {
+                    return;
+                  }
+                  sourceFile = textTemplate.blob;
+                  templateName = buildTextTemplateName(textTemplate.text);
+                  if (Number.isFinite(Number(textTemplate.previewPixelX))) {
+                    coordPxX.value = String(normalizePreviewTilePixel(textTemplate.previewPixelX));
+                  }
+                  if (Number.isFinite(Number(textTemplate.previewPixelY))) {
+                    coordPxY.value = String(normalizePreviewTilePixel(textTemplate.previewPixelY));
+                  }
+                  apiManager.updateDownloadButton();
+                  persistCoords();
+                }
+
+                if (sourceIsUploadedImage && sourceFile) {
+                  try {
+                    const otherScan = await detectTemplateImageOtherColors(sourceFile);
+                    if (otherScan.skipped) {
+                      const pixelCountText = new Intl.NumberFormat().format(otherScan.pixelCount || 0);
+                      instance.handleDisplayStatus(
+                        `Skipped pre-scan for large image (${pixelCountText} px > ${new Intl.NumberFormat().format(TEMPLATE_PRE_SCAN_MAX_PIXELS)} px).`
+                      );
+                    }
+                    if (otherScan.otherPixelCount > 0) {
+                      preConversionPromptShown = true;
+                      const conversionChoice = await openTemplatePaletteConversionPreview({
+                        sourceFile,
+                        otherPixelCount: otherScan.otherPixelCount,
+                        otherColorCount: otherScan.otherColorCount,
+                      });
+                      if (conversionChoice?.convert) {
+                        createWithPaletteConversion = true;
+                        paletteConversionOptions = conversionChoice.options || normalizeTemplatePaletteConversionOptions(templatePaletteConversionDefaults);
+                        instance.handleDisplayStatus('Applying palette conversion with selected settings.');
+                      } else {
+                        instance.handleDisplayStatus('Keeping original image colors. Non-palette pixels will remain as "other".');
+                      }
+                    }
+                  } catch (error) {
+                    consoleWarn('Failed to convert non-palette colors during template creation.', error);
+                    instance.handleDisplayStatus('Palette conversion failed. Creating template from original image.');
+                  }
+                }
+
+                const createCoords = [
                   Number(coordTlX.value),
                   Number(coordTlY.value),
                   Number(coordPxX.value),
                   Number(coordPxY.value),
-                ],
-                templateManager.getAnchor()
-              );
+                ];
+                const createAnchor = templateManager.getAnchor();
+                const createdTemplate = await templateManager.createTemplate(
+                  sourceFile,
+                  templateName,
+                  createCoords,
+                  createAnchor,
+                  {
+                    convertToPalette: createWithPaletteConversion,
+                    convertOptions: paletteConversionOptions,
+                  }
+                );
 
-              // console.log(`TCoords: ${apiManager.templateCoordsTilePixel}\nCoords: ${apiManager.coordsTilePixel}`);
-              // apiManager.templateCoordsTilePixel = apiManager.coordsTilePixel; // Update template coords
-              // console.log(`TCoords: ${apiManager.templateCoordsTilePixel}\nCoords: ${apiManager.coordsTilePixel}`);
-              // templateManager.setTemplateImage(input.files[0]);
+                if (sourceIsUploadedImage && !createWithPaletteConversion && !preConversionPromptShown) {
+                  const createdOtherPixels = Number(createdTemplate?.colorPalette?.other?.count) || 0;
+                  if (createdOtherPixels > 0) {
+                    const conversionChoice = await openTemplatePaletteConversionPreview({
+                      sourceFile: originalUploadedFile || sourceFile,
+                      otherPixelCount: createdOtherPixels,
+                      otherColorCount: 1,
+                      postCreation: true,
+                      initialOptions: paletteConversionOptions || templatePaletteConversionDefaults,
+                    });
+                    if (conversionChoice?.convert) {
+                      try {
+                        instance.handleDisplayStatus('Recreating template with nearest palette conversion...');
+                        await templateManager.deleteTemplate(createdTemplate?.storageKey);
+                        await templateManager.createTemplate(
+                          originalUploadedFile || sourceFile,
+                          templateName,
+                          createCoords,
+                          createAnchor,
+                          {
+                            convertToPalette: true,
+                            convertOptions: conversionChoice.options || normalizeTemplatePaletteConversionOptions(templatePaletteConversionDefaults),
+                          }
+                        );
+                        instance.handleDisplayStatus('Converted non-palette colors and recreated the template.');
+                        return;
+                      } catch (error) {
+                        consoleWarn('Failed to convert and recreate template after creation.', error);
+                        instance.handleDisplayStatus('Could not convert and recreate template. Kept current template.');
+                      }
+                    }
+                  }
+                }
+                instance.handleDisplayStatus('Template created!');
+              } finally {
+                createFlowBusy = false;
+                const input = getTemplateFileInput();
+                if (input) input.value = '';
+              }
+            };
 
-              instance.handleDisplayStatus('Template created!');
-            }
-            }).buildElement()
+            [
+              ['', 'Create template...'],
+              [TEMPLATE_CREATE_MODE_IMAGE, 'Image template'],
+              [TEMPLATE_CREATE_MODE_TEXT, 'Text template'],
+              [TEMPLATE_CREATE_MODE_TIME_ARCHIVE, 'Time-archive template'],
+            ].forEach(([value, label]) => {
+              const option = document.createElement('option');
+              option.value = value;
+              option.textContent = label;
+              select.appendChild(option);
+            });
+            select.value = '';
+            select.addEventListener('change', async () => {
+              if (!select.value) {
+                return;
+              }
+              const nextMode = normalizeTemplateCreateMode(select.value);
+              if (nextMode !== TEMPLATE_CREATE_MODE_TIME_ARCHIVE && archiveTemplatePointCaptureState.active) {
+                cancelArchiveTemplatePointCapture('Time-archive point capture cancelled.');
+              }
+              select.value = '';
+              if (nextMode === TEMPLATE_CREATE_MODE_IMAGE) {
+                const input = getTemplateFileInput();
+                if (!input) {
+                  instance.handleDisplayError('Template image picker is unavailable.');
+                  return;
+                }
+                input.value = '';
+                input.onchange = async () => {
+                  const selectedFile = input?.files?.[0] ?? null;
+                  input.onchange = null;
+                  if (!selectedFile) return;
+                  await runTemplateCreationFlow({
+                    mode: TEMPLATE_CREATE_MODE_IMAGE,
+                    imageFile: selectedFile,
+                  });
+                };
+                input.click();
+                return;
+              }
+              await runTemplateCreationFlow({ mode: nextMode });
+            });
+          }).buildElement()
           .addButton({'id': 'bm-button-sync-templates', 'textContent': '🔄'}, (instance, button) => {
             button.style.position = 'relative';
             button.style.overflow = 'visible';
@@ -5648,6 +7199,73 @@ async function buildOverlayMain() {
     down.addEventListener('click', (event) => shiftCoordsFromJoystick(event, 0, 1));
     panel.appendChild(down);
 
+    const archiveTools = document.createElement('div');
+    archiveTools.style.gridColumn = '1 / 4';
+    archiveTools.style.display = 'none';
+    archiveTools.style.flexDirection = 'column';
+    archiveTools.style.gap = '3px';
+    const archiveButton = document.createElement('button');
+    archiveButton.type = 'button';
+    archiveButton.textContent = 'Archive Date...';
+    archiveButton.title = 'Change date/version for this time-archive template.';
+    archiveButton.style.border = '1px solid var(--bm-border-strong)';
+    archiveButton.style.borderRadius = '6px';
+    archiveButton.style.background = 'var(--bm-subtle-bg)';
+    archiveButton.style.color = 'var(--bm-fg)';
+    archiveButton.style.fontSize = '10px';
+    archiveButton.style.lineHeight = '1.2';
+    archiveButton.style.padding = '3px 5px';
+    archiveButton.style.cursor = 'pointer';
+    archiveButton.dataset.role = 'archive-edit-btn';
+    const archiveMeta = document.createElement('div');
+    archiveMeta.style.fontSize = '9px';
+    archiveMeta.style.color = 'var(--bm-muted)';
+    archiveMeta.style.textAlign = 'center';
+    archiveMeta.style.whiteSpace = 'nowrap';
+    archiveMeta.style.overflow = 'hidden';
+    archiveMeta.style.textOverflow = 'ellipsis';
+    archiveMeta.dataset.role = 'archive-meta';
+    archiveTools.appendChild(archiveButton);
+    archiveTools.appendChild(archiveMeta);
+    panel.appendChild(archiveTools);
+
+    archiveButton.addEventListener('click', async () => {
+      if (!templatePositionEditStorageKey) return;
+      const activeTemplate = (templateManager.templatesArray ?? [])
+        .find((template) => template.storageKey === templatePositionEditStorageKey);
+      if (!activeTemplate) {
+        overlayMain.handleDisplayError('No active template selected for archive edit.');
+        return;
+      }
+      const archiveMetaValue = getTemplateTimeArchiveMeta(activeTemplate);
+      if (!archiveMetaValue) {
+        overlayMain.handleDisplayError('This template is not a time-archive template.');
+        return;
+      }
+      const bounds = resolveTemplateArchiveBounds(activeTemplate);
+      if (!bounds) {
+        overlayMain.handleDisplayError('Could not resolve template size for archive update.');
+        return;
+      }
+      const result = await openArchiveTemplateBuilder({
+        firstPoint: bounds.topLeft,
+        secondPoint: bounds.bottomRight,
+        overlayInstance: overlayMain,
+        targetTemplate: activeTemplate,
+      });
+      if (result?.updated && result?.storageKey) {
+        templatePositionEditStorageKey = String(result.storageKey);
+        clearTemplatePositionJoystickPending();
+        const nextTemplate = (templateManager.templatesArray ?? [])
+          .find((template) => template.storageKey === templatePositionEditStorageKey);
+        if (nextTemplate) {
+          setOverlayCoordsInputs(nextTemplate.coords);
+        }
+        syncTemplatePositionJoystickWindow();
+        buildTemplateFilterList();
+      }
+    });
+
     panel.style.display = 'none';
     document.body.appendChild(panel);
     window.addEventListener('resize', positionTemplateJoystickWindow);
@@ -5656,18 +7274,40 @@ async function buildOverlayMain() {
   };
   const syncTemplatePositionJoystickWindow = () => {
     const panel = ensureTemplatePositionJoystickWindow();
+    const archiveButton = panel.querySelector('[data-role="archive-edit-btn"]');
+    const archiveMetaLabel = panel.querySelector('[data-role="archive-meta"]');
+    const archiveTools = archiveButton?.parentElement ?? null;
     let isActive = Boolean(templatePositionEditStorageKey);
+    let activeTemplate = null;
     if (isActive) {
-      const activeTemplate = (templateManager.templatesArray ?? [])
+      activeTemplate = (templateManager.templatesArray ?? [])
         .find((template) => template.storageKey === templatePositionEditStorageKey);
       if (!activeTemplate || isTemplateRemote(activeTemplate)) {
         templatePositionEditStorageKey = null;
         clearTemplatePositionJoystickPending();
         isActive = false;
+        activeTemplate = null;
       }
     }
     panel.style.display = isActive ? 'grid' : 'none';
     panel.classList.toggle('bm-template-position-joystick-active', isActive);
+    if (archiveTools && archiveButton && archiveMetaLabel) {
+      if (!isActive || !activeTemplate) {
+        archiveTools.style.display = 'none';
+        archiveMetaLabel.textContent = '';
+      } else {
+        const archiveMeta = getTemplateTimeArchiveMeta(activeTemplate);
+        if (!archiveMeta) {
+          archiveTools.style.display = 'none';
+          archiveMetaLabel.textContent = '';
+        } else {
+          archiveTools.style.display = 'flex';
+          archiveMetaLabel.textContent = archiveMeta.archiveDate
+            ? `${archiveMeta.archiveDate} (${archiveMeta.archiveVersion})`
+            : archiveMeta.archiveVersion;
+        }
+      }
+    }
     if (isActive) {
       applyOverlayVarsToFloatingElement(panel);
       positionTemplateJoystickWindow();
@@ -5893,6 +7533,7 @@ async function buildOverlayMain() {
       const templateName = template["displayName"];
       const templateStore = templateManager.templatesJSON?.templates?.[template.storageKey] ?? {};
       const isRemote = isTemplateRemote(template);
+      const timeArchiveMeta = getTemplateTimeArchiveMeta(template);
       const storedWidth = Number(templateStore.width);
       const storedHeight = Number(templateStore.height);
       const imageWidth = Number.isFinite(Number(template.imageWidth)) ? Number(template.imageWidth) : storedWidth;
@@ -6064,6 +7705,15 @@ async function buildOverlayMain() {
           badge.className = 'bm-remote-badge';
           badge.textContent = 'REMOTE';
           label.appendChild(badge);
+        }
+        if (timeArchiveMeta) {
+          const archiveBadge = document.createElement('span');
+          archiveBadge.className = 'bm-remote-badge';
+          archiveBadge.textContent = 'ARCHIVE';
+          archiveBadge.title = timeArchiveMeta.archiveDate
+            ? `Archive: ${timeArchiveMeta.archiveDate} (${timeArchiveMeta.archiveVersion})`
+            : `Archive version: ${timeArchiveMeta.archiveVersion}`;
+          label.appendChild(archiveBadge);
         }
         if (isHighlighted) {
           row.classList.add('bm-template-highlight');

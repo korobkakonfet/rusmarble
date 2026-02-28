@@ -274,5 +274,13 @@
   "bm-icon": "bm-4g",
   "bm-help": "bm-4h",
   "bm-fg": "bm-4i",
-  "bm-bg": "bm-4j"
+  "bm-bg": "bm-4j",
+  "bm-create-template-from-download": "bm-4w",
+  "bm-download-archive-controls": "bm-4Z",
+  "bm-download-archive-version": "bm-58",
+  "bm-download-archive-refresh": "bm-59",
+  "bm-download-archive-status": "bm-5h",
+  "bm-download-source": "bm-75",
+  "bm-template-create-mode": "bm-61",
+  "bm-archive-template-capture-hint": "bm-4B"
 }

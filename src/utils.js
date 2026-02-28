@@ -460,21 +460,160 @@ export function testAntiFingerprint() {
 /** Fetch the tile image
  * @param {number} tx
  * @param {number} ty
+ * @param {{ source?: "live" | "archive", archiveBaseUrl?: string, archiveVersion?: string, liveBaseUrl?: string }} options
  * @since 0.85.28
  */
-export function downloadTile(tx, ty) {
-  const remoteURL = "https://backend.wplace.live/files/s0/tiles/" + (tx % 2048) + "/" + ty + ".png";
+const ARCHIVE_TILE_ZOOM = 11;
+const ARCHIVE_TILE_BASE_URL = 'https://wplace.eralyon.net';
+const LIVE_TILE_BASE_URL = 'https://backend.wplace.live/files/s0/tiles';
+
+const normalizeBaseUrl = (rawUrl, fallbackUrl) => {
+  const fallback = String(fallbackUrl || '').trim();
+  const value = String(rawUrl ?? '').trim();
+  if (!value) return fallback;
+  return value.replace(/\/+$/, '');
+};
+
+const parseArchiveVersion = (rawVersion) => {
+  const version = String(rawVersion ?? '').trim();
+  if (!version) {
+    return { baseVersion: '', diffVersion: '' };
+  }
+  if (!version.includes('.')) {
+    return { baseVersion: version, diffVersion: '' };
+  }
+  return {
+    baseVersion: version.split('.')[0],
+    diffVersion: version
+  };
+};
+
+const gmFetchBlob = (url) => new Promise((resolve, reject) => {
+  if (typeof GM_xmlhttpRequest !== 'function') {
+    reject(new Error('GM_xmlhttpRequest is unavailable for archive tile download.'));
+    return;
+  }
+  GM_xmlhttpRequest({
+    method: 'GET',
+    url,
+    responseType: 'blob',
+    onload: (response) => {
+      const status = Number(response?.status);
+      if (status === 404) {
+        resolve(null);
+        return;
+      }
+      if (status < 200 || status >= 300) {
+        reject(new Error(`Request failed (${status}) for ${url}`));
+        return;
+      }
+      const blob = response?.response;
+      if (!blob) {
+        reject(new Error(`Empty response body for ${url}`));
+        return;
+      }
+      resolve(blob);
+    },
+    onerror: (error) => {
+      reject(new Error(`Network error for ${url}: ${error?.message || error}`));
+    }
+  });
+});
+
+const blobToImage = (blob) => new Promise((resolve, reject) => {
+  const objectUrl = URL.createObjectURL(blob);
+  const img = new Image();
+  img.onload = () => {
+    URL.revokeObjectURL(objectUrl);
+    resolve(img);
+  };
+  img.onerror = (error) => {
+    URL.revokeObjectURL(objectUrl);
+    reject(error);
+  };
+  img.src = objectUrl;
+});
+
+const mergeArchiveTileBlobs = async (baseBlob, diffBlob) => {
+  const [baseImage, diffImage] = await Promise.all([
+    blobToImage(baseBlob),
+    blobToImage(diffBlob),
+  ]);
+  const width = baseImage.naturalWidth || baseImage.width;
+  const height = baseImage.naturalHeight || baseImage.height;
+  let canvas = new OffscreenCanvas(width, height);
+  const context = canvas.getContext('2d');
+  if (!context) {
+    cleanUpCanvas(canvas);
+    canvas = null;
+    throw new Error('Failed to initialize canvas context for archive tile merge.');
+  }
+  context.imageSmoothingEnabled = false;
+  context.clearRect(0, 0, width, height);
+  context.drawImage(baseImage, 0, 0);
+  context.drawImage(diffImage, 0, 0);
+  const mergedBlob = await canvas.convertToBlob({ type: 'image/png' });
+  cleanUpCanvas(canvas);
+  canvas = null;
+  return blobToImage(mergedBlob);
+};
+
+const downloadLiveTile = (tx, ty, options = {}) => {
+  const liveBaseUrl = normalizeBaseUrl(options?.liveBaseUrl, LIVE_TILE_BASE_URL);
+  const remoteURL = `${liveBaseUrl}/${tx % 2048}/${ty}.png`;
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.crossOrigin = "anonymous";
+    img.crossOrigin = 'anonymous';
     img.onload = function() {
       resolve(img);
     };
     img.onerror = function(error) {
       reject(error);
-    }
+    };
     img.src = remoteURL;
-  })
+  });
+};
+
+const downloadArchiveTile = async (tx, ty, options = {}) => {
+  const archiveBaseUrl = normalizeBaseUrl(options?.archiveBaseUrl, ARCHIVE_TILE_BASE_URL);
+  const { baseVersion, diffVersion } = parseArchiveVersion(options?.archiveVersion);
+  if (!baseVersion) {
+    throw new Error('Archive version is required.');
+  }
+  const safeTx = ((Number(tx) % 2048) + 2048) % 2048;
+  const safeTy = Number(ty);
+  if (!Number.isFinite(safeTy)) {
+    throw new Error('Archive tile Y coordinate is invalid.');
+  }
+  if (!diffVersion) {
+    const blob = await gmFetchBlob(`${archiveBaseUrl}/tiles/${baseVersion}/${ARCHIVE_TILE_ZOOM}/${safeTx}/${safeTy}.png`);
+    if (!blob) {
+      throw new Error(`Archive tile not found for ${baseVersion}/${ARCHIVE_TILE_ZOOM}/${safeTx}/${safeTy}.png`);
+    }
+    return blobToImage(blob);
+  }
+  const [baseBlob, diffBlob] = await Promise.all([
+    gmFetchBlob(`${archiveBaseUrl}/tiles/${baseVersion}/${ARCHIVE_TILE_ZOOM}/${safeTx}/${safeTy}.png`),
+    gmFetchBlob(`${archiveBaseUrl}/tiles/${diffVersion}/${ARCHIVE_TILE_ZOOM}/${safeTx}/${safeTy}.png`),
+  ]);
+  if (!baseBlob && !diffBlob) {
+    throw new Error(`Archive tile not found for ${diffVersion}/${ARCHIVE_TILE_ZOOM}/${safeTx}/${safeTy}.png`);
+  }
+  if (baseBlob && !diffBlob) {
+    return blobToImage(baseBlob);
+  }
+  if (!baseBlob && diffBlob) {
+    return blobToImage(diffBlob);
+  }
+  return mergeArchiveTileBlobs(baseBlob, diffBlob);
+};
+
+export function downloadTile(tx, ty, options = {}) {
+  const source = String(options?.source || 'live').toLowerCase();
+  if (source === 'archive') {
+    return downloadArchiveTile(tx, ty, options);
+  }
+  return downloadLiveTile(tx, ty, options);
 }
 
 /** Get the currently selected color
