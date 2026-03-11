@@ -511,11 +511,13 @@ export default class Template {
           const g = inspectData[idx + 1];
           const b = inspectData[idx + 2];
           const a = inspectData[idx + 3];
-          if (a === 0) { continue; } // Ignored transparent pixel
-          if (r === 222 && g === 250 && b === 206) { deface++; }
-          // this key also includes #deface as "222,250,206"
+          // Match the runtime progress logic: only solid center pixels count as required.
+          if (a < 64) { continue; }
+          if (r === 222 && g === 250 && b === 206) {
+            deface++;
+            continue;
+          }
           const key = rgbToMeta.has(`${r},${g},${b}`) ? `${r},${g},${b}` : 'other';
-          //if (!rgbToMeta.has(key)) { continue; } // Skip non-palette colors (but #deface added to allowed)
           required++;
           paletteMap.set(key, (paletteMap.get(key) || 0) + 1);
         }

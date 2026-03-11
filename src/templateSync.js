@@ -21,6 +21,12 @@ export const normalizeRemoteOrder = (value) => {
   return Number.isFinite(numeric) ? numeric : null;
 };
 
+const DEFAULT_TEMPLATE_STREAM = 'root';
+const normalizeRemoteStream = (value) => {
+  const text = String(value ?? '').trim().toLowerCase();
+  return text || DEFAULT_TEMPLATE_STREAM;
+};
+
 const safeCall = (fn) => {
   if (typeof fn !== 'function') return;
   try { fn(); } catch (_) {}
@@ -91,6 +97,80 @@ export function createTemplateSync({
   };
   const gmRequestWithTimeout = (url, responseType, label) =>
     withTimeout(gmRequest(url, responseType), label ?? `Request ${url}`);
+  const assertResponseOk = (response, label) => {
+    const status = response?.status;
+    if (Number.isFinite(status) && status >= 400) {
+      throw new Error(`${label} failed with HTTP ${status}`);
+    }
+    if (!response) {
+      throw new Error(`${label} failed: empty response`);
+    }
+  };
+  const getConfiguredStreams = () => {
+    const streams = typeof templateManager?.getTemplateSyncStreams === 'function'
+      ? templateManager.getTemplateSyncStreams()
+      : null;
+    if (!Array.isArray(streams) || streams.length === 0) {
+      return [DEFAULT_TEMPLATE_STREAM];
+    }
+    const uniqueStreams = [];
+    const seen = new Set();
+    for (const entry of streams) {
+      const stream = normalizeRemoteStream(entry);
+      if (seen.has(stream)) continue;
+      seen.add(stream);
+      uniqueStreams.push(stream);
+    }
+    return uniqueStreams.length ? uniqueStreams : [DEFAULT_TEMPLATE_STREAM];
+  };
+  const buildStreamUrl = (pathname, stream = DEFAULT_TEMPLATE_STREAM) => {
+    const url = new URL(`${templateSyncBaseUrl}${pathname}`);
+    url.searchParams.set('stream', normalizeRemoteStream(stream));
+    return url.toString();
+  };
+  const getTemplateListUrl = (stream) => buildStreamUrl('/templates', stream);
+  const getTemplateMetaUrl = (templateName, stream) => buildStreamUrl(`/templates/${encodeURIComponent(templateName)}`, stream);
+  const getTemplateImageUrl = (templateName, stream) => buildStreamUrl(`/templates/${encodeURIComponent(templateName)}/image`, stream);
+  const getRemoteTemplateStream = (template, store = null) => normalizeRemoteStream(
+    template?.remoteStream ?? store?.remoteStream
+  );
+  const parseTemplateEntry = (entry, fallbackStream = DEFAULT_TEMPLATE_STREAM) => {
+    const entryMeta = typeof entry === 'object' && entry !== null ? entry : null;
+    const templateName = typeof entry === 'string' ? entry : entry?.['name'];
+    const remoteStream = normalizeRemoteStream(entryMeta?.['stream'] ?? fallbackStream);
+    return { entryMeta, templateName, remoteStream };
+  };
+  const isSameRemoteTemplate = (template, templateName, remoteStream) => {
+    if (!template || !templateName) return false;
+    const store = template.storageKey
+      ? templateManager.templatesJSON?.templates?.[template.storageKey]
+      : null;
+    const isRemote = template.isRemote === true || store?.remote === true;
+    if (!isRemote) return false;
+    if (getRemoteTemplateStream(template, store) !== normalizeRemoteStream(remoteStream)) return false;
+    return template.displayName === templateName || template.remoteName === templateName;
+  };
+  const findRemoteTemplateByIdentity = (templateName, remoteStream) => (
+    (templateManager.templatesArray ?? []).find((template) => isSameRemoteTemplate(template, templateName, remoteStream))
+  );
+  const fetchTemplateListForStream = async (stream, label = 'Template list') => {
+    const normalizedStream = normalizeRemoteStream(stream);
+    const labelWithStream = `${label} (${normalizedStream})`;
+    const response = await gmRequestWithTimeout(
+      getTemplateListUrl(normalizedStream),
+      'json',
+      labelWithStream
+    );
+    assertResponseOk(response, labelWithStream);
+    const data = getResponseData(response, labelWithStream) ?? {};
+    const templateItems = Array.isArray(data)
+      ? data
+      : (Array.isArray(data?.['templates']) ? data['templates'] : []);
+    return {
+      stream: normalizedStream,
+      templateItems: Array.isArray(templateItems) ? templateItems : [],
+    };
+  };
 
   const waitForImport = async () => {
     if (!templateManager?.importPromise) return;
@@ -118,14 +198,16 @@ export function createTemplateSync({
     }
   };
 
-  const pruneMissingRemoteTemplates = async (templateItems) => {
+  const pruneMissingRemoteTemplates = async (templateItems, stream = DEFAULT_TEMPLATE_STREAM) => {
     if (!Array.isArray(templateItems)) return;
+    const normalizedStream = normalizeRemoteStream(stream);
     const serverNames = new Set(
       templateItems
         .map(entry => {
-          if (typeof entry === 'string') return entry;
-          if (entry?.['deleted'] === true) return null;
-          return entry?.['name'];
+          const { entryMeta, templateName, remoteStream } = parseTemplateEntry(entry, normalizedStream);
+          if (entryMeta?.['deleted'] === true) return null;
+          if (remoteStream !== normalizedStream) return null;
+          return templateName;
         })
         .filter(name => name)
     );
@@ -134,6 +216,8 @@ export function createTemplateSync({
       const store = templateManager.templatesJSON?.templates?.[template.storageKey];
       const isRemote = template.isRemote === true || store?.remote === true;
       if (!isRemote) return false;
+      if (template.remoteManual === true || store?.remoteManual === true) return false;
+      if (getRemoteTemplateStream(template, store) !== normalizedStream) return false;
       const templateName = template.remoteName || template.displayName;
       return !!templateName && !serverNames.has(templateName);
     });
@@ -152,23 +236,19 @@ export function createTemplateSync({
     }
   };
 
-  const syncRemoteTemplateFlags = async (templateItems) => {
+  const syncRemoteTemplateFlags = async (templateItems, stream = DEFAULT_TEMPLATE_STREAM) => {
     if (templateFlagSyncInFlight) return;
     if (!Array.isArray(templateItems) || templateItems.length === 0) return;
+    const normalizedStream = normalizeRemoteStream(stream);
     templateFlagSyncInFlight = true;
     try {
       logSync('Syncing remote template flags...');
       let anyChanged = false;
       for (const entry of templateItems) {
-        const entryMeta = typeof entry === "object" && entry !== null ? entry : null;
-        const name = typeof entry === "string" ? entry : entry?.['name'];
+        const { entryMeta, templateName, remoteStream } = parseTemplateEntry(entry, normalizedStream);
         if (entryMeta?.['deleted'] === true) { continue; }
-        if (!name) { continue; }
-        const existingTemplate = (templateManager.templatesArray ?? []).find(t => {
-          if (!t) return false;
-          const sameName = t.displayName === name || t.remoteName === name;
-          return sameName;
-        });
+        if (!templateName) { continue; }
+        const existingTemplate = findRemoteTemplateByIdentity(templateName, remoteStream);
         if (!existingTemplate) { continue; }
         const store = templateManager.templatesJSON?.templates?.[existingTemplate.storageKey];
         const isRemote = existingTemplate.isRemote === true || store?.remote === true;
@@ -191,17 +271,16 @@ export function createTemplateSync({
               `%c${name}%c: Fetching template meta for "%s" (reason: %s)`,
               consoleStyle,
               '',
-              name,
+              templateName,
               reason
             );
           }
-          const safeName = encodeURIComponent(name);
           const metaResponse = await gmRequestWithTimeout(
-            `${templateSyncBaseUrl}/templates/${safeName}`,
+            getTemplateMetaUrl(templateName, remoteStream),
             "json",
-            `Template meta "${name}"`
+            `Template meta "${templateName}" (${remoteStream})`
           );
-          return getResponseData(metaResponse, `Template meta "${name}"`) ?? {};
+          return getResponseData(metaResponse, `Template meta "${templateName}" (${remoteStream})`) ?? {};
         };
 
         const entryHasMeta = !!entryMeta && (
@@ -374,43 +453,34 @@ export function createTemplateSync({
       logSync('Checking server for template updates...');
       await waitForImport();
       await dedupeRemoteTemplatesOnce();
-      const listResponse = await gmRequestWithTimeout(
-        `${templateSyncBaseUrl}/templates`,
-        "json",
-        'Template list (poll)'
-      );
-      const listData = getResponseData(listResponse, 'Template list (poll)') ?? {};
-      const templateItems = Array.isArray(listData)
-        ? listData
-        : (Array.isArray(listData?.['templates']) ? listData['templates'] : []);
-      await syncRemoteTemplateFlags(templateItems);
-      await pruneMissingRemoteTemplates(templateItems);
       let changedCount = 0;
-      if (Array.isArray(templateItems)) {
-        const promptPieces = [];
+      const promptPieces = [];
+      for (const stream of getConfiguredStreams()) {
+        const { templateItems } = await fetchTemplateListForStream(stream, 'Template list (poll)');
+        await syncRemoteTemplateFlags(templateItems, stream);
+        await pruneMissingRemoteTemplates(templateItems, stream);
         for (const entry of templateItems) {
-          const entryMeta = typeof entry === "object" && entry !== null ? entry : null;
-          const templateName = typeof entry === "string" ? entry : entry?.['name'];
+          const { entryMeta, templateName, remoteStream } = parseTemplateEntry(entry, stream);
           const updatedAt = entryMeta?.['updated_at'] ?? null;
           const imageUpdatedAt = entryMeta?.['image_updated_at'] ?? null;
           const isDeleted = entryMeta?.['deleted'] === true;
           if (!templateName) { continue; }
           if (isDeleted) { continue; }
-          const existingTemplate = (templateManager.templatesArray ?? []).find(t => {
-            if (!t) return false;
-            return t.displayName === templateName || t.remoteName === templateName;
-          });
+          const existingTemplate = findRemoteTemplateByIdentity(templateName, remoteStream);
+          const existingStore = existingTemplate?.storageKey
+            ? templateManager.templatesJSON?.templates?.[existingTemplate.storageKey]
+            : null;
           const existingUpdatedAt =
-            templateManager.templatesJSON?.templates?.[existingTemplate?.storageKey]?.remoteUpdatedAt ??
+            existingStore?.remoteUpdatedAt ??
             existingTemplate?.remoteUpdatedAt ??
             null;
           const existingImageUpdatedAt =
-            templateManager.templatesJSON?.templates?.[existingTemplate?.storageKey]?.remoteImageUpdatedAt ??
+            existingStore?.remoteImageUpdatedAt ??
             existingTemplate?.remoteImageUpdatedAt ??
             existingUpdatedAt ??
             null;
           const flagsAppliedAt =
-            templateManager.templatesJSON?.templates?.[existingTemplate?.storageKey]?.remoteFlagsAppliedAt ??
+            existingStore?.remoteFlagsAppliedAt ??
             existingTemplate?.remoteFlagsAppliedAt ??
             null;
           const normalizedUpdatedAt = normalizeUpdatedAt(updatedAt);
@@ -427,17 +497,18 @@ export function createTemplateSync({
             || imageChanged
             || (normalizedUpdatedAt && normalizedUpdatedAt !== normalizedExistingUpdatedAt);
           if (isChanged) {
-            promptPieces.push(`${templateName}::${normalizedUpdatedAt ?? 'missing'}::${normalizedImageUpdatedAt ?? 'missing'}`);
+            promptPieces.push(`${remoteStream}:${templateName}::${normalizedUpdatedAt ?? 'missing'}::${normalizedImageUpdatedAt ?? 'missing'}`);
             const updateReasons = [];
             if (isMissingLocal) { updateReasons.push('missing-local'); }
             if (normalizedUpdatedAt && normalizedUpdatedAt !== normalizedExistingUpdatedAt) { updateReasons.push('updated_at-changed'); }
             if (imageChanged) { updateReasons.push('image_updated_at-changed'); }
             const reasonText = updateReasons.length ? updateReasons.join(', ') : 'unknown';
             console.log(
-              `%c${name}%c: Template update flagged for "%s" (reason: %s). updated_at=%s, local_updated_at=%s, image_updated_at=%s, local_image_updated_at=%s, flags_applied_at=%s`,
+              `%c${name}%c: Template update flagged for "%s" (stream: %s, reason: %s). updated_at=%s, local_updated_at=%s, image_updated_at=%s, local_image_updated_at=%s, flags_applied_at=%s`,
               consoleStyle,
               '',
               templateName,
+              remoteStream,
               reasonText,
               updatedAt,
               existingUpdatedAt,
@@ -448,27 +519,27 @@ export function createTemplateSync({
             changedCount += 1;
           }
         }
-        const nextPromptKey = promptPieces.length ? promptPieces.join('|') : null;
-        const autoSyncEnabled = templateManager?.isTemplateAutoSyncEnabled?.() ?? false;
-        if (
-          autoSyncEnabled &&
-          nextPromptKey &&
-          nextPromptKey !== autoSyncPromptKey &&
-          !autoSyncInFlight
-        ) {
-          autoSyncPromptKey = nextPromptKey;
-          autoSyncInFlight = true;
-          try {
-            await syncTemplatesFromServer({
-              onStatus: autoSyncOnStatus,
-              onError: autoSyncOnError,
-              syncToggleList: autoSyncSyncToggleList,
-              buildTemplateFilterList: autoSyncBuildTemplateFilterList,
-              buildColorFilterList: autoSyncBuildColorFilterList,
-            });
-          } finally {
-            autoSyncInFlight = false;
-          }
+      }
+      const nextPromptKey = promptPieces.length ? promptPieces.join('|') : null;
+      const autoSyncEnabled = templateManager?.isTemplateAutoSyncEnabled?.() ?? false;
+      if (
+        autoSyncEnabled &&
+        nextPromptKey &&
+        nextPromptKey !== autoSyncPromptKey &&
+        !autoSyncInFlight
+      ) {
+        autoSyncPromptKey = nextPromptKey;
+        autoSyncInFlight = true;
+        try {
+          await syncTemplatesFromServer({
+            onStatus: autoSyncOnStatus,
+            onError: autoSyncOnError,
+            syncToggleList: autoSyncSyncToggleList,
+            buildTemplateFilterList: autoSyncBuildTemplateFilterList,
+            buildColorFilterList: autoSyncBuildColorFilterList,
+          });
+        } finally {
+          autoSyncInFlight = false;
         }
       }
       if (changedCount !== templateUpdatePendingCount) {
@@ -494,6 +565,288 @@ export function createTemplateSync({
     setTemplateUpdateBadge(0);
   };
 
+  const readTemplatePayloadFromStream = async ({
+    templateName,
+    remoteStream = DEFAULT_TEMPLATE_STREAM,
+    entryMeta = null,
+    statusHandler,
+  } = {}) => {
+    const trimmedName = String(templateName ?? '').trim();
+    if (!trimmedName) {
+      throw new Error('Template name is required.');
+    }
+    const normalizedStream = normalizeRemoteStream(entryMeta?.['stream'] ?? remoteStream);
+    const updatedAt = entryMeta?.['updated_at'] ?? null;
+    const imageUpdatedAt = entryMeta?.['image_updated_at'] ?? null;
+    const listOrder = normalizeRemoteOrder(entryMeta?.['order']);
+
+    logSync(`Fetching template meta for "${trimmedName}" from stream "${normalizedStream}"...`, { statusHandler });
+    const metaResponse = await gmRequestWithTimeout(
+      getTemplateMetaUrl(trimmedName, normalizedStream),
+      "json",
+      `Template meta "${trimmedName}" (${normalizedStream})`
+    );
+    assertResponseOk(metaResponse, `Template meta "${trimmedName}" (${normalizedStream})`);
+    const meta = getResponseData(metaResponse, `Template meta "${trimmedName}" (${normalizedStream})`) ?? {};
+    const coords = Array.isArray(meta?.['coords']) ? meta['coords'].map(Number) : null;
+    if (!coords || coords.length !== 4 || coords.some((n) => !Number.isFinite(n))) {
+      throw new Error(`Skipped "${trimmedName}": invalid coords.`);
+    }
+    const metaUpdatedAt = meta?.['updated_at'] ?? null;
+    const metaImageUpdatedAt = meta?.['image_updated_at'] ?? imageUpdatedAt ?? null;
+    const toTop = normalizeFlag(meta?.['to_top'] ?? entryMeta?.['to_top']);
+    const toTopAt = meta?.['to_top_at'] ?? null;
+    const highlighted = normalizeFlag(meta?.['highlighted'] ?? entryMeta?.['highlighted']);
+    const highlightedAt = meta?.['highlighted_at'] ?? null;
+    const metaOrder = normalizeRemoteOrder(meta?.['order']);
+    const order = metaOrder !== null ? metaOrder : listOrder;
+
+    logSync(`Fetching template image for "${trimmedName}" from stream "${normalizedStream}"...`, { statusHandler });
+    const imageResponse = await gmRequestWithTimeout(
+      getTemplateImageUrl(trimmedName, normalizedStream),
+      "blob",
+      `Template image "${trimmedName}" (${normalizedStream})`
+    );
+    assertResponseOk(imageResponse, `Template image "${trimmedName}" (${normalizedStream})`);
+    const imageBlob = imageResponse.response;
+    if (!imageBlob) {
+      throw new Error(`Template image "${trimmedName}" failed: empty blob`);
+    }
+    const file = new File([imageBlob], `${trimmedName}.png`, { type: imageBlob?.type || "image/png" });
+
+    return {
+      trimmedName,
+      normalizedStream,
+      file,
+      coords,
+      updatedAt: updatedAt || metaUpdatedAt,
+      imageUpdatedAt: imageUpdatedAt || metaImageUpdatedAt || updatedAt || metaUpdatedAt,
+      toTop,
+      toTopAt,
+      highlighted,
+      highlightedAt,
+      order,
+    };
+  };
+
+  const syncTemplateByName = async ({
+    templateName,
+    entryMeta = null,
+    remoteStream = DEFAULT_TEMPLATE_STREAM,
+    onStatus,
+    onError,
+    defaultEnabled = true,
+    remoteManual = false,
+    syncToggleList,
+    buildTemplateFilterList: buildTemplateFilterListOverride,
+    buildColorFilterList: buildColorFilterListOverride,
+    force = true,
+    refreshUi = true,
+  } = {}) => {
+    const statusHandler = typeof onStatus === 'function' ? onStatus : autoSyncOnStatus;
+    const trimmedName = String(templateName ?? '').trim();
+    if (!trimmedName) {
+      const errorMessage = 'Template name is required.';
+      if (typeof onError === 'function') {
+        onError(errorMessage);
+      }
+      throw new Error(errorMessage);
+    }
+    try {
+      const normalizedStream = normalizeRemoteStream(entryMeta?.['stream'] ?? remoteStream);
+      const updatedAt = entryMeta?.['updated_at'] ?? null;
+      const imageUpdatedAt = entryMeta?.['image_updated_at'] ?? null;
+      const listOrder = normalizeRemoteOrder(entryMeta?.['order']);
+      const matchingTemplates = (templateManager.templatesArray ?? []).filter(t => {
+        if (!t) return false;
+        const sameName = t.displayName === trimmedName || t.remoteName === trimmedName;
+        if (!sameName) return false;
+        const store = t.storageKey
+          ? templateManager.templatesJSON?.templates?.[t.storageKey]
+          : null;
+        const isRemote = t.isRemote === true || store?.remote === true;
+        if (!isRemote) return sameName;
+        return getRemoteTemplateStream(t, store) === normalizedStream;
+      });
+      const matchingRemoteTemplates = matchingTemplates.filter(t => {
+        const store = t.storageKey
+          ? templateManager.templatesJSON?.templates?.[t.storageKey]
+          : null;
+        if (!(t.isRemote === true || store?.remote === true)) return false;
+        return getRemoteTemplateStream(t, store) === normalizedStream;
+      });
+      const preferredTemplate =
+        matchingRemoteTemplates.find(t => t.enabled) ??
+        matchingRemoteTemplates[0] ??
+        matchingTemplates[0];
+      const existingStore = preferredTemplate?.storageKey
+        ? templateManager.templatesJSON?.templates?.[preferredTemplate.storageKey]
+        : null;
+      const existingPalette = preferredTemplate?.colorPalette ? { ...preferredTemplate.colorPalette } : null;
+      const existingRemoteManual = preferredTemplate?.remoteManual === true || existingStore?.remoteManual === true;
+      const existingEnabled = matchingRemoteTemplates.length
+        ? matchingRemoteTemplates.some(t => t.enabled)
+        : (preferredTemplate?.enabled ?? existingStore?.enabled ?? defaultEnabled);
+      const existingUpdatedAt =
+        existingStore?.remoteUpdatedAt ??
+        preferredTemplate?.remoteUpdatedAt ??
+        null;
+      const existingImageUpdatedAt =
+        existingStore?.remoteImageUpdatedAt ??
+        preferredTemplate?.remoteImageUpdatedAt ??
+        existingUpdatedAt ??
+        null;
+      const flagsAppliedAt =
+        existingStore?.remoteFlagsAppliedAt ??
+        preferredTemplate?.remoteFlagsAppliedAt ??
+        null;
+      const normalizedExistingUpdatedAt = normalizeUpdatedAt(existingUpdatedAt);
+      const normalizedUpdatedAt = normalizeUpdatedAt(updatedAt);
+      const normalizedExistingImageUpdatedAt = normalizeUpdatedAt(existingImageUpdatedAt);
+      const normalizedImageUpdatedAt = normalizeUpdatedAt(imageUpdatedAt ?? updatedAt);
+      const normalizedFlagsAppliedAt = normalizeUpdatedAt(flagsAppliedAt);
+      const imageChanged = !!normalizedImageUpdatedAt && normalizedImageUpdatedAt !== normalizedExistingImageUpdatedAt;
+      const updatedChanged = !!normalizedUpdatedAt && normalizedUpdatedAt !== normalizedExistingUpdatedAt;
+      const flagsOnlyAlreadyApplied = updatedChanged
+        && !!normalizedFlagsAppliedAt
+        && normalizedUpdatedAt === normalizedFlagsAppliedAt;
+      if (!force && !imageChanged && (!updatedChanged || flagsOnlyAlreadyApplied)) {
+        return null;
+      }
+      const payload = await readTemplatePayloadFromStream({
+        templateName: trimmedName,
+        remoteStream: normalizedStream,
+        entryMeta,
+        statusHandler,
+      });
+
+      for (const template of matchingRemoteTemplates) {
+        if (template?.storageKey) {
+          await templateManager.deleteTemplate(template.storageKey);
+        }
+      }
+
+      const created = await templateManager.createTemplate(
+        payload.file,
+        trimmedName,
+        payload.coords,
+        templateManager.getAnchor(),
+        {
+          remote: true,
+          remoteName: trimmedName,
+          remoteManual: remoteManual || existingRemoteManual,
+          remoteStream: normalizedStream,
+          remoteCoords: payload.coords,
+          remoteUpdatedAt: payload.updatedAt,
+          remoteImageUpdatedAt: payload.imageUpdatedAt,
+          remoteToTop: payload.toTop,
+          remoteToTopAt: payload.toTopAt,
+          remoteHighlighted: payload.highlighted,
+          remoteHighlightedAt: payload.highlightedAt,
+          remoteOrder: payload.order,
+          enabled: preferredTemplate ? existingEnabled : defaultEnabled
+        }
+      );
+      if (created && existingPalette) {
+        Object.entries(existingPalette).forEach(([rgb, metaValue]) => {
+          if (created.colorPalette?.[rgb]) {
+            created.colorPalette[rgb].enabled = !!metaValue?.enabled;
+          }
+        });
+      }
+      if (refreshUi) {
+        safeCall(syncToggleList);
+        templateManager.createOverlayOnMap();
+        safeCall(buildTemplateFilterListOverride ?? buildTemplateFilterList);
+        safeCall(buildColorFilterListOverride ?? autoSyncBuildColorFilterList);
+        resetTemplateUpdateBadge();
+        checkTemplateUpdates();
+      }
+      return created;
+    } catch (err) {
+      logSync(`Failed to sync template "${trimmedName}".`, { level: 'warn', err, statusHandler });
+      const errorMessage = err?.message
+        ? `Failed to sync template "${trimmedName}": ${err.message}`
+        : `Failed to sync template "${trimmedName}".`;
+      if (typeof onError === 'function') {
+        onError(errorMessage);
+      }
+      throw err;
+    }
+  };
+
+  const importTemplateByName = async ({
+    templateName,
+    onStatus,
+    onError,
+    defaultEnabled = true,
+    syncToggleList,
+    buildTemplateFilterList: buildTemplateFilterListOverride,
+    buildColorFilterList: buildColorFilterListOverride,
+    refreshUi = true,
+  } = {}) => {
+    const statusHandler = typeof onStatus === 'function' ? onStatus : autoSyncOnStatus;
+    const trimmedName = String(templateName ?? '').trim();
+    if (!trimmedName) {
+      const errorMessage = 'Template name is required.';
+      if (typeof onError === 'function') {
+        onError(errorMessage);
+      }
+      throw new Error(errorMessage);
+    }
+    try {
+      let payload = null;
+      const streams = getConfiguredStreams();
+      for (const stream of streams) {
+        try {
+          payload = await readTemplatePayloadFromStream({
+            templateName: trimmedName,
+            remoteStream: stream,
+            statusHandler,
+          });
+          break;
+        } catch (err) {
+          if (/HTTP 404/.test(String(err?.message || ''))) {
+            continue;
+          }
+          throw err;
+        }
+      }
+      if (!payload) {
+        throw new Error(`Template "${trimmedName}" was not found in configured streams: ${streams.join(', ')}.`);
+      }
+
+      const created = await templateManager.createTemplate(
+        payload.file,
+        trimmedName,
+        payload.coords,
+        templateManager.getAnchor(),
+        {
+          enabled: defaultEnabled,
+        }
+      );
+      if (refreshUi) {
+        safeCall(syncToggleList);
+        templateManager.createOverlayOnMap();
+        safeCall(buildTemplateFilterListOverride ?? buildTemplateFilterList);
+        safeCall(buildColorFilterListOverride ?? autoSyncBuildColorFilterList);
+      }
+      if (typeof statusHandler === 'function') {
+        statusHandler(`Imported "${trimmedName}" from stream "${payload.normalizedStream}" as a local template.`);
+      }
+      return created;
+    } catch (err) {
+      logSync(`Failed to import template "${trimmedName}" by name.`, { level: 'warn', err, statusHandler });
+      const errorMessage = err?.message
+        ? `Failed to import template "${trimmedName}": ${err.message}`
+        : `Failed to import template "${trimmedName}".`;
+      if (typeof onError === 'function') {
+        onError(errorMessage);
+      }
+      throw err;
+    }
+  };
+
   const syncTemplatesFromServer = async ({
     onStatus,
     onError,
@@ -506,156 +859,39 @@ export function createTemplateSync({
       logSync('Starting template sync...', { statusHandler });
       await waitForImport();
       await dedupeRemoteTemplatesOnce();
-      const assertResponseOk = (response, label) => {
-        const status = response?.status;
-        if (Number.isFinite(status) && status >= 400) {
-          throw new Error(`${label} failed with HTTP ${status}`);
-        }
-        if (!response) {
-          throw new Error(`${label} failed: empty response`);
-        }
-      };
       if (typeof statusHandler === 'function') statusHandler('Syncing templates from server...');
-      const listResponse = await gmRequestWithTimeout(
-        `${templateSyncBaseUrl}/templates`,
-        "json",
-        'Template list'
-      );
-      assertResponseOk(listResponse, 'Template list');
-      const listData = getResponseData(listResponse, 'Template list') ?? {};
-      const templateItems = Array.isArray(listData)
-        ? listData
-        : (Array.isArray(listData?.['templates']) ? listData['templates'] : []);
-      if (!Array.isArray(templateItems) || templateItems.length === 0) {
+      const streams = getConfiguredStreams();
+      let importedCount = 0;
+      let hasServerTemplates = false;
+      for (const stream of streams) {
+        const { templateItems } = await fetchTemplateListForStream(stream, 'Template list');
+        if (!Array.isArray(templateItems) || templateItems.length === 0) {
+          continue;
+        }
+        hasServerTemplates = true;
+        for (const entry of templateItems) {
+          const { entryMeta, templateName, remoteStream } = parseTemplateEntry(entry, stream);
+          if (entryMeta?.['deleted'] === true) { continue; }
+          if (!templateName) { continue; }
+          const created = await syncTemplateByName({
+            templateName,
+            entryMeta,
+            remoteStream,
+            onStatus: statusHandler,
+            defaultEnabled: false,
+            remoteManual: false,
+            force: false,
+            refreshUi: false,
+          });
+          if (created) {
+            importedCount += 1;
+          }
+        }
+      }
+      if (!hasServerTemplates) {
         if (typeof statusHandler === 'function') statusHandler('No server templates found.');
         logSync('No server templates found.', { statusHandler });
         return 0;
-      }
-      let importedCount = 0;
-      for (const entry of templateItems) {
-        const entryMeta = typeof entry === "object" && entry !== null ? entry : null;
-        const name = typeof entry === "string" ? entry : entry?.['name'];
-        const updatedAt = entryMeta?.['updated_at'] ?? null;
-        const imageUpdatedAt = entryMeta?.['image_updated_at'] ?? null;
-        const listOrder = normalizeRemoteOrder(entryMeta?.['order']);
-        if (entryMeta?.['deleted'] === true) { continue; }
-        if (!name) { continue; }
-        const safeName = encodeURIComponent(name);
-        const matchingTemplates = (templateManager.templatesArray ?? []).filter(t => {
-          if (!t) return false;
-          return t.displayName === name || t.remoteName === name;
-        });
-        const matchingRemoteTemplates = matchingTemplates.filter(t => {
-          const store = t.storageKey
-            ? templateManager.templatesJSON?.templates?.[t.storageKey]
-            : null;
-          return t.isRemote === true || store?.remote === true;
-        });
-        const preferredTemplate =
-          matchingRemoteTemplates.find(t => t.enabled) ??
-          matchingRemoteTemplates[0] ??
-          matchingTemplates[0];
-        const existingStore = preferredTemplate?.storageKey
-          ? templateManager.templatesJSON?.templates?.[preferredTemplate.storageKey]
-          : null;
-        const existingPalette = preferredTemplate?.colorPalette ? { ...preferredTemplate.colorPalette } : null;
-        const existingEnabled = matchingRemoteTemplates.length
-          ? matchingRemoteTemplates.some(t => t.enabled)
-          : (preferredTemplate?.enabled ?? existingStore?.enabled ?? false);
-        const existingUpdatedAt =
-          templateManager.templatesJSON?.templates?.[preferredTemplate?.storageKey]?.remoteUpdatedAt ??
-          preferredTemplate?.remoteUpdatedAt ??
-          null;
-        const existingImageUpdatedAt =
-          templateManager.templatesJSON?.templates?.[preferredTemplate?.storageKey]?.remoteImageUpdatedAt ??
-          preferredTemplate?.remoteImageUpdatedAt ??
-          existingUpdatedAt ??
-          null;
-        const flagsAppliedAt =
-          templateManager.templatesJSON?.templates?.[preferredTemplate?.storageKey]?.remoteFlagsAppliedAt ??
-          preferredTemplate?.remoteFlagsAppliedAt ??
-          null;
-        const normalizedExistingUpdatedAt = normalizeUpdatedAt(existingUpdatedAt);
-        const normalizedUpdatedAt = normalizeUpdatedAt(updatedAt);
-        const normalizedExistingImageUpdatedAt = normalizeUpdatedAt(existingImageUpdatedAt);
-        const normalizedImageUpdatedAt = normalizeUpdatedAt(imageUpdatedAt ?? updatedAt);
-        const normalizedFlagsAppliedAt = normalizeUpdatedAt(flagsAppliedAt);
-        const imageChanged = !!normalizedImageUpdatedAt && normalizedImageUpdatedAt !== normalizedExistingImageUpdatedAt;
-        const updatedChanged = !!normalizedUpdatedAt && normalizedUpdatedAt !== normalizedExistingUpdatedAt;
-        const flagsOnlyAlreadyApplied = updatedChanged
-          && !!normalizedFlagsAppliedAt
-          && normalizedUpdatedAt === normalizedFlagsAppliedAt;
-        if (!imageChanged && (!updatedChanged || flagsOnlyAlreadyApplied)) {
-          continue;
-        }
-        logSync(`Fetching template meta for "${name}"...`, { statusHandler });
-        const metaResponse = await gmRequestWithTimeout(
-          `${templateSyncBaseUrl}/templates/${safeName}`,
-          "json",
-          `Template meta "${name}"`
-        );
-        assertResponseOk(metaResponse, `Template meta "${name}"`);
-        const meta = getResponseData(metaResponse, `Template meta "${name}"`) ?? {};
-        const coords = Array.isArray(meta?.['coords']) ? meta['coords'].map(Number) : null;
-        if (!coords || coords.length !== 4 || coords.some(n => !Number.isFinite(n))) {
-          if (typeof statusHandler === 'function') statusHandler(`Skipped "${name}": invalid coords.`);
-          logSync(`Skipped "${name}": invalid coords.`, { statusHandler });
-          continue;
-        }
-        const metaUpdatedAt = meta?.['updated_at'] ?? null;
-        const metaImageUpdatedAt = meta?.['image_updated_at'] ?? imageUpdatedAt ?? null;
-        const toTop = normalizeFlag(meta?.['to_top'] ?? entryMeta?.['to_top']);
-        const toTopAt = meta?.['to_top_at'] ?? null;
-        const highlighted = normalizeFlag(meta?.['highlighted'] ?? entryMeta?.['highlighted']);
-        const highlightedAt = meta?.['highlighted_at'] ?? null;
-        const metaOrder = normalizeRemoteOrder(meta?.['order']);
-        const order = metaOrder !== null ? metaOrder : listOrder;
-        for (const template of matchingRemoteTemplates) {
-          if (template?.storageKey) {
-            await templateManager.deleteTemplate(template.storageKey);
-          }
-        }
-        logSync(`Fetching template image for "${name}"...`, { statusHandler });
-        const imageResponse = await gmRequestWithTimeout(
-          `${templateSyncBaseUrl}/templates/${safeName}/image`,
-          "blob",
-          `Template image "${name}"`
-        );
-        assertResponseOk(imageResponse, `Template image "${name}"`);
-        const imageBlob = imageResponse.response;
-        if (!imageBlob) {
-          throw new Error(`Template image "${name}" failed: empty blob`);
-        }
-        const file = new File([imageBlob], `${name}.png`, { type: imageBlob?.type || "image/png" });
-        const created = await templateManager.createTemplate(
-          file,
-          name,
-          coords,
-          templateManager.getAnchor(),
-          {
-            remote: true,
-            remoteName: name,
-            remoteCoords: coords,
-            remoteUpdatedAt: updatedAt || metaUpdatedAt,
-            remoteImageUpdatedAt: imageUpdatedAt || metaImageUpdatedAt || updatedAt || metaUpdatedAt,
-            remoteToTop: toTop,
-            remoteToTopAt: toTopAt,
-            remoteHighlighted: highlighted,
-            remoteHighlightedAt: highlightedAt,
-            remoteOrder: order,
-            enabled: preferredTemplate ? existingEnabled : false
-          }
-        );
-        if (created) {
-          if (existingPalette) {
-            Object.entries(existingPalette).forEach(([rgb, metaValue]) => {
-              if (created.colorPalette?.[rgb]) {
-                created.colorPalette[rgb].enabled = !!metaValue?.enabled;
-              }
-            });
-          }
-        }
-        importedCount += 1;
       }
       safeCall(syncToggleList);
       templateManager.createOverlayOnMap();
@@ -682,8 +918,10 @@ export function createTemplateSync({
 
   return {
     checkTemplateUpdates,
+    importTemplateByName,
     startTemplateUpdatePolling,
     resetTemplateUpdateBadge,
+    syncTemplateByName,
     syncTemplatesFromServer
   };
 }

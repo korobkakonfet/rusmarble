@@ -282,5 +282,10 @@
   "bm-icon": "bm-4o",
   "bm-help": "bm-4p",
   "bm-fg": "bm-4q",
-  "bm-bg": "bm-4r"
+  "bm-bg": "bm-4r",
+  "bm-flag-template-window": "bm-5Z",
+  "bm-template-sync-streams": "bm-5U",
+  "bm-remote-template-window": "bm-5F",
+  "bm-archive-badge": "bm-7Q",
+  "bm-link": "bm-90"
 }

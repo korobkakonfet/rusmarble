@@ -46,87 +46,49 @@ export function buildUserSettingsSection({
   return overlay
     .addDetails({'id': 'bm-checkbox-container', 'textContent': 'User Settings', 'style': 'max-width: 100%; white-space: nowrap; border: 1px solid var(--bm-border); padding: 4px; border-radius: 4px; margin-top: 4px;'})
       .addDiv({'id': 'bm-user_setting-list', 'style': 'max-height: 125px; overflow-x: hidden; overflow-y: auto; touch-action: pan-x pan-y; display: flex; flex-direction: column; gap: 4px; margin-top: 3px;'})
-        .addCheckbox({'id': 'bm-only-current-color-enabled', 'textContent': 'Show Current Color Only', 'checked': templateManager.isOnlyCurrentColorShown()}, (instance, label, checkbox) => {
-          checkbox.addEventListener('change', () => {
-            templateManager.setOnlyCurrentColorShown(checkbox.checked);
-            if (checkbox.checked) {
-              instance.handleDisplayStatus("Only the currently selected color will be shown.");
-              callBuildColorFilterList();
-            } else {
-              instance.handleDisplayStatus("Color filter is restored.");
-              callBuildColorFilterList();
+        .addDiv({'className': 'bm-setting-row', 'style': 'align-items: center; gap: 6px;'})
+          .addSpan({'textContent': 'Template Streams:'}).buildElement()
+          .addInput({
+            'id': 'bm-template-sync-streams',
+            'type': 'text',
+            'value': (templateManager.getTemplateSyncStreams?.() ?? ['root']).join(', '),
+            'placeholder': 'root, alpha, beta',
+            'style': 'flex: 1; min-width: 0; padding: 3px 8px; border: 1px solid var(--bm-border-strong, var(--bm-border)); border-radius: 8px; background: var(--bm-subtle-bg, rgba(255,255,255,0.06)); color: var(--bm-fg); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04); font-size: small;'
+          }, (instance, input) => {
+            const persistStreams = async () => {
+              const removedCount = await templateManager.setTemplateSyncStreams(input.value);
+              input.value = (templateManager.getTemplateSyncStreams?.() ?? ['root']).join(', ');
+              const removedSuffix = removedCount > 0
+                ? ` Removed ${removedCount} template${removedCount === 1 ? '' : 's'} from disabled streams.`
+                : '';
+              instance.handleDisplayStatus(`Template streams set to: ${input.value}.${removedSuffix}`);
             };
-            templateManager.createOverlayOnMap();
-            if (templateManager.isErrorMapShown() && templateManager.isErrorMapOnlyEnabledColorsShown()) {
-              forceRefreshTiles();
-            };
-            callBuildColorFilterList();
-          });
-        }).buildElement()
-        .addCheckbox({'id': 'bm-checkbox-colors-unlocked', 'textContent': 'Hide Locked Colors', 'checked': templateManager.areLockedColorsHidden()}, (instance, label, checkbox) => {
-          checkbox.addEventListener('change', () => {
-            templateManager.setHideLockedColors(checkbox.checked);
-            callBuildColorFilterList();
-            templateManager.createOverlayOnMap();
-            if (checkbox.checked) {
-              instance.handleDisplayStatus("Hidden all locked colors.");
-            } else {
-              instance.handleDisplayStatus("Restored all colors.");
-            }
-          });
-        }).buildElement()
-        .addCheckbox({'id': 'bm-checkbox-colors-completed', 'textContent': 'Hide Completed Colors', 'checked': templateManager.areCompletedColorsHidden()}, (instance, label, checkbox) => {
-          checkbox.addEventListener('change', () => {
-            templateManager.setHideCompletedColors(checkbox.checked);
-            callBuildColorFilterList();
-            templateManager.createOverlayOnMap();
-            if (checkbox.checked) {
-              instance.handleDisplayStatus("Hidden all completed colors.");
-            } else {
-              instance.handleDisplayStatus("Restored all colors.");
-            }
-            if (templateManager.isErrorMapShown() && templateManager.isErrorMapOnlyEnabledColorsShown()) {
-              forceRefreshTiles();
-            }
-          });
-        }).buildElement()
-        .addCheckbox({'id': 'bm-template-list-remaining', 'textContent': 'Show Remaining Count', 'checked': templateManager.isTemplateListRemainingEnabled()}, (instance, label, checkbox) => {
-          checkbox.addEventListener('change', () => {
-            templateManager.setTemplateListRemainingEnabled(checkbox.checked);
-            callBuildTemplateFilterList();
-          });
-        }).buildElement()
-        .addCheckbox({'id': 'bm-show-error-map', 'textContent': 'Show Error Map', 'checked': templateManager.isErrorMapShown()}, (instance, label, checkbox) => {
-          checkbox.addEventListener('change', () => {
-            templateManager.setErrorMapShown(checkbox.checked);
-            document.getElementById('bm-show-only-enabled-colors-on-error-map').parentElement.style.display = checkbox.checked ? '' : 'none';
-            if (checkbox.checked) {
-              instance.handleDisplayStatus("Error Map is now Displayed.");
-              apiManager.tileCache = {};
-              forceRefreshTiles();
-            } else {
-              instance.handleDisplayStatus("Error Map is now Hidden.");
-              removeLayer("error");
-            };
-          });
-        }).buildElement()
-        .addCheckbox({'id': 'bm-show-only-enabled-colors-on-error-map', 'textContent': 'Only Enabled Colors on Error Map', 'checked': templateManager.isErrorMapOnlyEnabledColorsShown()}, (instance, label, checkbox) => {
-          label.style.paddingLeft = '1em';
-          if (templateManager.isErrorMapShown()) {
-            label.style.display = '';
-          } else {
-            label.style.display = 'none';
-          }
-          checkbox.addEventListener('change', () => {
-            templateManager.setErrorMapOnlyEnabledColorsShown(checkbox.checked);
-            if (checkbox.checked) {
-              instance.handleDisplayStatus("Error Map now only shows enabled colors.");
-            } else {
-              instance.handleDisplayStatus("Error Map now shows every pixel involved in the template.");
-            };
-            apiManager.tileCache = {};
-            forceRefreshTiles();
-          });
+            input.addEventListener('change', () => {
+              void persistStreams();
+            });
+            input.addEventListener('keydown', (event) => {
+              if (event.key !== 'Enter') return;
+              event.preventDefault();
+              input.blur();
+            });
+          }).buildElement()
+        .buildElement()
+        .addSmall({
+          'style': 'display: block; padding-left: 1.5em; white-space: normal; overflow-wrap: anywhere; line-height: 1.35;'
+        }, (_, small) => {
+          const betaLabel = document.createElement('b');
+          betaLabel.textContent = 'BETA: ';
+          small.appendChild(betaLabel);
+          small.append('stream support is still in beta. Comma or space separated. "root" stays at the top level; other streams appear as folders. Create streams and add templates in ');
+          const botLink = document.createElement('a');
+          botLink.href = 'https://t.me/rusmarble_bot';
+          botLink.textContent = '@rusmarble_bot';
+          botLink.target = '_blank';
+          botLink.rel = 'noopener noreferrer';
+          botLink.style.color = 'var(--bm-link, #8ecbff)';
+          botLink.style.textDecoration = 'underline';
+          small.appendChild(botLink);
+          small.append('.');
         }).buildElement()
         .addDiv({'className': 'bm-setting-row'})
           .addSpan({'textContent': 'Layout Theme:'}).buildElement()
@@ -173,87 +135,6 @@ export function buildUserSettingsSection({
             })
           }).buildElement()
         .buildElement()
-        .addCheckbox({'id': 'bm-event-enabled', 'textContent': 'Enable Event', 'checked': templateManager.isEventEnabled()}, (instance, label, checkbox) => {
-          checkbox.addEventListener('change', () => {
-            templateManager.setEventEnabled(checkbox.checked);
-            if (checkbox.checked) {
-              instance.handleDisplayStatus("Event Mode Enabled.");
-              document.getElementById('bm-contain-eventitem').style.display = '';
-              document.getElementById('bm-event-hide-claimed').parentElement.style.display = '';
-              document.getElementById('bm-event-hide-unavailable').parentElement.style.display = '';
-              apiManager.refreshEventData();
-              callBuildEventList();
-            } else {
-              instance.handleDisplayStatus("Event Mode Disabled.");
-              document.getElementById('bm-contain-eventitem').style.display = 'none';
-              document.getElementById('bm-event-hide-claimed').parentElement.style.display = 'none';
-              document.getElementById('bm-event-hide-unavailable').parentElement.style.display = 'none';
-            }
-          });
-        }).buildElement()
-        .addCheckbox({'id': 'bm-event-hide-claimed', 'textContent': 'Hide Claimed Event Items', 'checked': !templateManager.isEventClaimedShown()}, (instance, label, checkbox) => {
-          label.style.paddingLeft = '1em';
-          if (templateManager.isEventEnabled()) {
-            label.style.display = '';
-          } else {
-            label.style.display = 'none';
-          }
-          checkbox.addEventListener('change', () => {
-            templateManager.setEventClaimedShown(!checkbox.checked);
-            if (checkbox.checked) {
-              instance.handleDisplayStatus("Hidden All Event Claimed Items.");
-            } else {
-              instance.handleDisplayStatus("Restored All Event Claimed Items.");
-            }
-            callBuildEventList();
-          });
-        }).buildElement()
-        .addCheckbox({'id': 'bm-event-hide-unavailable', 'textContent': 'Hide Unavailable Event Items', 'checked': !templateManager.isEventUnavailableShown()}, (instance, label, checkbox) => {
-          label.style.paddingLeft = '1em';
-          if (templateManager.isEventEnabled()) {
-            label.style.display = '';
-          } else {
-            label.style.display = 'none';
-          }
-          checkbox.addEventListener('change', () => {
-            templateManager.setEventUnavailableShown(!checkbox.checked);
-            if (checkbox.checked) {
-              instance.handleDisplayStatus("Hidden All Unavailable Event Items.");
-            } else {
-              instance.handleDisplayStatus("Restored All Unavailable Event Items.");
-            }
-            callBuildEventList();
-          });
-        }).buildElement()
-        .addDiv({'className': 'bm-setting-row'})
-          .addSpan({'textContent': 'Template Display:'}).buildElement()
-          .addSelect({'id': 'bm-template-display'}, (instance, select) => {
-            const currentDisplay = normalizeTemplateDisplay(templateManager.getTemplateDisplayMode());
-            Object.entries(templateDisplayOptions).forEach(([value, label]) => {
-              const option = document.createElement('option');
-              option.value = value;
-              option.textContent = label;
-              if (value === currentDisplay) {
-                option.selected = true;
-              }
-              select.appendChild(option);
-            });
-            select.addEventListener('change', async () => {
-              const nextMode = normalizeTemplateDisplay(select.value);
-              await templateManager.setTemplateDisplayMode(nextMode);
-              if (nextMode === 'dot') {
-                instance.handleDisplayStatus("Switched to the Dot Template Display.");
-              } else if (nextMode === 'fill') {
-                instance.handleDisplayStatus("Switched to the Fill Template Display.");
-              } else if (nextMode.startsWith('cross-z')) {
-                instance.handleDisplayStatus("Switched to the Z-Cross Template Display.");
-              } else {
-                instance.handleDisplayStatus("Switched to the Cross Template Display.");
-              }
-              templateManager.createOverlayOnMap();
-            });
-          }).buildElement()
-        .buildElement()
         .addCheckbox({'id': 'bm-show-zoom-buttons', 'textContent': 'Show Integer Zoom Buttons', 'checked': templateManager.areIntegerZoomButtonsShown()}, (instance, label, checkbox) => {
           checkbox.addEventListener('change', () => {
             templateManager.setIntegerZoomButtonsShown(checkbox.checked);
@@ -295,47 +176,6 @@ export function buildUserSettingsSection({
               setMapCommentsEnabled(enabled);
             }
             instance.handleDisplayStatus(enabled ? "Map comments are now Enabled." : "Map comments are now Disabled.");
-          });
-        }).buildElement()
-        .addCheckbox({'id': 'bm-enable-line-template', 'textContent':  'Shape Templates (Experimental)', 'checked': templateManager.isLineTemplateButtonShown()}, (instance, label, checkbox) => {
-          checkbox.addEventListener('change', () => {
-            templateManager.setLineTemplateButtonEnabled(checkbox.checked);
-            if (checkbox.checked) {
-              apiManager.updateAddLineTemplateButton();
-              apiManager.updateAddCircleTemplateButton();
-              instance.handleDisplayStatus("The Line and Circle Template Buttons are now Shown in Pixel Info.");
-            } else {
-              const btnLineTemplate = document.getElementById('bm-create-line-template');
-              if (btnLineTemplate) {
-                btnLineTemplate.remove();
-              }
-              const btnCircleTemplate = document.getElementById('bm-create-circle-template');
-              if (btnCircleTemplate) {
-                btnCircleTemplate.remove();
-              }
-              instance.handleDisplayStatus("The Line and Circle Template Buttons are now Hidden from Pixel Info.");
-            };
-          });
-        }).buildElement()
-        .addCheckbox({'id': 'bm-ruspixel-flag-enabled', 'textContent': 'Ruspixel Flag in Pixel Info', 'checked': templateManager.isRuspixelFlagEnabled()}, (instance, label, checkbox) => {
-          checkbox.addEventListener('change', () => {
-            templateManager.setRuspixelFlagEnabled(checkbox.checked);
-            apiManager.updatePixelInfoAllianceBackground();
-            if (checkbox.checked) {
-              instance.handleDisplayStatus("Ruspixel flag background enabled for Pixel Info.");
-            } else {
-              instance.handleDisplayStatus("Ruspixel flag background disabled for Pixel Info.");
-            }
-          });
-        }).buildElement()
-        .addCheckbox({'id': 'bm-auto-sync-templates', 'textContent': 'Auto Update Templates', 'checked': templateManager.isTemplateAutoSyncEnabled()}, (instance, label, checkbox) => {
-          checkbox.addEventListener('change', () => {
-            templateManager.setTemplateAutoSyncEnabled(checkbox.checked);
-            if (checkbox.checked) {
-              instance.handleDisplayStatus("Auto update enabled: templates will sync automatically.");
-            } else {
-              instance.handleDisplayStatus("Auto update disabled.");
-            }
           });
         }).buildElement()
         .addCheckbox({'id': 'bm-progress-bar-enabled', 'textContent': 'Show Progress Bar', 'checked': templateManager.isProgressBarEnabled()}, (instance, label, checkbox) => {
@@ -392,6 +232,210 @@ export function buildUserSettingsSection({
                 statusElement.style.display = '';
               }
             }
+          });
+        }).buildElement()
+        .addDiv({'className': 'bm-setting-row'})
+          .addSpan({'textContent': 'Template Display:'}).buildElement()
+          .addSelect({'id': 'bm-template-display'}, (instance, select) => {
+            const currentDisplay = normalizeTemplateDisplay(templateManager.getTemplateDisplayMode());
+            Object.entries(templateDisplayOptions).forEach(([value, label]) => {
+              const option = document.createElement('option');
+              option.value = value;
+              option.textContent = label;
+              if (value === currentDisplay) {
+                option.selected = true;
+              }
+              select.appendChild(option);
+            });
+            select.addEventListener('change', async () => {
+              const nextMode = normalizeTemplateDisplay(select.value);
+              await templateManager.setTemplateDisplayMode(nextMode);
+              if (nextMode === 'dot') {
+                instance.handleDisplayStatus("Switched to the Dot Template Display.");
+              } else if (nextMode === 'fill') {
+                instance.handleDisplayStatus("Switched to the Fill Template Display.");
+              } else if (nextMode.startsWith('cross-z')) {
+                instance.handleDisplayStatus("Switched to the Z-Cross Template Display.");
+              } else {
+                instance.handleDisplayStatus("Switched to the Cross Template Display.");
+              }
+              templateManager.createOverlayOnMap();
+            });
+          }).buildElement()
+        .buildElement()
+        .addCheckbox({'id': 'bm-template-list-remaining', 'textContent': 'Show Remaining Count', 'checked': templateManager.isTemplateListRemainingEnabled()}, (instance, label, checkbox) => {
+          checkbox.addEventListener('change', () => {
+            templateManager.setTemplateListRemainingEnabled(checkbox.checked);
+            callBuildTemplateFilterList();
+          });
+        }).buildElement()
+        .addCheckbox({'id': 'bm-enable-line-template', 'textContent':  'Shape Templates (Experimental)', 'checked': templateManager.isLineTemplateButtonShown()}, (instance, label, checkbox) => {
+          checkbox.addEventListener('change', () => {
+            templateManager.setLineTemplateButtonEnabled(checkbox.checked);
+            if (checkbox.checked) {
+              apiManager.updateAddLineTemplateButton();
+              apiManager.updateAddCircleTemplateButton();
+              instance.handleDisplayStatus("The Line and Circle Template Buttons are now Shown in Pixel Info.");
+            } else {
+              const btnLineTemplate = document.getElementById('bm-create-line-template');
+              if (btnLineTemplate) {
+                btnLineTemplate.remove();
+              }
+              const btnCircleTemplate = document.getElementById('bm-create-circle-template');
+              if (btnCircleTemplate) {
+                btnCircleTemplate.remove();
+              }
+              instance.handleDisplayStatus("The Line and Circle Template Buttons are now Hidden from Pixel Info.");
+            };
+          });
+        }).buildElement()
+        .addCheckbox({'id': 'bm-ruspixel-flag-enabled', 'textContent': 'Ruspixel Flag in Pixel Info', 'checked': templateManager.isRuspixelFlagEnabled()}, (instance, label, checkbox) => {
+          checkbox.addEventListener('change', () => {
+            templateManager.setRuspixelFlagEnabled(checkbox.checked);
+            apiManager.updatePixelInfoAllianceBackground();
+            if (checkbox.checked) {
+              instance.handleDisplayStatus("Ruspixel flag background enabled for Pixel Info.");
+            } else {
+              instance.handleDisplayStatus("Ruspixel flag background disabled for Pixel Info.");
+            }
+          });
+        }).buildElement()
+        .addCheckbox({'id': 'bm-auto-sync-templates', 'textContent': 'Auto Update Templates', 'checked': templateManager.isTemplateAutoSyncEnabled()}, (instance, label, checkbox) => {
+          checkbox.addEventListener('change', () => {
+            templateManager.setTemplateAutoSyncEnabled(checkbox.checked);
+            if (checkbox.checked) {
+              instance.handleDisplayStatus("Auto update enabled: templates will sync automatically.");
+            } else {
+              instance.handleDisplayStatus("Auto update disabled.");
+            }
+          });
+        }).buildElement()
+        .addCheckbox({'id': 'bm-only-current-color-enabled', 'textContent': 'Show Current Color Only', 'checked': templateManager.isOnlyCurrentColorShown()}, (instance, label, checkbox) => {
+          checkbox.addEventListener('change', () => {
+            templateManager.setOnlyCurrentColorShown(checkbox.checked);
+            if (checkbox.checked) {
+              instance.handleDisplayStatus("Only the currently selected color will be shown.");
+              callBuildColorFilterList();
+            } else {
+              instance.handleDisplayStatus("Color filter is restored.");
+              callBuildColorFilterList();
+            };
+            templateManager.createOverlayOnMap();
+            if (templateManager.isErrorMapShown() && templateManager.isErrorMapOnlyEnabledColorsShown()) {
+              forceRefreshTiles();
+            };
+            callBuildColorFilterList();
+          });
+        }).buildElement()
+        .addCheckbox({'id': 'bm-checkbox-colors-unlocked', 'textContent': 'Hide Locked Colors', 'checked': templateManager.areLockedColorsHidden()}, (instance, label, checkbox) => {
+          checkbox.addEventListener('change', () => {
+            templateManager.setHideLockedColors(checkbox.checked);
+            callBuildColorFilterList();
+            templateManager.createOverlayOnMap();
+            if (checkbox.checked) {
+              instance.handleDisplayStatus("Hidden all locked colors.");
+            } else {
+              instance.handleDisplayStatus("Restored all colors.");
+            }
+          });
+        }).buildElement()
+        .addCheckbox({'id': 'bm-checkbox-colors-completed', 'textContent': 'Hide Completed Colors', 'checked': templateManager.areCompletedColorsHidden()}, (instance, label, checkbox) => {
+          checkbox.addEventListener('change', () => {
+            templateManager.setHideCompletedColors(checkbox.checked);
+            callBuildColorFilterList();
+            templateManager.createOverlayOnMap();
+            if (checkbox.checked) {
+              instance.handleDisplayStatus("Hidden all completed colors.");
+            } else {
+              instance.handleDisplayStatus("Restored all colors.");
+            }
+            if (templateManager.isErrorMapShown() && templateManager.isErrorMapOnlyEnabledColorsShown()) {
+              forceRefreshTiles();
+            }
+          });
+        }).buildElement()
+        .addCheckbox({'id': 'bm-show-error-map', 'textContent': 'Show Error Map', 'checked': templateManager.isErrorMapShown()}, (instance, label, checkbox) => {
+          checkbox.addEventListener('change', () => {
+            templateManager.setErrorMapShown(checkbox.checked);
+            document.getElementById('bm-show-only-enabled-colors-on-error-map').parentElement.style.display = checkbox.checked ? '' : 'none';
+            if (checkbox.checked) {
+              instance.handleDisplayStatus("Error Map is now Displayed.");
+              apiManager.tileCache = {};
+              forceRefreshTiles();
+            } else {
+              instance.handleDisplayStatus("Error Map is now Hidden.");
+              removeLayer("error");
+            };
+          });
+        }).buildElement()
+        .addCheckbox({'id': 'bm-show-only-enabled-colors-on-error-map', 'textContent': 'Only Enabled Colors on Error Map', 'checked': templateManager.isErrorMapOnlyEnabledColorsShown()}, (instance, label, checkbox) => {
+          label.style.paddingLeft = '1em';
+          if (templateManager.isErrorMapShown()) {
+            label.style.display = '';
+          } else {
+            label.style.display = 'none';
+          }
+          checkbox.addEventListener('change', () => {
+            templateManager.setErrorMapOnlyEnabledColorsShown(checkbox.checked);
+            if (checkbox.checked) {
+              instance.handleDisplayStatus("Error Map now only shows enabled colors.");
+            } else {
+              instance.handleDisplayStatus("Error Map now shows every pixel involved in the template.");
+            };
+            apiManager.tileCache = {};
+            forceRefreshTiles();
+          });
+        }).buildElement()
+        .addCheckbox({'id': 'bm-event-enabled', 'textContent': 'Enable Event', 'checked': templateManager.isEventEnabled()}, (instance, label, checkbox) => {
+          checkbox.addEventListener('change', () => {
+            templateManager.setEventEnabled(checkbox.checked);
+            if (checkbox.checked) {
+              instance.handleDisplayStatus("Event Mode Enabled.");
+              document.getElementById('bm-contain-eventitem').style.display = '';
+              document.getElementById('bm-event-hide-claimed').parentElement.style.display = '';
+              document.getElementById('bm-event-hide-unavailable').parentElement.style.display = '';
+              apiManager.refreshEventData();
+              callBuildEventList();
+            } else {
+              instance.handleDisplayStatus("Event Mode Disabled.");
+              document.getElementById('bm-contain-eventitem').style.display = 'none';
+              document.getElementById('bm-event-hide-claimed').parentElement.style.display = 'none';
+              document.getElementById('bm-event-hide-unavailable').parentElement.style.display = 'none';
+            }
+          });
+        }).buildElement()
+        .addCheckbox({'id': 'bm-event-hide-claimed', 'textContent': 'Hide Claimed Event Items', 'checked': !templateManager.isEventClaimedShown()}, (instance, label, checkbox) => {
+          label.style.paddingLeft = '1em';
+          if (templateManager.isEventEnabled()) {
+            label.style.display = '';
+          } else {
+            label.style.display = 'none';
+          }
+          checkbox.addEventListener('change', () => {
+            templateManager.setEventClaimedShown(!checkbox.checked);
+            if (checkbox.checked) {
+              instance.handleDisplayStatus("Hidden All Event Claimed Items.");
+            } else {
+              instance.handleDisplayStatus("Restored All Event Claimed Items.");
+            }
+            callBuildEventList();
+          });
+        }).buildElement()
+        .addCheckbox({'id': 'bm-event-hide-unavailable', 'textContent': 'Hide Unavailable Event Items', 'checked': !templateManager.isEventUnavailableShown()}, (instance, label, checkbox) => {
+          label.style.paddingLeft = '1em';
+          if (templateManager.isEventEnabled()) {
+            label.style.display = '';
+          } else {
+            label.style.display = 'none';
+          }
+          checkbox.addEventListener('change', () => {
+            templateManager.setEventUnavailableShown(!checkbox.checked);
+            if (checkbox.checked) {
+              instance.handleDisplayStatus("Hidden All Unavailable Event Items.");
+            } else {
+              instance.handleDisplayStatus("Restored All Unavailable Event Items.");
+            }
+            callBuildEventList();
           });
         }).buildElement()
         .addCheckbox({'id': 'bm-memory-saving-enabled', 'textContent': 'Memory-Saving Mode (Experimental)', 'checked': templateManager.isMemorySavingModeOn()}, (instance, label, checkbox) => {
