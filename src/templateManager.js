@@ -2,7 +2,26 @@
 import { base64ToUint8, numberToEncoded, cleanUpCanvas, rgbToMeta, sortByOptions, testCanvasSize, getCurrentColor, sleep } from "./utils";
 import { themeList, addTemplateCanvas, removeLayer, doAfterMapFound, forceRefreshTiles, coordsGeoCoordsToTileCoords, getMapBounds } from './utilsMaptiler.js';
 
+const DEFAULT_TEMPLATE_SYNC_STREAM = 'root';
 const normalizeFlagValue = (value) => value === true || value === 'true' || value === 1 || value === '1';
+const normalizeTemplateSyncStreamValue = (value) => {
+  const text = String(value ?? '').trim().toLowerCase();
+  return text || DEFAULT_TEMPLATE_SYNC_STREAM;
+};
+const normalizeTemplateSyncStreamsValue = (value) => {
+  const source = Array.isArray(value)
+    ? value
+    : (typeof value === 'string' ? value.split(/[\s,]+/) : []);
+  const streams = [];
+  const seen = new Set();
+  for (const entry of source) {
+    const normalized = normalizeTemplateSyncStreamValue(entry);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    streams.push(normalized);
+  }
+  return streams.length ? streams : [DEFAULT_TEMPLATE_SYNC_STREAM];
+};
 const normalizeTimeArchiveMeta = (value) => {
   if (!value || typeof value !== 'object') return null;
   const source = String(value?.source || '').trim().toLowerCase();
@@ -11,6 +30,7 @@ const normalizeTimeArchiveMeta = (value) => {
   if (!archiveVersion) return null;
   const archiveDate = String(value?.archiveDate || '').trim();
   const archiveBaseUrl = String(value?.archiveBaseUrl || '').trim().replace(/\/+$/, '');
+  const regionName = String(value?.regionName || '').trim();
   const width = Number.isFinite(Number(value?.width))
     ? Math.max(1, Math.trunc(Number(value.width)))
     : null;
@@ -22,6 +42,7 @@ const normalizeTimeArchiveMeta = (value) => {
     archiveVersion,
     archiveDate,
     archiveBaseUrl,
+    regionName,
     width,
     height,
   };
@@ -230,6 +251,8 @@ export default class TemplateManager {
     if (options?.remote) {
       template.isRemote = true;
       template.remoteName = options.remoteName || template.displayName;
+      template.remoteManual = options.remoteManual === true;
+      template.remoteStream = normalizeTemplateSyncStreamValue(options.remoteStream);
       template.remoteUpdatedAt = options.remoteUpdatedAt || null;
       template.remoteImageUpdatedAt = options.remoteImageUpdatedAt || null;
       template.remoteFlagsCheckedAt = options.remoteFlagsCheckedAt || null;
@@ -244,6 +267,8 @@ export default class TemplateManager {
       template.remoteOrder = Number.isFinite(options.remoteOrder) ? options.remoteOrder : null;
       this.templatesJSON.templates[storageKey].remote = true;
       this.templatesJSON.templates[storageKey].remoteName = template.remoteName;
+      this.templatesJSON.templates[storageKey].remoteManual = template.remoteManual;
+      this.templatesJSON.templates[storageKey].remoteStream = template.remoteStream;
       this.templatesJSON.templates[storageKey].remoteUpdatedAt = template.remoteUpdatedAt;
       this.templatesJSON.templates[storageKey].remoteImageUpdatedAt = template.remoteImageUpdatedAt;
       this.templatesJSON.templates[storageKey].remoteFlagsCheckedAt = template.remoteFlagsCheckedAt;
@@ -1115,6 +1140,8 @@ export default class TemplateManager {
             template.enabled = templateValue.enabled ?? true;
             template.isRemote = templateValue.remote === true;
             template.remoteName = templateValue.remoteName ?? null;
+            template.remoteManual = templateValue.remoteManual === true;
+            template.remoteStream = normalizeTemplateSyncStreamValue(templateValue.remoteStream);
             template.remoteUpdatedAt = templateValue.remoteUpdatedAt ?? null;
             template.remoteImageUpdatedAt = templateValue.remoteImageUpdatedAt ?? null;
             template.remoteFlagsCheckedAt = templateValue.remoteFlagsCheckedAt ?? null;
@@ -1454,7 +1481,8 @@ export default class TemplateManager {
    * @since 0.85.17
    */
   setUserSettings(value) {
-    this.userSettings = value;
+    this.userSettings = value || {};
+    this.userSettings.templateSyncStreams = normalizeTemplateSyncStreamsValue(this.userSettings?.templateSyncStreams);
   }
 
   /** A utility to check if hidden colors are set to be hidden.
@@ -2098,6 +2126,62 @@ export default class TemplateManager {
   async setTemplateAutoSyncEnabled(value) {
     this.userSettings.autoSyncTemplates = value;
     await this.storeUserSettings();
+  }
+
+  /** Returns configured remote template streams.
+   * @returns {string[]}
+   */
+  getTemplateSyncStreams() {
+    return normalizeTemplateSyncStreamsValue(this.userSettings?.templateSyncStreams);
+  }
+
+  /** Sets remote template streams.
+   * @param {string[]|string} value
+   */
+  async setTemplateSyncStreams(value) {
+    const nextStreams = normalizeTemplateSyncStreamsValue(value);
+    this.userSettings.templateSyncStreams = nextStreams;
+    await this.storeUserSettings();
+    return await this.pruneRemoteTemplatesByStreams(nextStreams);
+  }
+
+  /** Removes remote templates that belong to streams outside the allowed set.
+   * @param {string[]|string} allowedStreams
+   * @returns {Promise<number>}
+   */
+  async pruneRemoteTemplatesByStreams(allowedStreams) {
+    const allowed = new Set(normalizeTemplateSyncStreamsValue(allowedStreams));
+    const remoteTemplatesToRemove = (this.templatesArray ?? []).filter((template) => {
+      if (!template) return false;
+      const store = this.templatesJSON?.templates?.[template.storageKey] ?? {};
+      const isRemote = template.isRemote === true || store.remote === true;
+      if (!isRemote) return false;
+      const stream = normalizeTemplateSyncStreamValue(template.remoteStream ?? store.remoteStream);
+      return !allowed.has(stream);
+    });
+    if (remoteTemplatesToRemove.length === 0) {
+      this.requestListRebuild();
+      return 0;
+    }
+
+    for (const template of remoteTemplatesToRemove) {
+      const removeIndex = this.templatesArray.indexOf(template);
+      if (removeIndex >= 0) {
+        this.templatesArray.splice(removeIndex, 1);
+      }
+      if (template?.storageKey && this.templatesJSON?.templates?.[template.storageKey]) {
+        delete this.templatesJSON.templates[template.storageKey];
+      }
+      this.clearTileProgress(template);
+      removeLayer(null, template.sortID);
+    }
+
+    await this.storeTemplates();
+    this.requestListRebuild();
+    this.overlay.handleDisplayStatus(
+      `Removed ${remoteTemplatesToRemove.length} remote template${remoteTemplatesToRemove.length === 1 ? '' : 's'} from disabled stream${remoteTemplatesToRemove.length === 1 ? '' : 's'}.`
+    );
+    return remoteTemplatesToRemove.length;
   }
 
   /** Sets the `extraColorsBitmap` to an updated mask, refresh the color filter if changed.

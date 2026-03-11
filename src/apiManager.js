@@ -16,6 +16,77 @@ const EASTER_EGG_WAVE_STAGGER_MS = 90;
 const TEMPLATE_DOWNLOAD_SOURCE_LIVE = 'live';
 const TEMPLATE_DOWNLOAD_SOURCE_ARCHIVE = 'archive';
 const ARCHIVE_TEMPLATE_BASE_URL = 'https://wplace.eralyon.net';
+const ARCHIVE_REGION_PIXEL_BASE_URL = 'https://backend.wplace.live/s0/pixel';
+const TEMPLATE_TILE_SIZE = 1000;
+const MAP_WORLD_WIDTH_PX = 2048 * TEMPLATE_TILE_SIZE;
+
+const buildArchiveCenterCoords = (left, top, width, height) => {
+  if (!Number.isFinite(left) || !Number.isFinite(top) || !Number.isFinite(width) || !Number.isFinite(height)) {
+    return null;
+  }
+  const centerX = ((left + Math.floor((width - 1) / 2)) % MAP_WORLD_WIDTH_PX + MAP_WORLD_WIDTH_PX) % MAP_WORLD_WIDTH_PX;
+  const centerY = top + Math.floor((height - 1) / 2);
+  return {
+    tx: Math.floor(centerX / TEMPLATE_TILE_SIZE),
+    ty: Math.floor(centerY / TEMPLATE_TILE_SIZE),
+    px: centerX % TEMPLATE_TILE_SIZE,
+    py: centerY % TEMPLATE_TILE_SIZE,
+  };
+};
+
+const buildArchiveRegionFallbackLabel = (centerCoords) => {
+  if (!centerCoords) return 'Unknown Region';
+  return `Tile ${centerCoords.tx},${centerCoords.ty} Pixel ${centerCoords.px},${centerCoords.py}`;
+};
+
+const parseArchiveRegionResponse = (response) => {
+  const raw = response?.response ?? response?.responseText;
+  if (raw && typeof raw === 'object') return raw;
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) return {};
+    try {
+      return JSON.parse(trimmed);
+    } catch (_) {
+      return {};
+    }
+  }
+  return {};
+};
+
+const fetchArchiveRegionLabel = async (centerCoords) => {
+  if (!centerCoords) return '';
+  const url = `${ARCHIVE_REGION_PIXEL_BASE_URL}/${encodeURIComponent(centerCoords.tx)}/${encodeURIComponent(centerCoords.ty)}?x=${encodeURIComponent(centerCoords.px)}&y=${encodeURIComponent(centerCoords.py)}`;
+  consoleLog('Archive region request', { url, centerCoords });
+  const data = await new Promise((resolve, reject) => {
+    if (typeof GM_xmlhttpRequest !== 'function') {
+      reject(new Error('GM_xmlhttpRequest is unavailable.'));
+      return;
+    }
+    GM_xmlhttpRequest({
+      method: 'GET',
+      url,
+      responseType: 'json',
+      onload: (response) => {
+        const status = Number(response?.status);
+        const parsed = parseArchiveRegionResponse(response);
+        consoleLog('Archive region response', { url, status, data: parsed });
+        if (status < 200 || status >= 300) {
+          reject(new Error(`Archive region request failed (${status}).`));
+          return;
+        }
+        resolve(parsed);
+      },
+      onerror: (error) => {
+        consoleLog('Archive region request error', { url, error });
+        reject(error);
+      },
+    });
+  });
+  const regionName = String(data?.region?.name || '').trim();
+  const regionNumber = String(data?.region?.number || '').trim();
+  return [regionName, regionNumber].filter(Boolean).join(' ').trim();
+};
 
 export default class ApiManager {
 
@@ -664,10 +735,6 @@ export default class ApiManager {
     clearWave();
     const elements = Array.from(infoRoot.querySelectorAll('*'));
     const targetUserIDs = new Set([EASTER_EGG_USER_ID]);
-    const ownUserID = Number(this.templateManager?.userID);
-    if (Number.isFinite(ownUserID) && ownUserID >= 0) {
-      targetUserIDs.add(ownUserID);
-    }
     const extractTargetUserID = (text) => {
       const match = String(text || '').match(/#\s*(\d{4,})\b/);
       if (!match) return null;
@@ -1133,6 +1200,9 @@ export default class ApiManager {
           const ty2 = Math.floor((top + height - 1) / 1000);
           const tw = tx2 - tx1 + 1;
           const th = ty2 - ty1 + 1;
+          const centerCoords = selectedSource === TEMPLATE_DOWNLOAD_SOURCE_ARCHIVE
+            ? buildArchiveCenterCoords(left, top, width, height)
+            : null;
           progress.max = tw * th;
           progress.value = 0;
           progress.hidden = false;
@@ -1162,6 +1232,14 @@ export default class ApiManager {
               }
             }
             const blob = await resultCanvas.convertToBlob({ type: "image/png" });
+            let archiveRegionLabel = '';
+            if (selectedSource === TEMPLATE_DOWNLOAD_SOURCE_ARCHIVE) {
+              try {
+                archiveRegionLabel = await fetchArchiveRegionLabel(centerCoords);
+              } catch (error) {
+                consoleError('Failed to resolve archive region label', error);
+              }
+            }
             return {
               blob,
               width,
@@ -1173,6 +1251,7 @@ export default class ApiManager {
               source: selectedSource,
               archiveVersion,
               archiveDate,
+              archiveRegionLabel,
             };
           } finally {
             progress.hidden = true;
@@ -1236,15 +1315,36 @@ export default class ApiManager {
             try {
               const snapshot = await buildSnapshot();
               const sourceLabel = snapshot.source === TEMPLATE_DOWNLOAD_SOURCE_ARCHIVE
-                ? `Archive ${snapshot.archiveDate || snapshot.archiveVersion}`
+                ? (snapshot.archiveRegionLabel || buildArchiveRegionFallbackLabel(
+                  buildArchiveCenterCoords(
+                    snapshot.tx1 * TEMPLATE_TILE_SIZE + snapshot.px1,
+                    snapshot.ty1 * TEMPLATE_TILE_SIZE + snapshot.py1,
+                    snapshot.width,
+                    snapshot.height
+                  )
+                ))
                 : 'Live Snapshot';
               const fileName = `${sourceLabel.replace(/[^a-z0-9._-]+/gi, '_')}_${snapshot.tx1}_${snapshot.ty1}_${snapshot.px1}_${snapshot.py1}.png`;
               const file = new File([snapshot.blob], fileName, { type: 'image/png' });
+              const createOptions = snapshot.source === TEMPLATE_DOWNLOAD_SOURCE_ARCHIVE
+                ? {
+                  timeArchiveMeta: {
+                    source: 'time-archive',
+                    archiveBaseUrl,
+                    archiveVersion: snapshot.archiveVersion,
+                    archiveDate: snapshot.archiveDate,
+                    regionName: sourceLabel,
+                    width: snapshot.width,
+                    height: snapshot.height,
+                  }
+                }
+                : undefined;
               await that.templateManager.createTemplate(
                 file,
                 sourceLabel,
                 [snapshot.tx1, snapshot.ty1, snapshot.px1, snapshot.py1],
-                'lt'
+                'lt',
+                createOptions
               );
             } catch (error) {
               alert(`Template creation failed!`);

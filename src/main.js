@@ -10,6 +10,8 @@ import { convertImageDataToWplacePalette, normalizeTemplatePaletteConversionOpti
 import { buildUserSettingsSection } from './userSettings.js';
 import { createTemplateSync, normalizeRemoteOrder } from './templateSync.js';
 import { createMapCommentManager } from './mapComments.js';
+import { createTemplateCreationUi } from './templateCreationUi.js';
+import { createArchiveTemplateUi } from './archiveTemplateUi.js';
 import { consoleLog, consoleWarn, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile } from './utils.js';
 import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getCurrentTileSize} from './utilsMaptiler.js';
 // import { getCenterGeoCoords, addTemplate } from './utilsMaptiler.js';
@@ -114,12 +116,28 @@ const TEMPLATE_TEXT_WEB_FONT_HREF = 'https://fonts.googleapis.com/css2?family=Pr
 const TEMPLATE_PALETTE_PREVIEW_MAX_DIMENSION = 240;
 const TEMPLATE_PRE_SCAN_MAX_PIXELS = 200000;
 const TEMPLATE_CREATE_MODE_IMAGE = 'image';
+const TEMPLATE_CREATE_MODE_REMOTE_NAME = 'remote-name';
 const TEMPLATE_CREATE_MODE_TEXT = 'text';
+const TEMPLATE_CREATE_MODE_RUSSIAN_FLAG = 'russian-flag';
 const TEMPLATE_CREATE_MODE_TIME_ARCHIVE = 'time-archive';
 const TEMPLATE_ARCHIVE_BASE_URL = 'https://wplace.eralyon.net';
 const TEMPLATE_ARCHIVE_PREVIEW_MAX_DIMENSION = 360;
 const TEMPLATE_ARCHIVE_PREVIEW_MAX_TILE_REQUESTS = 256;
-const TEMPLATE_ARCHIVE_PREVIEW_DOWNLOAD_CONCURRENCY = 8;
+const TEMPLATE_ARCHIVE_PREVIEW_DOWNLOAD_CONCURRENCY = 10;
+const TEMPLATE_FLAG_WINDOW_DEFAULT_W = 460;
+const TEMPLATE_FLAG_WINDOW_DEFAULT_H = 520;
+const TEMPLATE_FLAG_WINDOW_MIN_W = 340;
+const TEMPLATE_FLAG_WINDOW_MIN_H = 380;
+const TEMPLATE_FLAG_DIMENSION_MIN = 3;
+const TEMPLATE_FLAG_DIMENSION_MAX = 3000;
+const TEMPLATE_FLAG_DEFAULT_W = 300;
+const TEMPLATE_FLAG_DEFAULT_H = 200;
+const TEMPLATE_FLAG_IGNORE_BACKGROUND_COLOR_COUNT = 4;
+const TEMPLATE_FLAG_IGNORE_MAX_TILE_REQUESTS = 64;
+const TEMPLATE_FLAG_ORIENTATION_HORIZONTAL = 'horizontal';
+const TEMPLATE_FLAG_ORIENTATION_VERTICAL = 'vertical';
+const TEMPLATE_FLAG_VERTICAL_ORDER_FIRST_LEFT = 'first-left';
+const TEMPLATE_FLAG_VERTICAL_ORDER_FIRST_RIGHT = 'first-right';
 
 const templateTextPaletteOptions = (() => {
   const options = [];
@@ -394,6 +412,217 @@ const rgbToCss = (rgb) => {
   const channels = Array.isArray(rgb) ? rgb : [0, 0, 0];
   return `rgb(${channels[0]}, ${channels[1]}, ${channels[2]})`;
 };
+const getTemplatePaletteOptionByName = (name) => {
+  const target = String(name || '').trim().toLowerCase();
+  if (!target) return null;
+  for (const option of templateTextPaletteOptions) {
+    if (String(option?.name || '').trim().toLowerCase() === target) {
+      return option;
+    }
+  }
+  return null;
+};
+const resolveTemplatePaletteOptionByName = (name, fallbackRgb = [0, 0, 0], fallbackName = '') => {
+  const option = getTemplatePaletteOptionByName(name);
+  if (option?.key && Array.isArray(option.rgb)) {
+    return {
+      key: option.key,
+      rgb: option.rgb.slice(0, 3),
+      name: option.name || name,
+    };
+  }
+  const rgb = Array.isArray(fallbackRgb) && fallbackRgb.length >= 3
+    ? fallbackRgb.slice(0, 3).map((value) => Math.max(0, Math.min(255, Math.round(Number(value) || 0))))
+    : [0, 0, 0];
+  const key = rgbToKey(rgb);
+  return {
+    key,
+    rgb,
+    name: String(fallbackName || name || key || 'Color'),
+  };
+};
+const resolveTemplatePaletteNameByKey = (key) => {
+  const normalizedKey = String(key || '').trim();
+  if (!normalizedKey) return '';
+  const fromTextPalette = templateTextPaletteMap.get(normalizedKey);
+  if (fromTextPalette?.name) return fromTextPalette.name;
+  const fromMeta = rgbToMeta.get(normalizedKey);
+  if (fromMeta?.name) return String(fromMeta.name);
+  return normalizedKey;
+};
+const normalizeTemplatePaletteKey = (value) => {
+  const key = String(value || '').trim();
+  if (!key) return '';
+  if (templateTextPaletteMap.has(key)) return key;
+  const match = key.match(/^\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*$/);
+  if (!match) return '';
+  const rgb = match
+    .slice(1)
+    .map((channel) => Math.max(0, Math.min(255, Math.round(Number(channel) || 0))));
+  return rgbToKey(rgb);
+};
+const templateFlagStyleTricolor = {
+  key: 'tricolor',
+  name: 'Russian Tricolor',
+  stripes: [
+    resolveTemplatePaletteOptionByName('White', [255, 255, 255], 'White'),
+    resolveTemplatePaletteOptionByName('Dark Blue', [40, 80, 158], 'Dark Blue'),
+    resolveTemplatePaletteOptionByName('Red', [237, 28, 36], 'Red'),
+  ],
+};
+const templateFlagStyleImperial = {
+  key: 'imperial',
+  name: 'Russian Imperial',
+  stripes: [
+    resolveTemplatePaletteOptionByName('Black', [0, 0, 0], 'Black'),
+    resolveTemplatePaletteOptionByName('Yellow', [249, 221, 59], 'Yellow'),
+    resolveTemplatePaletteOptionByName('White', [255, 255, 255], 'White'),
+  ],
+};
+const templateRussianFlagStyles = [
+  templateFlagStyleTricolor,
+  templateFlagStyleImperial,
+];
+const templateRussianFlagStyleMap = new Map(templateRussianFlagStyles.map((entry) => [entry.key, entry]));
+const TEMPLATE_RUSSIAN_FLAG_DEFAULT_PROTECTED_KEYS = (() => {
+  const defaultColorNames = ['Yellow', 'Blue', 'Dark Blue'];
+  const keys = [];
+  const seen = new Set();
+  for (const colorName of defaultColorNames) {
+    const option = resolveTemplatePaletteOptionByName(colorName, [0, 0, 0], colorName);
+    if (!option?.key || seen.has(option.key)) continue;
+    seen.add(option.key);
+    keys.push(option.key);
+  }
+  return keys;
+})();
+const normalizeRussianFlagStyleKey = (value) => {
+  const key = String(value || '').trim().toLowerCase();
+  return templateRussianFlagStyleMap.has(key)
+    ? key
+    : templateFlagStyleTricolor.key;
+};
+const getRussianFlagStyle = (value) => {
+  const key = normalizeRussianFlagStyleKey(value);
+  return templateRussianFlagStyleMap.get(key) || templateFlagStyleTricolor;
+};
+const getFlagDefaultStripeColorKeys = (styleKey) => {
+  const style = getRussianFlagStyle(styleKey);
+  const fallbackKey = templateTextPaletteOptions[0]?.key || '0,0,0';
+  return [0, 1, 2].map((index) => {
+    const stripe = style?.stripes?.[index];
+    const fromKey = normalizeTemplatePaletteKey(stripe?.key);
+    if (fromKey && templateTextPaletteMap.has(fromKey)) return fromKey;
+    const fromRgb = normalizeTemplatePaletteKey(rgbToKey(stripe?.rgb || []));
+    if (fromRgb && templateTextPaletteMap.has(fromRgb)) return fromRgb;
+    return fallbackKey;
+  });
+};
+const normalizeFlagStripeColorKeys = (keys, styleKey) => {
+  const defaults = getFlagDefaultStripeColorKeys(styleKey);
+  return [0, 1, 2].map((index) => {
+    const candidate = normalizeTemplatePaletteKey(Array.isArray(keys) ? keys[index] : '');
+    if (candidate && templateTextPaletteMap.has(candidate)) return candidate;
+    return defaults[index];
+  });
+};
+const normalizeFlagStripeOrientation = (value) => {
+  const mode = String(value || '').trim().toLowerCase();
+  return mode === TEMPLATE_FLAG_ORIENTATION_VERTICAL
+    ? TEMPLATE_FLAG_ORIENTATION_VERTICAL
+    : TEMPLATE_FLAG_ORIENTATION_HORIZONTAL;
+};
+const normalizeFlagVerticalOrder = (value) => {
+  const mode = String(value || '').trim().toLowerCase();
+  return mode === TEMPLATE_FLAG_VERTICAL_ORDER_FIRST_RIGHT
+    ? TEMPLATE_FLAG_VERTICAL_ORDER_FIRST_RIGHT
+    : TEMPLATE_FLAG_VERTICAL_ORDER_FIRST_LEFT;
+};
+const normalizeFlagTemplateDimension = (value, fallback) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(
+    TEMPLATE_FLAG_DIMENSION_MIN,
+    Math.min(TEMPLATE_FLAG_DIMENSION_MAX, Math.round(numeric))
+  );
+};
+const normalizeFlagPointCoords = (value) => {
+  if (!value || typeof value !== 'object') return null;
+  const tx = Number(value?.tx);
+  const ty = Number(value?.ty);
+  const px = Number(value?.px);
+  const py = Number(value?.py);
+  if (![tx, ty, px, py].every(Number.isFinite)) return null;
+  return {
+    tx: normalizePreviewTileX(tx),
+    ty: Math.trunc(ty),
+    px: normalizePreviewTilePixel(px),
+    py: normalizePreviewTilePixel(py),
+  };
+};
+const flagPointCoordsToArray = (point) => {
+  const normalized = normalizeFlagPointCoords(point);
+  if (!normalized) return null;
+  return [normalized.tx, normalized.ty, normalized.px, normalized.py];
+};
+const worldPointToFlagCoords = (worldX, worldY) => {
+  const wrappedX = ((Math.trunc(worldX) % MAP_WORLD_WIDTH_PX) + MAP_WORLD_WIDTH_PX) % MAP_WORLD_WIDTH_PX;
+  const safeY = Math.trunc(worldY);
+  const tx = Math.floor(wrappedX / TEMPLATE_TILE_SIZE);
+  const ty = Math.floor(safeY / TEMPLATE_TILE_SIZE);
+  const px = wrappedX % TEMPLATE_TILE_SIZE;
+  const py = ((safeY % TEMPLATE_TILE_SIZE) + TEMPLATE_TILE_SIZE) % TEMPLATE_TILE_SIZE;
+  return { tx, ty, px, py };
+};
+const computeFlagTemplateRectFromPoints = (startCoords, endCoords) => {
+  const start = flagPointCoordsToArray(startCoords);
+  const end = flagPointCoordsToArray(endCoords);
+  if (!start || !end) return null;
+  const [[left, top], [width, height]] = calculateTopLeftAndSize(
+    [[start[0], start[1]], [start[2], start[3]]],
+    [[end[0], end[1]], [end[2], end[3]]]
+  );
+  const safeWidth = Math.max(1, Math.trunc(width));
+  const safeHeight = Math.max(1, Math.trunc(height));
+  const topLeft = worldPointToFlagCoords(left, top);
+  const bottomRight = worldPointToFlagCoords(left + safeWidth - 1, top + safeHeight - 1);
+  return {
+    topLeft,
+    bottomRight,
+    width: safeWidth,
+    height: safeHeight,
+  };
+};
+const computeFlagTemplateEndFromStartAndSize = (startCoords, width, height) => {
+  const start = normalizeFlagPointCoords(startCoords);
+  if (!start) return null;
+  const safeWidth = Math.max(1, Math.trunc(Number(width) || 0));
+  const safeHeight = Math.max(1, Math.trunc(Number(height) || 0));
+  const worldX = start.tx * TEMPLATE_TILE_SIZE + start.px;
+  const worldY = start.ty * TEMPLATE_TILE_SIZE + start.py;
+  return worldPointToFlagCoords(worldX + safeWidth - 1, worldY + safeHeight - 1);
+};
+const parseFourCoordsFromAnyText = (text) => {
+  const value = String(text ?? '');
+  const matches = value.match(/-?\d+/g);
+  if (!Array.isArray(matches) || matches.length < 4) return null;
+  const numbers = matches.slice(0, 4).map((entry) => Number(entry));
+  if (!numbers.every(Number.isFinite)) return null;
+  return {
+    tx: numbers[0],
+    ty: numbers[1],
+    px: numbers[2],
+    py: numbers[3],
+  };
+};
+const buildRussianFlagTemplateName = ({ styleKey, width, height, stripeOrientation } = {}) => {
+  const style = getRussianFlagStyle(styleKey);
+  const safeWidth = normalizeFlagTemplateDimension(width, TEMPLATE_FLAG_DEFAULT_W);
+  const safeHeight = normalizeFlagTemplateDimension(height, TEMPLATE_FLAG_DEFAULT_H);
+  const orientation = normalizeFlagStripeOrientation(stripeOrientation);
+  const orientationLabel = orientation === TEMPLATE_FLAG_ORIENTATION_VERTICAL ? 'vertical' : 'horizontal';
+  return `${style.name} (${orientationLabel}) ${safeWidth}x${safeHeight}`;
+};
 
 const getCurrentTemplateTextColor = () => {
   const currentColorId = getCurrentColor();
@@ -582,6 +811,223 @@ const loadPreviewTileImage = async (tileX, tileY) => {
   templatePreviewTileImageCache.set(cacheKey, loadPromise);
   return loadPromise;
 };
+const normalizeFlagTemplateTopLeftCoords = (value) => normalizeFlagPointCoords(value);
+const loadLiveRegionImageDataForFlagMask = async ({
+  topLeftCoords = null,
+  width = TEMPLATE_FLAG_DEFAULT_W,
+  height = TEMPLATE_FLAG_DEFAULT_H,
+} = {}) => {
+  const normalizedCoords = normalizeFlagTemplateTopLeftCoords(topLeftCoords);
+  if (!normalizedCoords) {
+    throw new Error('Valid top-left coordinates are required.');
+  }
+  const safeWidth = normalizeFlagTemplateDimension(width, TEMPLATE_FLAG_DEFAULT_W);
+  const safeHeight = normalizeFlagTemplateDimension(height, TEMPLATE_FLAG_DEFAULT_H);
+  const startWorldX = normalizedCoords.tx * TEMPLATE_TILE_SIZE + normalizedCoords.px;
+  const startWorldY = normalizedCoords.ty * TEMPLATE_TILE_SIZE + normalizedCoords.py;
+  const endWorldX = startWorldX + safeWidth - 1;
+  const endWorldY = startWorldY + safeHeight - 1;
+  const txMin = Math.floor(startWorldX / TEMPLATE_TILE_SIZE);
+  const tyMin = Math.floor(startWorldY / TEMPLATE_TILE_SIZE);
+  const txMax = Math.floor(endWorldX / TEMPLATE_TILE_SIZE);
+  const tyMax = Math.floor(endWorldY / TEMPLATE_TILE_SIZE);
+  const tileCount = Math.max(0, (txMax - txMin + 1) * (tyMax - tyMin + 1));
+  if (tileCount <= 0) {
+    throw new Error('The selected area does not intersect any tiles.');
+  }
+  if (tileCount > TEMPLATE_FLAG_IGNORE_MAX_TILE_REQUESTS) {
+    throw new Error(
+      `Ignore-arts area is too large (${tileCount} tiles). Limit: ${TEMPLATE_FLAG_IGNORE_MAX_TILE_REQUESTS} tiles.`
+    );
+  }
+
+  let regionCanvas = new OffscreenCanvas(safeWidth, safeHeight);
+  const regionContext = regionCanvas.getContext('2d', { willReadFrequently: true });
+  if (!regionContext) {
+    cleanUpCanvas(regionCanvas);
+    regionCanvas = null;
+    throw new Error('Could not initialize the map sampling canvas.');
+  }
+  regionContext.imageSmoothingEnabled = false;
+  regionContext.clearRect(0, 0, safeWidth, safeHeight);
+
+  const tileTasks = [];
+  for (let ty = tyMin; ty <= tyMax; ty++) {
+    for (let tx = txMin; tx <= txMax; tx++) {
+      tileTasks.push((async () => {
+        try {
+          const image = await loadPreviewTileImage(tx, ty);
+          return { tx, ty, image };
+        } catch (_) {
+          return { tx, ty, image: null };
+        }
+      })());
+    }
+  }
+  const tileResults = await Promise.all(tileTasks);
+  const failedTiles = tileResults.filter((entry) => !entry?.image);
+  if (failedTiles.length > 0) {
+    cleanUpCanvas(regionCanvas);
+    regionCanvas = null;
+    throw new Error('Could not load map tiles for ignore-arts masking. Try another position/size.');
+  }
+
+  const cropLeft = startWorldX;
+  const cropTop = startWorldY;
+  const cropRight = startWorldX + safeWidth;
+  const cropBottom = startWorldY + safeHeight;
+  for (const { tx, ty, image } of tileResults) {
+    if (!image) continue;
+    const tileLeft = tx * TEMPLATE_TILE_SIZE;
+    const tileTop = ty * TEMPLATE_TILE_SIZE;
+    const intersectLeft = Math.max(cropLeft, tileLeft);
+    const intersectTop = Math.max(cropTop, tileTop);
+    const intersectRight = Math.min(cropRight, tileLeft + TEMPLATE_TILE_SIZE);
+    const intersectBottom = Math.min(cropBottom, tileTop + TEMPLATE_TILE_SIZE);
+    const intersectWidth = intersectRight - intersectLeft;
+    const intersectHeight = intersectBottom - intersectTop;
+    if (intersectWidth <= 0 || intersectHeight <= 0) continue;
+    const srcX = intersectLeft - tileLeft;
+    const srcY = intersectTop - tileTop;
+    const dstX = intersectLeft - cropLeft;
+    const dstY = intersectTop - cropTop;
+    regionContext.drawImage(
+      image,
+      srcX,
+      srcY,
+      intersectWidth,
+      intersectHeight,
+      dstX,
+      dstY,
+      intersectWidth,
+      intersectHeight
+    );
+  }
+
+  const imageData = regionContext.getImageData(0, 0, safeWidth, safeHeight);
+  const colorCounts = new Map();
+  const sample = imageData.data;
+  for (let i = 0; i < sample.length; i += 4) {
+    if (sample[i + 3] < 1) continue;
+    const key = `${sample[i]},${sample[i + 1]},${sample[i + 2]}`;
+    colorCounts.set(key, (colorCounts.get(key) || 0) + 1);
+  }
+  cleanUpCanvas(regionCanvas);
+  regionCanvas = null;
+  const sortedColorCounts = [...colorCounts.entries()].sort((a, b) => b[1] - a[1]);
+  return {
+    imageData,
+    tileCount,
+    sortedColorCounts,
+  };
+};
+const buildRussianFlagTemplateImageData = ({
+  styleKey = templateFlagStyleTricolor.key,
+  width = TEMPLATE_FLAG_DEFAULT_W,
+  height = TEMPLATE_FLAG_DEFAULT_H,
+  stripeOrientation = TEMPLATE_FLAG_ORIENTATION_HORIZONTAL,
+  verticalOrder = TEMPLATE_FLAG_VERTICAL_ORDER_FIRST_LEFT,
+  stripeColorKeys = null,
+  ignoreArts = false,
+  ignoreProtectedColorKeys = [],
+  mapRegion = null,
+} = {}) => {
+  const style = getRussianFlagStyle(styleKey);
+  const safeWidth = normalizeFlagTemplateDimension(width, TEMPLATE_FLAG_DEFAULT_W);
+  const safeHeight = normalizeFlagTemplateDimension(height, TEMPLATE_FLAG_DEFAULT_H);
+  const orientation = normalizeFlagStripeOrientation(stripeOrientation);
+  const normalizedVerticalOrder = normalizeFlagVerticalOrder(verticalOrder);
+  const normalizedStripeColorKeys = normalizeFlagStripeColorKeys(stripeColorKeys, style.key);
+  const data = new Uint8ClampedArray(safeWidth * safeHeight * 4);
+  const stripeColors = normalizedStripeColorKeys.map((key, index) => {
+    const option = templateTextPaletteMap.get(key);
+    const styleStripe = style?.stripes?.[index];
+    const fallbackRgb = Array.isArray(styleStripe?.rgb) ? styleStripe.rgb.slice(0, 3) : [0, 0, 0];
+    return {
+      key,
+      rgb: Array.isArray(option?.rgb) ? option.rgb.slice(0, 3) : fallbackRgb,
+    };
+  });
+  for (let y = 0; y < safeHeight; y++) {
+    const rowOffset = y * safeWidth * 4;
+    for (let x = 0; x < safeWidth; x++) {
+      const baseVerticalIndex = Math.min(2, Math.floor((x * 3) / safeWidth));
+      const stripeIndex = orientation === TEMPLATE_FLAG_ORIENTATION_VERTICAL
+        ? (
+          normalizedVerticalOrder === TEMPLATE_FLAG_VERTICAL_ORDER_FIRST_RIGHT
+            ? 2 - baseVerticalIndex
+            : baseVerticalIndex
+        )
+        : Math.min(2, Math.floor((y * 3) / safeHeight));
+      const stripe = stripeColors[stripeIndex] || stripeColors[0] || { rgb: [0, 0, 0] };
+      const r = stripe.rgb[0] ?? 0;
+      const g = stripe.rgb[1] ?? 0;
+      const b = stripe.rgb[2] ?? 0;
+      const base = rowOffset + x * 4;
+      data[base] = r;
+      data[base + 1] = g;
+      data[base + 2] = b;
+      data[base + 3] = 255;
+    }
+  }
+
+  let ignoredPixelCount = 0;
+  let backgroundEntries = [];
+  if (ignoreArts) {
+    const mapPixels = mapRegion?.imageData?.data;
+    if (!(mapPixels instanceof Uint8ClampedArray) || mapPixels.length !== data.length) {
+      throw new Error('Ignore-arts map data is unavailable. Try previewing again.');
+    }
+    const sortedColorCounts = Array.isArray(mapRegion?.sortedColorCounts) ? mapRegion.sortedColorCounts : [];
+    backgroundEntries = sortedColorCounts.slice(0, TEMPLATE_FLAG_IGNORE_BACKGROUND_COLOR_COUNT);
+    const backgroundKeys = new Set(backgroundEntries.map(([key]) => normalizeTemplatePaletteKey(key)).filter(Boolean));
+    const stripeColorKeysSet = new Set(normalizedStripeColorKeys.filter(Boolean));
+    const protectedKeys = new Set(
+      (Array.isArray(ignoreProtectedColorKeys) ? ignoreProtectedColorKeys.map(normalizeTemplatePaletteKey) : [])
+        .filter(Boolean)
+    );
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] < 1) continue;
+      const mapKey = normalizeTemplatePaletteKey(`${mapPixels[i]},${mapPixels[i + 1]},${mapPixels[i + 2]}`);
+      const pixelIndex = i >> 2;
+      const y = Math.floor(pixelIndex / safeWidth);
+      const x = pixelIndex - y * safeWidth;
+      const baseVerticalIndex = Math.min(2, Math.floor((x * 3) / safeWidth));
+      const stripeIndex = orientation === TEMPLATE_FLAG_ORIENTATION_VERTICAL
+        ? (
+          normalizedVerticalOrder === TEMPLATE_FLAG_VERTICAL_ORDER_FIRST_RIGHT
+            ? 2 - baseVerticalIndex
+            : baseVerticalIndex
+        )
+        : Math.min(2, Math.floor((y * 3) / safeHeight));
+      const expectedStripeKey = normalizedStripeColorKeys[stripeIndex] || '';
+      if (mapKey === expectedStripeKey) continue;
+
+      // Keep stripe colors only on their corresponding stripe; wrong stripe is ignored.
+      if (stripeColorKeysSet.has(mapKey)) {
+        data[i + 3] = 0;
+        ignoredPixelCount++;
+        continue;
+      }
+      if (!mapKey || backgroundKeys.has(mapKey)) continue;
+      if (protectedKeys.has(mapKey)) continue;
+      data[i + 3] = 0;
+      ignoredPixelCount++;
+    }
+  }
+
+  return {
+    imageData: new ImageData(data, safeWidth, safeHeight),
+    style,
+    orientation,
+    verticalOrder: normalizedVerticalOrder,
+    stripeColorKeys: normalizedStripeColorKeys,
+    width: safeWidth,
+    height: safeHeight,
+    ignoredPixelCount,
+    backgroundEntries,
+  };
+};
 
 const applyOverlayVarsToFloatingElement = (element) => {
   const overlayRoot = document.getElementById('bm-overlay');
@@ -597,7 +1043,9 @@ const applyOverlayVarsToFloatingElement = (element) => {
 };
 const normalizeTemplateCreateMode = (value) => {
   const mode = String(value || '').trim().toLowerCase();
+  if (mode === TEMPLATE_CREATE_MODE_REMOTE_NAME) return TEMPLATE_CREATE_MODE_REMOTE_NAME;
   if (mode === TEMPLATE_CREATE_MODE_TEXT) return TEMPLATE_CREATE_MODE_TEXT;
+  if (mode === TEMPLATE_CREATE_MODE_RUSSIAN_FLAG) return TEMPLATE_CREATE_MODE_RUSSIAN_FLAG;
   if (mode === TEMPLATE_CREATE_MODE_TIME_ARCHIVE) return TEMPLATE_CREATE_MODE_TIME_ARCHIVE;
   return TEMPLATE_CREATE_MODE_IMAGE;
 };
@@ -614,6 +1062,7 @@ const normalizeTimeArchiveMeta = (value) => {
   if (!archiveVersion) return null;
   const archiveDate = String(value?.archiveDate || '').trim();
   const archiveBaseUrl = normalizeArchiveTemplateBaseUrl(value?.archiveBaseUrl || TEMPLATE_ARCHIVE_BASE_URL);
+  const regionName = String(value?.regionName || '').trim();
   const width = Number.isFinite(Number(value?.width)) ? Math.max(1, Math.trunc(Number(value.width))) : null;
   const height = Number.isFinite(Number(value?.height)) ? Math.max(1, Math.trunc(Number(value.height))) : null;
   return {
@@ -621,6 +1070,7 @@ const normalizeTimeArchiveMeta = (value) => {
     archiveVersion,
     archiveDate,
     archiveBaseUrl,
+    regionName,
     width,
     height,
   };
@@ -662,1983 +1112,12 @@ const resolveTemplateArchiveBounds = (template) => {
   if (!bottomRight) return null;
   return { topLeft, bottomRight, width, height };
 };
-const archiveTemplateVersionCache = new Map();
-const archiveTemplatePointCaptureState = {
-  active: false,
-  points: [],
-  overlayInstance: null,
-  lastCoordsKey: '',
-  lastCoordsAt: 0,
-};
-let archiveTemplateWindowSession = null;
-const ARCHIVE_TEMPLATE_CAPTURE_HINT_ID = 'bm-archive-template-capture-hint';
-
-const fetchArchiveTemplateVersions = async (rawBaseUrl = TEMPLATE_ARCHIVE_BASE_URL, force = false) => {
-  const baseUrl = normalizeArchiveTemplateBaseUrl(rawBaseUrl);
-  if (!force && archiveTemplateVersionCache.has(baseUrl)) {
-    return archiveTemplateVersionCache.get(baseUrl);
-  }
-  const response = await gmRequest(`${baseUrl}/`, 'text');
-  const status = Number(response?.status);
-  if (status < 200 || status >= 300) {
-    throw new Error(`Archive index request failed (${status}).`);
-  }
-  const html = String(response?.responseText || response?.response || '');
-  const listMatch = html.match(/const\s+WPLACE_VERSIONS\s*=\s*\[([\s\S]*?)\];/);
-  if (!listMatch) {
-    throw new Error('Archive version list was not found.');
-  }
-  const versions = [];
-  const entryRegex = /\{[^{}]*version:\s*['"]([^'"]+)['"][^{}]*date:\s*['"]([^'"]*)['"][^{}]*\}/g;
-  let match;
-  while ((match = entryRegex.exec(listMatch[1])) !== null) {
-    const version = String(match[1] || '').trim();
-    const date = String(match[2] || '').trim();
-    if (!version) continue;
-    versions.push({ version, date });
-  }
-  if (!versions.length) {
-    throw new Error('Archive version list is empty.');
-  }
-  archiveTemplateVersionCache.set(baseUrl, versions);
-  return versions;
-};
-
-const buildArchiveTemplateRectFromPoints = (pointA, pointB) => {
-  const first = normalizeTilePixelCoords(pointA);
-  const second = normalizeTilePixelCoords(pointB);
-  if (!first || !second) return null;
-  const [[left, top], [width, height]] = calculateTopLeftAndSize(
-    [[first[0], first[1]], [first[2], first[3]]],
-    [[second[0], second[1]], [second[2], second[3]]]
-  );
-  const tx1 = Math.floor(left / TEMPLATE_TILE_SIZE);
-  const ty1 = Math.floor(top / TEMPLATE_TILE_SIZE);
-  const px1 = left % TEMPLATE_TILE_SIZE;
-  const py1 = top % TEMPLATE_TILE_SIZE;
-  const maxX = left + width - 1;
-  const maxY = top + height - 1;
-  const tx2 = Math.floor(maxX / TEMPLATE_TILE_SIZE);
-  const ty2 = Math.floor(maxY / TEMPLATE_TILE_SIZE);
-  const tileWidth = tx2 - tx1 + 1;
-  const tileHeight = ty2 - ty1 + 1;
-  const safeMaxX = ((maxX % MAP_WORLD_WIDTH_PX) + MAP_WORLD_WIDTH_PX) % MAP_WORLD_WIDTH_PX;
-  const displayTx2 = Math.floor(safeMaxX / TEMPLATE_TILE_SIZE);
-  const displayPx2 = safeMaxX % TEMPLATE_TILE_SIZE;
-  const displayPy2 = ((maxY % TEMPLATE_TILE_SIZE) + TEMPLATE_TILE_SIZE) % TEMPLATE_TILE_SIZE;
-  return {
-    left,
-    top,
-    width,
-    height,
-    tx1,
-    ty1,
-    px1,
-    py1,
-    tx2,
-    ty2,
-    tileWidth,
-    tileHeight,
-    tileCount: tileWidth * tileHeight,
-    displayBottomRight: [displayTx2, ty2, displayPx2, displayPy2],
-  };
-};
-
-const iterateArchiveTemplateTiles = async (rect, options = {}) => {
-  const archiveVersion = String(options?.archiveVersion || '').trim();
-  const archiveBaseUrl = normalizeArchiveTemplateBaseUrl(options?.archiveBaseUrl);
-  const requestedConcurrency = Math.trunc(Number(options?.concurrency) || 1);
-  const concurrency = Math.max(1, Math.min(16, requestedConcurrency));
-  if (!archiveVersion) {
-    throw new Error('Archive version is required.');
-  }
-  if (!rect || !Number.isFinite(rect.tx1) || !Number.isFinite(rect.ty1) || !Number.isFinite(rect.tx2) || !Number.isFinite(rect.ty2)) {
-    throw new Error('Archive selection is invalid.');
-  }
-  const onTile = typeof options?.onTile === 'function' ? options.onTile : null;
-  const onProgress = typeof options?.onProgress === 'function' ? options.onProgress : null;
-  const tileTasks = [];
-  for (let ty = rect.ty1; ty <= rect.ty2; ty++) {
-    for (let tx = rect.tx1; tx <= rect.tx2; tx++) {
-      tileTasks.push({ tx, ty });
-    }
-  }
-  if (!tileTasks.length) return;
-  let taskCursor = 0;
-  let completed = 0;
-  const runWorker = async () => {
-    while (true) {
-      const index = taskCursor++;
-      if (index >= tileTasks.length) return;
-      const { tx, ty } = tileTasks[index];
-      const image = await downloadTile(tx % 2048, ty, {
-        source: 'archive',
-        archiveBaseUrl,
-        archiveVersion,
-      });
-      if (onTile) {
-        await onTile({ image, tx, ty });
-      }
-      completed++;
-      if (onProgress) {
-        onProgress(completed, rect.tileCount);
-      }
-    }
-  };
-  const workerCount = Math.min(concurrency, tileTasks.length);
-  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
-};
-
-const openArchiveTemplateBuilder = ({ firstPoint, secondPoint, overlayInstance = null, targetTemplate = null } = {}) => {
-  const activeOverlay = overlayInstance || overlayMain;
-  const rect = buildArchiveTemplateRectFromPoints(firstPoint, secondPoint);
-  if (!rect) {
-    activeOverlay?.handleDisplayError('Could not read the selected archive range.');
-    return Promise.resolve(null);
-  }
-  const targetTemplateMeta = getTemplateTimeArchiveMeta(targetTemplate);
-  const targetTemplateName = String(targetTemplate?.displayName || '').trim();
-  const targetTemplateStorageKey = String(targetTemplate?.storageKey || '').trim();
-  const isUpdateMode = Boolean(targetTemplateStorageKey);
-  if (archiveTemplateWindowSession?.close) {
-    archiveTemplateWindowSession.close(null);
-  }
-  const archiveBaseUrl = normalizeArchiveTemplateBaseUrl(TEMPLATE_ARCHIVE_BASE_URL);
-  const numberFmt = new Intl.NumberFormat();
-  let supportsCreate = false;
-  try {
-    supportsCreate = testCanvasSize(rect.width, rect.height);
-  } catch (_) {
-    supportsCreate = false;
-  }
-
-  return new Promise((resolve) => {
-    const backdrop = document.createElement('div');
-    backdrop.style.position = 'fixed';
-    backdrop.style.left = '0';
-    backdrop.style.top = '0';
-    backdrop.style.right = '0';
-    backdrop.style.bottom = '0';
-    backdrop.style.display = 'flex';
-    backdrop.style.alignItems = 'center';
-    backdrop.style.justifyContent = 'center';
-    backdrop.style.padding = '12px';
-    backdrop.style.background = 'rgba(0, 0, 0, 0.45)';
-    backdrop.style.zIndex = '10055';
-
-    const panel = document.createElement('section');
-    panel.style.width = 'min(760px, calc(100vw - 24px))';
-    panel.style.maxHeight = 'calc(100vh - 24px)';
-    panel.style.overflow = 'auto';
-    panel.style.background = 'var(--bm-bg, rgba(20, 20, 20, 0.95))';
-    panel.style.color = 'var(--bm-fg, #fff)';
-    panel.style.border = '1px solid var(--bm-border-strong, rgba(255, 255, 255, 0.25))';
-    panel.style.borderRadius = '10px';
-    panel.style.boxShadow = '0 10px 30px rgba(0, 0, 0, 0.35)';
-    panel.style.padding = '12px';
-    panel.style.display = 'flex';
-    panel.style.flexDirection = 'column';
-    panel.style.gap = '10px';
-    panel.style.pointerEvents = 'auto';
-    panel.setAttribute('role', 'dialog');
-    panel.setAttribute('aria-modal', 'true');
-    panel.setAttribute('aria-label', 'Time archive template builder');
-    applyOverlayVarsToFloatingElement(panel);
-
-    const headingRow = document.createElement('div');
-    headingRow.style.display = 'flex';
-    headingRow.style.alignItems = 'center';
-    headingRow.style.gap = '8px';
-    const title = document.createElement('strong');
-    title.style.fontSize = '13px';
-    title.textContent = isUpdateMode ? 'Time-Archive Template Update' : 'Time-Archive Template';
-    const closeBtn = document.createElement('button');
-    closeBtn.type = 'button';
-    closeBtn.textContent = '✖';
-    closeBtn.style.marginLeft = 'auto';
-    headingRow.appendChild(title);
-    headingRow.appendChild(closeBtn);
-    panel.appendChild(headingRow);
-
-    const rangeInfo = document.createElement('div');
-    rangeInfo.style.whiteSpace = 'pre-line';
-    rangeInfo.style.fontSize = '12px';
-    rangeInfo.style.lineHeight = '1.35';
-    const [brTx, brTy, brPx, brPy] = rect.displayBottomRight;
-    rangeInfo.textContent = [
-      `Top Left: Tl X ${rect.tx1}, Tl Y ${rect.ty1}, Px X ${rect.px1}, Px Y ${rect.py1}`,
-      `Bottom Right: Tl X ${brTx}, Tl Y ${brTy}, Px X ${brPx}, Px Y ${brPy}`,
-      `Size: ${numberFmt.format(rect.width)} x ${numberFmt.format(rect.height)} px`,
-      `Tiles: ${numberFmt.format(rect.tileCount)} (${numberFmt.format(rect.tileWidth)} x ${numberFmt.format(rect.tileHeight)})`,
-      `Provider: ${archiveBaseUrl}`,
-    ].join('\n');
-    panel.appendChild(rangeInfo);
-
-    const controls = document.createElement('div');
-    controls.style.display = 'grid';
-    controls.style.gridTemplateColumns = 'auto minmax(220px, 1fr) auto auto';
-    controls.style.gap = '8px';
-    controls.style.alignItems = 'center';
-    const versionLabel = document.createElement('label');
-    versionLabel.textContent = 'Date';
-    const versionRange = document.createElement('input');
-    versionRange.type = 'range';
-    versionRange.min = '0';
-    versionRange.max = '0';
-    versionRange.step = '1';
-    versionRange.value = '0';
-    versionRange.style.width = '100%';
-    versionRange.style.margin = '0';
-    versionRange.disabled = true;
-    const versionValue = document.createElement('span');
-    versionValue.style.fontSize = '12px';
-    versionValue.style.fontVariantNumeric = 'tabular-nums';
-    versionValue.style.whiteSpace = 'nowrap';
-    versionValue.textContent = 'Loading...';
-    const refreshBtn = document.createElement('button');
-    refreshBtn.type = 'button';
-    refreshBtn.textContent = 'Refresh';
-    controls.appendChild(versionLabel);
-    controls.appendChild(versionRange);
-    controls.appendChild(versionValue);
-    controls.appendChild(refreshBtn);
-    panel.appendChild(controls);
-
-    const versionMeta = document.createElement('div');
-    versionMeta.style.fontSize = '11px';
-    versionMeta.style.color = 'var(--bm-muted)';
-    panel.appendChild(versionMeta);
-
-    const statusOutput = document.createElement('div');
-    statusOutput.style.fontSize = '11px';
-    statusOutput.style.color = 'var(--bm-muted)';
-    panel.appendChild(statusOutput);
-
-    const previewWrap = document.createElement('div');
-    previewWrap.style.display = 'flex';
-    previewWrap.style.justifyContent = 'center';
-    previewWrap.style.alignItems = 'center';
-    previewWrap.style.minHeight = '170px';
-    previewWrap.style.padding = '8px';
-    previewWrap.style.border = '1px solid var(--bm-border-strong, rgba(255, 255, 255, 0.25))';
-    previewWrap.style.borderRadius = '8px';
-    previewWrap.style.background = 'var(--bm-subtle-bg, rgba(255, 255, 255, 0.04))';
-    const previewCanvas = document.createElement('canvas');
-    previewCanvas.style.maxWidth = '100%';
-    previewCanvas.style.maxHeight = '320px';
-    previewCanvas.style.border = '1px solid rgba(255, 255, 255, 0.15)';
-    previewCanvas.style.borderRadius = '6px';
-    previewCanvas.style.background = 'rgba(0, 0, 0, 0.2)';
-    previewWrap.appendChild(previewCanvas);
-    panel.appendChild(previewWrap);
-
-    const progress = document.createElement('progress');
-    progress.max = 1;
-    progress.value = 0;
-    progress.hidden = true;
-    panel.appendChild(progress);
-
-    const progressText = document.createElement('div');
-    progressText.style.fontSize = '11px';
-    progressText.style.color = 'var(--bm-muted)';
-    progressText.hidden = true;
-    panel.appendChild(progressText);
-
-    const actions = document.createElement('div');
-    actions.style.display = 'flex';
-    actions.style.justifyContent = 'flex-end';
-    actions.style.gap = '8px';
-    const cancelBtn = document.createElement('button');
-    cancelBtn.type = 'button';
-    cancelBtn.textContent = 'Cancel';
-    const createBtn = document.createElement('button');
-    createBtn.type = 'button';
-    createBtn.textContent = isUpdateMode ? 'Update Template' : 'Create Template';
-    actions.appendChild(cancelBtn);
-    actions.appendChild(createBtn);
-    panel.appendChild(actions);
-    backdrop.appendChild(panel);
-
-    let closed = false;
-    let busy = false;
-    let loadingVersions = false;
-    let previewToken = 0;
-    let archiveVersions = [];
-    let selectedVersionValue = String(targetTemplateMeta?.archiveVersion || '').trim();
-    let selectedVersionDate = '';
-    let selectedVersionLabel = '';
-
-    const setStatus = (message, isError = false) => {
-      statusOutput.textContent = message;
-      statusOutput.style.color = isError ? 'var(--bm-danger)' : 'var(--bm-muted)';
-    };
-    const setProgress = (done = 0, total = 0, label = '') => {
-      const safeTotal = Math.max(1, Number(total) || 1);
-      const safeDone = Math.max(0, Math.min(safeTotal, Number(done) || 0));
-      progress.max = safeTotal;
-      progress.value = safeDone;
-      progress.hidden = false;
-      progressText.hidden = false;
-      progressText.textContent = `${label}${safeDone} / ${safeTotal}`;
-    };
-    const clearProgress = () => {
-      progress.hidden = true;
-      progressText.hidden = true;
-      progress.max = 1;
-      progress.value = 0;
-      progressText.textContent = '';
-    };
-    const drawPreviewPlaceholder = (message = 'Preview unavailable') => {
-      previewCanvas.width = 320;
-      previewCanvas.height = 180;
-      const context = previewCanvas.getContext('2d');
-      if (!context) return;
-      context.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
-      context.fillStyle = 'rgba(0, 0, 0, 0.35)';
-      context.fillRect(0, 0, previewCanvas.width, previewCanvas.height);
-      context.fillStyle = 'rgba(255, 255, 255, 0.78)';
-      context.font = '600 12px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
-      context.textAlign = 'center';
-      context.textBaseline = 'middle';
-      context.fillText(message, previewCanvas.width / 2, previewCanvas.height / 2);
-    };
-    const getSelectedVersionEntry = () => {
-      if (!archiveVersions.length) return null;
-      const index = Math.max(
-        0,
-        Math.min(archiveVersions.length - 1, Math.trunc(Number(versionRange.value) || 0))
-      );
-      return archiveVersions[index] || null;
-    };
-    const syncSelectedVersionFromTimeline = () => {
-      const selected = getSelectedVersionEntry();
-      if (!selected) {
-        selectedVersionValue = '';
-        selectedVersionDate = '';
-        selectedVersionLabel = '';
-        versionValue.textContent = 'No date';
-        versionMeta.textContent = '';
-        return null;
-      }
-      selectedVersionValue = String(selected.version || '').trim();
-      selectedVersionDate = String(selected.date || '').trim();
-      selectedVersionLabel = `${selectedVersionDate || selectedVersionValue} (${selectedVersionValue})`;
-      versionValue.textContent = selectedVersionDate || selectedVersionValue;
-      versionMeta.textContent = selectedVersionValue ? `Version: ${selectedVersionValue}` : '';
-      return selected;
-    };
-    const populateVersionTimeline = (versions, preferredVersion = '') => {
-      archiveVersions = Array.isArray(versions) ? versions.slice() : [];
-      if (!archiveVersions.length) {
-        versionRange.min = '0';
-        versionRange.max = '0';
-        versionRange.step = '1';
-        versionRange.value = '0';
-        versionRange.disabled = true;
-        syncSelectedVersionFromTimeline();
-        return;
-      }
-      versionRange.min = '0';
-      versionRange.max = String(archiveVersions.length - 1);
-      versionRange.step = '1';
-      versionRange.disabled = false;
-      let selectedIndex = archiveVersions.length - 1;
-      const preferred = String(preferredVersion || selectedVersionValue || '').trim();
-      if (preferred) {
-        const found = archiveVersions.findIndex((entry) => String(entry?.version || '').trim() === preferred);
-        if (found >= 0) {
-          selectedIndex = found;
-        }
-      }
-      versionRange.value = String(selectedIndex);
-      syncSelectedVersionFromTimeline();
-    };
-    const updateActionState = () => {
-      const hasVersion = Boolean(getSelectedVersionEntry()?.version);
-      closeBtn.disabled = busy;
-      cancelBtn.disabled = busy;
-      versionRange.disabled = busy || loadingVersions || !archiveVersions.length;
-      refreshBtn.disabled = busy || loadingVersions;
-      createBtn.disabled = busy || !hasVersion || !supportsCreate;
-    };
-    const close = (result = null) => {
-      if (closed) return;
-      closed = true;
-      previewToken++;
-      document.removeEventListener('keydown', onKeyDown, true);
-      backdrop.remove();
-      if (archiveTemplateWindowSession?.panel === panel) {
-        archiveTemplateWindowSession = null;
-      }
-      resolve(result);
-    };
-    const onKeyDown = (event) => {
-      if (event.key !== 'Escape' || busy) return;
-      event.preventDefault();
-      close(null);
-    };
-
-    const renderPreview = async () => {
-      const selectedEntry = syncSelectedVersionFromTimeline();
-      const archiveVersion = String(selectedEntry?.version || '').trim();
-      if (!archiveVersion) {
-        drawPreviewPlaceholder('No archive date available');
-        updateActionState();
-        return;
-      }
-      if (rect.tileCount > TEMPLATE_ARCHIVE_PREVIEW_MAX_TILE_REQUESTS) {
-        setStatus(
-          `Preview skipped (${numberFmt.format(rect.tileCount)} tiles > ${numberFmt.format(TEMPLATE_ARCHIVE_PREVIEW_MAX_TILE_REQUESTS)} limit). You can still create the template.`,
-          false
-        );
-        drawPreviewPlaceholder('Preview skipped for large range');
-        updateActionState();
-        return;
-      }
-      const token = ++previewToken;
-      busy = true;
-      updateActionState();
-      setStatus(`Rendering preview for ${selectedVersionLabel || archiveVersion}...`, false);
-      setProgress(0, rect.tileCount, 'Preview: ');
-      const previewScale = Math.min(1, TEMPLATE_ARCHIVE_PREVIEW_MAX_DIMENSION / Math.max(rect.width, rect.height));
-      const previewWidth = Math.max(1, Math.round(rect.width * previewScale));
-      const previewHeight = Math.max(1, Math.round(rect.height * previewScale));
-      previewCanvas.width = previewWidth;
-      previewCanvas.height = previewHeight;
-      const context = previewCanvas.getContext('2d');
-      if (!context) {
-        busy = false;
-        clearProgress();
-        setStatus('Could not initialize preview canvas.', true);
-        updateActionState();
-        return;
-      }
-      context.imageSmoothingEnabled = false;
-      context.clearRect(0, 0, previewWidth, previewHeight);
-      try {
-        const previewConcurrency = rect.tileCount > 10
-          ? TEMPLATE_ARCHIVE_PREVIEW_DOWNLOAD_CONCURRENCY
-          : 3;
-        await iterateArchiveTemplateTiles(rect, {
-          archiveVersion,
-          archiveBaseUrl,
-          concurrency: previewConcurrency,
-          onProgress: (done, total) => {
-            if (token !== previewToken) return;
-            setProgress(done, total, 'Preview: ');
-          },
-          onTile: ({ image, tx, ty }) => {
-            if (token !== previewToken) return;
-            const tileLeft = tx * TEMPLATE_TILE_SIZE;
-            const tileTop = ty * TEMPLATE_TILE_SIZE;
-            const intersectLeft = Math.max(rect.left, tileLeft);
-            const intersectTop = Math.max(rect.top, tileTop);
-            const intersectRight = Math.min(rect.left + rect.width, tileLeft + TEMPLATE_TILE_SIZE);
-            const intersectBottom = Math.min(rect.top + rect.height, tileTop + TEMPLATE_TILE_SIZE);
-            const intersectWidth = intersectRight - intersectLeft;
-            const intersectHeight = intersectBottom - intersectTop;
-            if (intersectWidth <= 0 || intersectHeight <= 0) return;
-            const srcX = intersectLeft - tileLeft;
-            const srcY = intersectTop - tileTop;
-            const dstX = (intersectLeft - rect.left) * previewScale;
-            const dstY = (intersectTop - rect.top) * previewScale;
-            const dstW = intersectWidth * previewScale;
-            const dstH = intersectHeight * previewScale;
-            context.drawImage(image, srcX, srcY, intersectWidth, intersectHeight, dstX, dstY, dstW, dstH);
-          },
-        });
-        if (token !== previewToken) return;
-        setStatus(`Preview ready: ${numberFmt.format(previewWidth)} x ${numberFmt.format(previewHeight)} px`, false);
-      } catch (error) {
-        if (token !== previewToken) return;
-        drawPreviewPlaceholder('Preview failed');
-        setStatus(`Preview failed: ${error?.message || error}`, true);
-      } finally {
-        if (token === previewToken) {
-          clearProgress();
-          busy = false;
-          updateActionState();
-        }
-      }
-    };
-
-    const loadVersions = async (force = false) => {
-      loadingVersions = true;
-      updateActionState();
-      setStatus('Loading archive versions...');
-      try {
-        const versions = await fetchArchiveTemplateVersions(archiveBaseUrl, force);
-        const preferred = String(selectedVersionValue || '').trim();
-        populateVersionTimeline(versions, preferred);
-        setStatus(`Loaded ${numberFmt.format(versions.length)} archive versions.`);
-        void renderPreview();
-      } catch (error) {
-        archiveVersions = [];
-        selectedVersionValue = '';
-        selectedVersionDate = '';
-        selectedVersionLabel = '';
-        versionRange.min = '0';
-        versionRange.max = '0';
-        versionRange.step = '1';
-        versionRange.value = '0';
-        versionRange.disabled = true;
-        versionValue.textContent = 'Unavailable';
-        versionMeta.textContent = '';
-        drawPreviewPlaceholder('No versions loaded');
-        setStatus(`Failed to load archive versions: ${error?.message || error}`, true);
-      } finally {
-        loadingVersions = false;
-        updateActionState();
-      }
-    };
-
-    const createArchiveTemplate = async () => {
-      const selectedEntry = syncSelectedVersionFromTimeline();
-      const archiveVersion = String(selectedEntry?.version || '').trim();
-      if (!archiveVersion) {
-        setStatus('Select an archive date first.', true);
-        return;
-      }
-      if (!supportsCreate) {
-        setStatus('Selection is too large for this browser to build a template image.', true);
-        return;
-      }
-      busy = true;
-      updateActionState();
-      setStatus(`Building archive snapshot (${numberFmt.format(rect.tileCount)} tiles)...`);
-      setProgress(0, rect.tileCount, 'Create: ');
-      let resultCanvas = new OffscreenCanvas(rect.width, rect.height);
-      try {
-        const context = resultCanvas.getContext('2d');
-        if (!context) {
-          throw new Error('Failed to initialize template canvas.');
-        }
-        context.imageSmoothingEnabled = false;
-        context.clearRect(0, 0, rect.width, rect.height);
-        await iterateArchiveTemplateTiles(rect, {
-          archiveVersion,
-          archiveBaseUrl,
-          onProgress: (done, total) => setProgress(done, total, 'Create: '),
-          onTile: ({ image, tx, ty }) => {
-            context.drawImage(
-              image,
-              tx * TEMPLATE_TILE_SIZE - rect.left,
-              ty * TEMPLATE_TILE_SIZE - rect.top
-            );
-          },
-        });
-        const blob = await resultCanvas.convertToBlob({ type: 'image/png' });
-        const sourceTag = (selectedVersionDate || archiveVersion).replace(/[^a-z0-9._-]+/gi, '_');
-        const fileName = `archive_${sourceTag}_${rect.tx1}_${rect.ty1}_${rect.px1}_${rect.py1}.png`;
-        const file = new File([blob], fileName, { type: 'image/png' });
-        const templateName = targetTemplateName || (
-          selectedVersionDate
-            ? `Archive ${selectedVersionDate}`
-            : `Archive ${archiveVersion}`
-        );
-        const timeArchiveMeta = normalizeTimeArchiveMeta({
-          source: 'time-archive',
-          archiveBaseUrl,
-          archiveVersion,
-          archiveDate: selectedVersionDate,
-          width: rect.width,
-          height: rect.height,
-        });
-        const createdTemplate = await templateManager.createTemplate(
-          file,
-          templateName,
-          [rect.tx1, rect.ty1, rect.px1, rect.py1],
-          'lt',
-          {
-            enabled: targetTemplate?.enabled ?? true,
-            timeArchiveMeta,
-          }
-        );
-        if (isUpdateMode && targetTemplateStorageKey && targetTemplateStorageKey !== createdTemplate?.storageKey) {
-          try {
-            await templateManager.deleteTemplate(targetTemplateStorageKey);
-          } catch (_) {}
-        }
-        activeOverlay?.handleDisplayStatus(
-          isUpdateMode
-            ? `Updated "${templateName}" to archive ${selectedVersionDate || archiveVersion}.`
-            : `Archive template created from ${templateName}.`
-        );
-        close({
-          created: true,
-          updated: isUpdateMode,
-          storageKey: createdTemplate?.storageKey || '',
-          archiveVersion,
-          archiveDate: selectedVersionDate,
-        });
-      } catch (error) {
-        consoleWarn('Failed to create archive template from selected range.', error);
-        setStatus(`Template creation failed: ${error?.message || error}`, true);
-      } finally {
-        cleanUpCanvas(resultCanvas);
-        resultCanvas = null;
-        if (!closed) {
-          clearProgress();
-          busy = false;
-          updateActionState();
-        }
-      }
-    };
-
-    closeBtn.addEventListener('click', () => {
-      if (!busy) close(null);
-    });
-    cancelBtn.addEventListener('click', () => {
-      if (!busy) close(null);
-    });
-    refreshBtn.addEventListener('click', () => {
-      void loadVersions(true);
-    });
-    versionRange.addEventListener('input', () => {
-      syncSelectedVersionFromTimeline();
-    });
-    versionRange.addEventListener('change', () => {
-      syncSelectedVersionFromTimeline();
-      void renderPreview();
-    });
-    createBtn.addEventListener('click', () => {
-      void createArchiveTemplate();
-    });
-    backdrop.addEventListener('click', (event) => {
-      if (event.target === backdrop && !busy) {
-        close(null);
-      }
-    });
-
-    document.body.appendChild(backdrop);
-    archiveTemplateWindowSession = { panel, close };
-    document.addEventListener('keydown', onKeyDown, true);
-
-    if (!supportsCreate) {
-      setStatus(
-        `Selection ${numberFmt.format(rect.width)} x ${numberFmt.format(rect.height)} is too large for template creation in this browser.`,
-        true
-      );
-      drawPreviewPlaceholder('Selection too large for create');
-    } else {
-      setStatus('Loading archive versions...');
-      drawPreviewPlaceholder('Loading preview...');
-    }
-    updateActionState();
-    void loadVersions(false);
-  });
-};
-
-const removeArchiveTemplatePointCaptureHint = () => {
-  const hint = document.getElementById(ARCHIVE_TEMPLATE_CAPTURE_HINT_ID);
-  if (hint) {
-    hint.remove();
-  }
-};
-
-const ensureArchiveTemplatePointCaptureHint = () => {
-  let hint = document.getElementById(ARCHIVE_TEMPLATE_CAPTURE_HINT_ID);
-  if (hint) return hint;
-  hint = document.createElement('div');
-  hint.id = ARCHIVE_TEMPLATE_CAPTURE_HINT_ID;
-  hint.style.position = 'fixed';
-  hint.style.top = '14px';
-  hint.style.left = '50%';
-  hint.style.transform = 'translateX(-50%)';
-  hint.style.zIndex = '10070';
-  hint.style.pointerEvents = 'auto';
-  hint.style.minWidth = '300px';
-  hint.style.maxWidth = 'min(92vw, 520px)';
-  hint.style.padding = '10px 12px';
-  hint.style.borderRadius = '10px';
-  hint.style.border = '1px solid var(--bm-border-strong, rgba(255, 255, 255, 0.26))';
-  hint.style.background = 'var(--bm-bg, rgba(18, 18, 18, 0.95))';
-  hint.style.color = 'var(--bm-fg, #fff)';
-  hint.style.boxShadow = '0 10px 26px rgba(0, 0, 0, 0.4)';
-  hint.style.display = 'flex';
-  hint.style.flexDirection = 'column';
-  hint.style.gap = '6px';
-  hint.style.fontSize = '12px';
-  hint.style.lineHeight = '1.35';
-  applyOverlayVarsToFloatingElement(hint);
-
-  const headingRow = document.createElement('div');
-  headingRow.style.display = 'flex';
-  headingRow.style.alignItems = 'center';
-  headingRow.style.gap = '8px';
-  const title = document.createElement('strong');
-  title.dataset.role = 'title';
-  title.textContent = 'Time-archive capture';
-  title.style.fontSize = '12px';
-  const closeBtn = document.createElement('button');
-  closeBtn.type = 'button';
-  closeBtn.textContent = 'Cancel';
-  closeBtn.style.marginLeft = 'auto';
-  closeBtn.style.border = '1px solid var(--bm-border, rgba(255, 255, 255, 0.22))';
-  closeBtn.style.borderRadius = '6px';
-  closeBtn.style.background = 'var(--bm-btn-bg, rgba(255, 255, 255, 0.12))';
-  closeBtn.style.color = 'var(--bm-btn-text, #fff)';
-  closeBtn.style.padding = '1px 8px';
-  closeBtn.addEventListener('click', () => {
-    cancelArchiveTemplatePointCapture('Time-archive point capture cancelled.');
-  });
-  headingRow.appendChild(title);
-  headingRow.appendChild(closeBtn);
-  hint.appendChild(headingRow);
-
-  const body = document.createElement('div');
-  body.dataset.role = 'body';
-  body.style.whiteSpace = 'pre-line';
-  body.textContent = 'Click two points on the map.';
-  hint.appendChild(body);
-
-  const tip = document.createElement('div');
-  tip.style.fontSize = '11px';
-  tip.style.color = 'var(--bm-muted)';
-  tip.textContent = 'Tip: press Esc to cancel capture.';
-  hint.appendChild(tip);
-
-  document.body.appendChild(hint);
-  return hint;
-};
-
-const updateArchiveTemplatePointCaptureHint = () => {
-  if (!archiveTemplatePointCaptureState.active) {
-    removeArchiveTemplatePointCaptureHint();
-    return;
-  }
-  const hint = ensureArchiveTemplatePointCaptureHint();
-  applyOverlayVarsToFloatingElement(hint);
-  const title = hint.querySelector('[data-role="title"]');
-  const body = hint.querySelector('[data-role="body"]');
-  const pointCount = archiveTemplatePointCaptureState.points.length;
-  if (title) {
-    title.textContent = pointCount > 0 ? 'Time-archive capture (2/2)' : 'Time-archive capture (1/2)';
-  }
-  if (body) {
-    if (pointCount > 0) {
-      const firstText = formatTilePixelCoords(archiveTemplatePointCaptureState.points[0]);
-      body.textContent = `First point saved:\n${firstText}\nNow click the second point on the map (opposite corner).`;
-    } else {
-      body.textContent = 'Click the first point on the map.\nUsually start with the top-left corner.';
-    }
-  }
-};
-
-window.addEventListener('keydown', (event) => {
-  if (event.key !== 'Escape') return;
-  if (!archiveTemplatePointCaptureState.active) return;
-  event.preventDefault();
-  cancelArchiveTemplatePointCapture('Time-archive point capture cancelled.');
-});
-
-const cancelArchiveTemplatePointCapture = (message = '') => {
-  const overlayInstance = archiveTemplatePointCaptureState.overlayInstance || overlayMain;
-  archiveTemplatePointCaptureState.active = false;
-  archiveTemplatePointCaptureState.points = [];
-  archiveTemplatePointCaptureState.overlayInstance = null;
-  archiveTemplatePointCaptureState.lastCoordsKey = '';
-  archiveTemplatePointCaptureState.lastCoordsAt = 0;
-  removeArchiveTemplatePointCaptureHint();
-  if (message) {
-    overlayInstance?.handleDisplayStatus(message);
-  }
-};
-
-const startArchiveTemplatePointCapture = (overlayInstance = null) => {
-  const activeOverlay = overlayInstance || overlayMain;
-  if (archiveTemplateWindowSession?.close) {
-    archiveTemplateWindowSession.close(null);
-  }
-  archiveTemplatePointCaptureState.active = true;
-  archiveTemplatePointCaptureState.points = [];
-  archiveTemplatePointCaptureState.overlayInstance = activeOverlay;
-  archiveTemplatePointCaptureState.lastCoordsKey = '';
-  archiveTemplatePointCaptureState.lastCoordsAt = 0;
-  updateArchiveTemplatePointCaptureHint();
-  activeOverlay?.handleDisplayStatus('Time-archive template mode: click first point on the map, then click second point.');
-};
-
-function handleArchiveTemplatePointCapture(rawCoords) {
-  if (!archiveTemplatePointCaptureState.active) return;
-  const coords = normalizeTilePixelCoords(rawCoords);
-  if (!coords) return;
-  const key = coords.join(',');
-  const now = Date.now();
-  if (
-    key === archiveTemplatePointCaptureState.lastCoordsKey &&
-    now - archiveTemplatePointCaptureState.lastCoordsAt < 250
-  ) {
-    return;
-  }
-  archiveTemplatePointCaptureState.lastCoordsKey = key;
-  archiveTemplatePointCaptureState.lastCoordsAt = now;
-  const activeOverlay = archiveTemplatePointCaptureState.overlayInstance || overlayMain;
-  archiveTemplatePointCaptureState.points.push(coords);
-  updateArchiveTemplatePointCaptureHint();
-  if (archiveTemplatePointCaptureState.points.length === 1) {
-    activeOverlay?.handleDisplayStatus(`First point captured: ${formatTilePixelCoords(coords)}. Click the second point.`);
-    return;
-  }
-  const [firstPoint, secondPoint] = archiveTemplatePointCaptureState.points;
-  cancelArchiveTemplatePointCapture('');
-  activeOverlay?.handleDisplayStatus(`Second point captured: ${formatTilePixelCoords(secondPoint)}. Opening archive template window...`);
-  void openArchiveTemplateBuilder({ firstPoint, secondPoint, overlayInstance: activeOverlay }).catch((error) => {
-    consoleWarn('Failed to open archive template builder window.', error);
-    activeOverlay?.handleDisplayError('Could not open archive template window.');
-  });
-}
-const openTemplatePaletteConversionPreview = async ({
-  sourceFile = null,
-  otherPixelCount = 0,
-  otherColorCount = 0,
-  postCreation = false,
-  initialOptions = null,
-} = {}) => {
-  const safePixelCount = Math.max(0, Number(otherPixelCount) || 0);
-  const safeColorCount = Math.max(0, Number(otherColorCount) || 0);
-  const pixelText = new Intl.NumberFormat().format(safePixelCount);
-  const colorText = new Intl.NumberFormat().format(safeColorCount);
-  const defaults = normalizeTemplatePaletteConversionOptions(initialOptions || templatePaletteConversionDefaults);
-
-  let previewImageData = null;
-  let previewWidth = 0;
-  let previewHeight = 0;
-  if (sourceFile) {
-    try {
-      const sourceBitmap = await createImageBitmap(sourceFile, { colorSpaceConversion: 'none' });
-      const maxDimension = Math.max(1, Math.max(sourceBitmap.width, sourceBitmap.height));
-      const ratio = Math.min(1, TEMPLATE_PALETTE_PREVIEW_MAX_DIMENSION / maxDimension);
-      previewWidth = Math.max(1, Math.round(sourceBitmap.width * ratio));
-      previewHeight = Math.max(1, Math.round(sourceBitmap.height * ratio));
-      const sourceCanvas = new OffscreenCanvas(previewWidth, previewHeight);
-      const sourceCtx = sourceCanvas.getContext('2d', { willReadFrequently: true });
-      if (sourceCtx) {
-        sourceCtx.clearRect(0, 0, previewWidth, previewHeight);
-        sourceCtx.imageSmoothingEnabled = true;
-        sourceCtx.drawImage(sourceBitmap, 0, 0, previewWidth, previewHeight);
-        previewImageData = sourceCtx.getImageData(0, 0, previewWidth, previewHeight);
-      }
-      sourceBitmap.close?.();
-      cleanUpCanvas(sourceCanvas);
-    } catch (error) {
-      consoleWarn('Could not render conversion preview image.', error);
-    }
-  }
-
-  return new Promise((resolve) => {
-    const backdrop = document.createElement('div');
-    backdrop.style.position = 'fixed';
-    backdrop.style.left = '0';
-    backdrop.style.top = '0';
-    backdrop.style.right = '0';
-    backdrop.style.bottom = '0';
-    backdrop.style.display = 'flex';
-    backdrop.style.alignItems = 'center';
-    backdrop.style.justifyContent = 'center';
-    backdrop.style.padding = '12px';
-    backdrop.style.background = 'rgba(0, 0, 0, 0.45)';
-    backdrop.style.zIndex = '10050';
-
-    const panel = document.createElement('section');
-    panel.style.width = previewImageData
-      ? 'min(900px, calc(100vw - 24px))'
-      : 'min(560px, calc(100vw - 24px))';
-    panel.style.maxHeight = 'calc(100vh - 24px)';
-    panel.style.overflow = 'auto';
-    panel.style.background = 'var(--bm-panel-bg, rgba(20, 20, 20, 0.95))';
-    panel.style.color = 'var(--bm-fg, #fff)';
-    panel.style.border = '1px solid var(--bm-border-strong, rgba(255, 255, 255, 0.25))';
-    panel.style.borderRadius = '10px';
-    panel.style.boxShadow = '0 10px 30px rgba(0, 0, 0, 0.35)';
-    panel.style.padding = '12px';
-    panel.style.display = 'flex';
-    panel.style.flexDirection = 'column';
-    panel.style.gap = '10px';
-    panel.style.pointerEvents = 'auto';
-    panel.setAttribute('role', 'dialog');
-    panel.setAttribute('aria-modal', 'true');
-    panel.setAttribute('aria-label', 'Template color conversion preview');
-    applyOverlayVarsToFloatingElement(panel);
-
-    const title = document.createElement('div');
-    title.textContent = postCreation
-      ? 'Template still has "other" pixels'
-      : 'Non-palette colors detected';
-    title.style.fontWeight = '700';
-    title.style.fontSize = '13px';
-    panel.appendChild(title);
-
-    const text = document.createElement('div');
-    text.style.fontSize = '12px';
-    text.style.lineHeight = '1.4';
-    text.style.whiteSpace = 'pre-line';
-    text.textContent = postCreation
-      ? [
-          `The created template has ${pixelText} pixel${safePixelCount === 1 ? '' : 's'} in "other".`,
-          'Preview settings below, then convert and recreate.'
-        ].join('\n')
-      : [
-          `${pixelText} pixel${safePixelCount === 1 ? '' : 's'} use ${colorText} non-palette color${safeColorCount === 1 ? '' : 's'}.`,
-          'Tune conversion settings and preview the result before applying.'
-        ].join('\n');
-    panel.appendChild(text);
-
-    const controls = document.createElement('div');
-    controls.style.display = 'grid';
-    controls.style.gridTemplateColumns = 'repeat(auto-fit, minmax(180px, 1fr))';
-    controls.style.gap = '10px';
-    controls.style.border = '1px solid var(--bm-border, rgba(255, 255, 255, 0.15))';
-    controls.style.borderRadius = '8px';
-    controls.style.padding = '10px';
-
-    const buildControlLabel = (labelText) => {
-      const label = document.createElement('label');
-      label.style.display = 'flex';
-      label.style.flexDirection = 'column';
-      label.style.gap = '5px';
-      const titleEl = document.createElement('span');
-      titleEl.textContent = labelText;
-      titleEl.style.fontSize = '11px';
-      titleEl.style.opacity = '0.9';
-      label.appendChild(titleEl);
-      return { label, titleEl };
-    };
-
-    const { label: ditherLabel } = buildControlLabel('Dithering');
-    const ditherModeSelect = document.createElement('select');
-    ditherModeSelect.innerHTML = [
-      '<option value="none">Off</option>',
-      '<option value="floyd-steinberg">Floyd-Steinberg</option>'
-    ].join('');
-    ditherModeSelect.value = defaults.ditherMode;
-    ditherLabel.appendChild(ditherModeSelect);
-    controls.appendChild(ditherLabel);
-
-    const { label: ditherStrengthLabel, titleEl: ditherStrengthTitle } = buildControlLabel('Dither Strength');
-    const ditherStrengthRange = document.createElement('input');
-    ditherStrengthRange.type = 'range';
-    ditherStrengthRange.min = '0';
-    ditherStrengthRange.max = '100';
-    ditherStrengthRange.step = '1';
-    ditherStrengthRange.value = String(Math.round(defaults.ditherStrength * 100));
-    ditherStrengthLabel.appendChild(ditherStrengthRange);
-    controls.appendChild(ditherStrengthLabel);
-
-    const { label: distanceLabel } = buildControlLabel('Distance');
-    const distanceSelect = document.createElement('select');
-    distanceSelect.innerHTML = [
-      '<option value="weighted">Perceptual</option>',
-      '<option value="euclidean">RGB Euclidean</option>'
-    ].join('');
-    distanceSelect.value = defaults.distanceMode;
-    distanceLabel.appendChild(distanceSelect);
-    controls.appendChild(distanceLabel);
-
-    const { label: alphaLabel, titleEl: alphaTitle } = buildControlLabel('Alpha Threshold');
-    const alphaRange = document.createElement('input');
-    alphaRange.type = 'range';
-    alphaRange.min = '0';
-    alphaRange.max = '255';
-    alphaRange.step = '1';
-    alphaRange.value = String(defaults.alphaThreshold);
-    alphaLabel.appendChild(alphaRange);
-    controls.appendChild(alphaLabel);
-
-    const { label: antiLabel, titleEl: antiTitle } = buildControlLabel('Anti-Dither (Smooth)');
-    const antiRange = document.createElement('input');
-    antiRange.type = 'range';
-    antiRange.min = '0';
-    antiRange.max = '100';
-    antiRange.step = '1';
-    antiRange.value = String(Math.round(defaults.antiDitherStrength * 100));
-    antiLabel.appendChild(antiRange);
-    controls.appendChild(antiLabel);
-
-    const serpentineWrap = document.createElement('label');
-    serpentineWrap.style.display = 'flex';
-    serpentineWrap.style.alignItems = 'center';
-    serpentineWrap.style.gap = '8px';
-    serpentineWrap.style.fontSize = '11px';
-    serpentineWrap.style.opacity = '0.9';
-    const serpentineCheckbox = document.createElement('input');
-    serpentineCheckbox.type = 'checkbox';
-    serpentineCheckbox.checked = defaults.serpentine;
-    serpentineWrap.appendChild(serpentineCheckbox);
-    serpentineWrap.appendChild(document.createTextNode('Serpentine Dither Scan'));
-    controls.appendChild(serpentineWrap);
-    panel.appendChild(controls);
-
-    const previewMeta = document.createElement('div');
-    previewMeta.style.fontSize = '11px';
-    previewMeta.style.opacity = '0.9';
-    panel.appendChild(previewMeta);
-
-    let originalCanvas = null;
-    let convertedCanvas = null;
-    let originalCtx = null;
-    let convertedCtx = null;
-    if (previewImageData) {
-      const previewGrid = document.createElement('div');
-      previewGrid.style.display = 'grid';
-      previewGrid.style.gridTemplateColumns = 'repeat(auto-fit, minmax(240px, 1fr))';
-      previewGrid.style.gap = '10px';
-
-      const makePreviewBlock = (labelText) => {
-        const block = document.createElement('div');
-        block.style.display = 'flex';
-        block.style.flexDirection = 'column';
-        block.style.gap = '6px';
-        const blockLabel = document.createElement('div');
-        blockLabel.textContent = labelText;
-        blockLabel.style.fontSize = '11px';
-        blockLabel.style.opacity = '0.9';
-        const canvas = document.createElement('canvas');
-        canvas.width = previewWidth;
-        canvas.height = previewHeight;
-        canvas.style.width = '100%';
-        canvas.style.maxWidth = `${Math.max(120, previewWidth * 2)}px`;
-        canvas.style.imageRendering = 'pixelated';
-        canvas.style.border = '1px solid var(--bm-border, rgba(255, 255, 255, 0.2))';
-        canvas.style.borderRadius = '6px';
-        canvas.style.background = 'rgba(0, 0, 0, 0.15)';
-        block.appendChild(blockLabel);
-        block.appendChild(canvas);
-        return { block, canvas };
-      };
-
-      const originalBlock = makePreviewBlock('Original');
-      const convertedBlock = makePreviewBlock('Converted Preview');
-      previewGrid.appendChild(originalBlock.block);
-      previewGrid.appendChild(convertedBlock.block);
-      panel.appendChild(previewGrid);
-      originalCanvas = originalBlock.canvas;
-      convertedCanvas = convertedBlock.canvas;
-      originalCtx = originalCanvas.getContext('2d');
-      convertedCtx = convertedCanvas.getContext('2d');
-      if (originalCtx) {
-        originalCtx.putImageData(previewImageData, 0, 0);
-      }
-    } else {
-      previewMeta.textContent = 'Preview unavailable for this image; settings will still apply.';
-    }
-
-    const actions = document.createElement('div');
-    actions.style.display = 'flex';
-    actions.style.justifyContent = 'flex-end';
-    actions.style.gap = '8px';
-
-    const keepButton = document.createElement('button');
-    keepButton.type = 'button';
-    keepButton.textContent = postCreation ? 'Keep Current' : 'Keep Original';
-    keepButton.style.border = '1px solid var(--bm-border-strong, rgba(255, 255, 255, 0.3))';
-    keepButton.style.background = 'transparent';
-    keepButton.style.color = 'inherit';
-    keepButton.style.padding = '6px 10px';
-    keepButton.style.borderRadius = '6px';
-    keepButton.style.cursor = 'pointer';
-
-    const downloadButton = document.createElement('button');
-    downloadButton.type = 'button';
-    downloadButton.textContent = 'Download Result';
-    downloadButton.style.border = '1px solid var(--bm-border-strong, rgba(255, 255, 255, 0.3))';
-    downloadButton.style.background = 'var(--bm-subtle-bg, rgba(0, 0, 0, 0.2))';
-    downloadButton.style.color = 'inherit';
-    downloadButton.style.padding = '6px 10px';
-    downloadButton.style.borderRadius = '6px';
-    downloadButton.style.cursor = 'pointer';
-    if (!sourceFile) {
-      downloadButton.disabled = true;
-      downloadButton.style.opacity = '0.55';
-      downloadButton.title = 'No source image available to download.';
-    } else {
-      downloadButton.title = 'Download converted PNG with current settings.';
-    }
-
-    const convertButton = document.createElement('button');
-    convertButton.type = 'button';
-    convertButton.textContent = postCreation ? 'Convert & Recreate' : 'Apply Conversion';
-    convertButton.style.border = '1px solid var(--bm-btn-bg, #8b1e2f)';
-    convertButton.style.background = 'var(--bm-btn-bg, #8b1e2f)';
-    convertButton.style.color = 'var(--bm-btn-text, #fff)';
-    convertButton.style.padding = '6px 10px';
-    convertButton.style.borderRadius = '6px';
-    convertButton.style.cursor = 'pointer';
-
-    actions.appendChild(keepButton);
-    actions.appendChild(downloadButton);
-    actions.appendChild(convertButton);
-    panel.appendChild(actions);
-    backdrop.appendChild(panel);
-
-    const getSelectedOptions = () => normalizeTemplatePaletteConversionOptions({
-      ditherMode: ditherModeSelect.value,
-      ditherStrength: Number(ditherStrengthRange.value) / 100,
-      distanceMode: distanceSelect.value,
-      alphaThreshold: Number(alphaRange.value),
-      serpentine: serpentineCheckbox.checked,
-      antiDitherStrength: Number(antiRange.value) / 100,
-    });
-    const getDownloadFileName = () => {
-      const sourceName = String(sourceFile?.name || 'template');
-      const baseName = sourceName.replace(/\.[^/.]+$/, '') || 'template';
-      return `${baseName}_wplace_palette.png`;
-    };
-    let downloadInProgress = false;
-    const onDownloadClick = async () => {
-      if (!sourceFile || downloadInProgress) return;
-      downloadInProgress = true;
-      const previousText = downloadButton.textContent;
-      downloadButton.textContent = 'Preparing...';
-      downloadButton.disabled = true;
-      try {
-        const selectedOptions = getSelectedOptions();
-        const conversion = await convertTemplateImageFileToPaletteBlob(sourceFile, selectedOptions);
-        const url = URL.createObjectURL(conversion.blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = getDownloadFileName();
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        window.setTimeout(() => URL.revokeObjectURL(url), 60000);
-        const convertedPixels = new Intl.NumberFormat().format(Number(conversion?.stats?.convertedPixels) || 0);
-        previewMeta.textContent = `Downloaded converted PNG (${convertedPixels} pixels changed).`;
-      } catch (error) {
-        consoleWarn('Failed to prepare converted image download.', error);
-        previewMeta.textContent = 'Failed to prepare converted image download.';
-      } finally {
-        downloadInProgress = false;
-        downloadButton.textContent = previousText;
-        downloadButton.disabled = !sourceFile;
-      }
-    };
-
-    const updateControlMeta = () => {
-      ditherStrengthTitle.textContent = `Dither Strength (${ditherStrengthRange.value}%)`;
-      alphaTitle.textContent = `Alpha Threshold (${alphaRange.value})`;
-      antiTitle.textContent = `Anti-Dither (Smooth) (${antiRange.value}%)`;
-      const ditheringEnabled = ditherModeSelect.value === 'floyd-steinberg';
-      ditherStrengthRange.disabled = !ditheringEnabled;
-      serpentineCheckbox.disabled = !ditheringEnabled;
-      if (!ditheringEnabled) {
-        serpentineWrap.style.opacity = '0.6';
-        ditherStrengthLabel.style.opacity = '0.6';
-      } else {
-        serpentineWrap.style.opacity = '0.9';
-        ditherStrengthLabel.style.opacity = '1';
-      }
-    };
-
-    let renderToken = 0;
-    const renderPreview = () => {
-      updateControlMeta();
-      if (!previewImageData || !convertedCtx) {
-        const selected = getSelectedOptions();
-        previewMeta.textContent = `Dithering: ${selected.ditherMode === 'none' ? 'Off' : 'Floyd-Steinberg'} • Anti-dither: ${Math.round(selected.antiDitherStrength * 100)}% • Distance: ${selected.distanceMode}`;
-        return;
-      }
-      const token = ++renderToken;
-      const options = getSelectedOptions();
-      const workingImageData = new ImageData(
-        new Uint8ClampedArray(previewImageData.data),
-        previewWidth,
-        previewHeight
-      );
-      const conversion = convertImageDataToWplacePalette(workingImageData, options);
-      if (token !== renderToken) return;
-      convertedCtx.clearRect(0, 0, previewWidth, previewHeight);
-      convertedCtx.putImageData(conversion.imageData, 0, 0);
-      const stats = conversion.stats || {};
-      const convertedText = new Intl.NumberFormat().format(Number(stats.convertedPixels) || 0);
-      const otherText = new Intl.NumberFormat().format(Number(stats.remainingOtherPixels) || 0);
-      previewMeta.textContent = [
-        `Preview size ${previewWidth}x${previewHeight}`,
-        `changed: ${convertedText}`,
-        `remaining other: ${otherText}`,
-        `anti-dither: ${Math.round(options.antiDitherStrength * 100)}%`,
-      ].join(' • ');
-    };
-
-    const onInput = () => renderPreview();
-    [
-      ditherModeSelect,
-      ditherStrengthRange,
-      distanceSelect,
-      alphaRange,
-      antiRange,
-      serpentineCheckbox,
-    ].forEach((control) => control.addEventListener('input', onInput));
-    downloadButton.addEventListener('click', onDownloadClick);
-    renderPreview();
-
-    let closed = false;
-    const cleanup = () => {
-      [
-        ditherModeSelect,
-        ditherStrengthRange,
-        distanceSelect,
-        alphaRange,
-        antiRange,
-        serpentineCheckbox,
-      ].forEach((control) => control.removeEventListener('input', onInput));
-      downloadButton.removeEventListener('click', onDownloadClick);
-      document.removeEventListener('keydown', onKeyDown, true);
-      backdrop.remove();
-    };
-    const close = (applyConversion) => {
-      if (closed) return;
-      closed = true;
-      const selectedOptions = getSelectedOptions();
-      cleanup();
-      resolve({
-        convert: Boolean(applyConversion),
-        options: selectedOptions,
-      });
-    };
-    const onKeyDown = (event) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        close(false);
-      }
-    };
-    keepButton.addEventListener('click', () => close(false));
-    convertButton.addEventListener('click', () => close(true));
-    backdrop.addEventListener('click', (event) => {
-      if (event.target === backdrop) {
-        close(false);
-      }
-    });
-    document.addEventListener('keydown', onKeyDown, true);
-
-    document.body.appendChild(backdrop);
-    convertButton.focus();
-  });
-};
-
-let textTemplateBuilderSession = null;
-const openTextTemplateBuilder = (options = {}) => {
-  ensureTemplateTextWebFontsLoaded();
-  if (textTemplateBuilderSession?.close) {
-    textTemplateBuilderSession.close(null);
-  }
-
-  const initialText = String(options?.initialText ?? '').slice(0, TEMPLATE_TEXT_MAX_CHARS);
-  const initialFontSize = clampNumber(
-    options?.initialFontSize,
-    TEMPLATE_TEXT_FONT_SIZE_MIN,
-    TEMPLATE_TEXT_FONT_SIZE_MAX,
-    TEMPLATE_TEXT_FONT_SIZE
-  );
-  const initialFontKeyOption = String(options?.initialFontKey || '').trim();
-  const initialFontKey = templateTextFontMap.has(initialFontKeyOption)
-    ? initialFontKeyOption
-    : TEMPLATE_TEXT_FONT_DEFAULT_KEY;
-  const initialColorRgb = resolveTemplateTextColor(options);
-  const initialColorKeyOption = String(options?.initialColorKey || '').trim();
-  const initialColorKey = (() => {
-    if (templateTextPaletteMap.has(initialColorKeyOption)) return initialColorKeyOption;
-    const fromRgb = rgbToKey(initialColorRgb);
-    if (templateTextPaletteMap.has(fromRgb)) return fromRgb;
-    return templateTextPaletteOptions[0]?.key ?? '0,0,0';
-  })();
-  const previewTileX = normalizePreviewTileX(options?.previewTileX);
-  const previewTileY = normalizePreviewTileY(options?.previewTileY);
-  const previewPixelX = normalizePreviewTilePixel(options?.previewPixelX);
-  const previewPixelY = normalizePreviewTilePixel(options?.previewPixelY);
-  const initialPreviewZoom = (() => {
-    const numeric = Number(options?.previewZoom);
-    if (!Number.isFinite(numeric)) return TEMPLATE_TEXT_PREVIEW_ZOOM_DEFAULT;
-    return Math.max(TEMPLATE_TEXT_PREVIEW_ZOOM_MIN, numeric);
-  })();
-
-  return new Promise((resolve) => {
-    const panel = document.createElement('section');
-    panel.id = 'bm-text-template-window';
-    panel.className = 'bm-text-template-window';
-    panel.style.width = `${TEMPLATE_TEXT_WINDOW_DEFAULT_W}px`;
-    panel.style.height = `${TEMPLATE_TEXT_WINDOW_DEFAULT_H}px`;
-    panel.style.minWidth = `${TEMPLATE_TEXT_WINDOW_MIN_W}px`;
-    panel.style.minHeight = `${TEMPLATE_TEXT_WINDOW_MIN_H}px`;
-    panel.style.right = '20px';
-    panel.style.bottom = '20px';
-
-    const head = document.createElement('div');
-    head.className = 'bm-text-template-window-head';
-    head.title = 'Drag to move';
-    const title = document.createElement('span');
-    title.className = 'bm-text-template-window-title';
-    title.textContent = 'Text Template';
-    const closeBtn = document.createElement('button');
-    closeBtn.type = 'button';
-    closeBtn.className = 'bm-text-template-window-close';
-    closeBtn.textContent = '✖';
-    closeBtn.title = 'Close';
-    head.appendChild(title);
-    head.appendChild(closeBtn);
-    panel.appendChild(head);
-
-    const body = document.createElement('div');
-    body.className = 'bm-text-template-window-body';
-
-    const textLabel = document.createElement('label');
-    textLabel.className = 'bm-text-template-window-label';
-    textLabel.textContent = `Text (max ${TEMPLATE_TEXT_MAX_CHARS})`;
-    body.appendChild(textLabel);
-
-    const textInput = document.createElement('textarea');
-    textInput.className = 'bm-text-template-window-input';
-    textInput.maxLength = TEMPLATE_TEXT_MAX_CHARS;
-    textInput.placeholder = 'Enter template text...';
-    textInput.value = initialText;
-    body.appendChild(textInput);
-
-    const controlRow = document.createElement('div');
-    controlRow.className = 'bm-text-template-window-controls';
-
-    const colorGroup = document.createElement('div');
-    colorGroup.className = 'bm-text-template-window-control';
-    const colorLabel = document.createElement('label');
-    colorLabel.className = 'bm-text-template-window-label';
-    colorLabel.textContent = 'Color';
-    const colorSelect = document.createElement('select');
-    colorSelect.className = 'bm-text-template-window-select';
-    templateTextPaletteOptions.forEach((option) => {
-      const optionElement = document.createElement('option');
-      optionElement.value = option.key;
-      optionElement.textContent = option.name;
-      colorSelect.appendChild(optionElement);
-    });
-    colorSelect.value = initialColorKey;
-    if (!colorSelect.value) {
-      colorSelect.value = templateTextPaletteOptions[0]?.key ?? '0,0,0';
-    }
-    const colorSwatch = document.createElement('span');
-    colorSwatch.className = 'bm-text-template-window-swatch';
-    colorGroup.appendChild(colorLabel);
-    colorGroup.appendChild(colorSelect);
-    colorGroup.appendChild(colorSwatch);
-    controlRow.appendChild(colorGroup);
-
-    const fontFamilyGroup = document.createElement('div');
-    fontFamilyGroup.className = 'bm-text-template-window-control';
-    const fontFamilyLabel = document.createElement('label');
-    fontFamilyLabel.className = 'bm-text-template-window-label';
-    fontFamilyLabel.textContent = 'Font';
-    const fontFamilySelect = document.createElement('select');
-    fontFamilySelect.className = 'bm-text-template-window-select';
-    templateTextFontOptions.forEach((option) => {
-      const optionElement = document.createElement('option');
-      optionElement.value = option.key;
-      optionElement.textContent = option.name;
-      fontFamilySelect.appendChild(optionElement);
-    });
-    fontFamilySelect.value = initialFontKey;
-    if (!fontFamilySelect.value) {
-      fontFamilySelect.value = TEMPLATE_TEXT_FONT_DEFAULT_KEY;
-    }
-    fontFamilyGroup.appendChild(fontFamilyLabel);
-    fontFamilyGroup.appendChild(fontFamilySelect);
-    controlRow.appendChild(fontFamilyGroup);
-
-    const fontGroup = document.createElement('div');
-    fontGroup.className = 'bm-text-template-window-control';
-    const fontLabel = document.createElement('label');
-    fontLabel.className = 'bm-text-template-window-label';
-    fontLabel.textContent = 'Font Size';
-    const fontSizeNumber = document.createElement('input');
-    fontSizeNumber.className = 'bm-text-template-window-number';
-    fontSizeNumber.type = 'number';
-    fontSizeNumber.min = String(TEMPLATE_TEXT_FONT_SIZE_MIN);
-    fontSizeNumber.max = String(TEMPLATE_TEXT_FONT_SIZE_MAX);
-    fontSizeNumber.step = '1';
-    fontSizeNumber.value = String(initialFontSize);
-    const fontSizeRange = document.createElement('input');
-    fontSizeRange.className = 'bm-text-template-window-range';
-    fontSizeRange.type = 'range';
-    fontSizeRange.min = String(TEMPLATE_TEXT_FONT_SIZE_MIN);
-    fontSizeRange.max = String(TEMPLATE_TEXT_FONT_SIZE_MAX);
-    fontSizeRange.step = '1';
-    fontSizeRange.value = String(initialFontSize);
-    fontGroup.appendChild(fontLabel);
-    fontGroup.appendChild(fontSizeNumber);
-    fontGroup.appendChild(fontSizeRange);
-    controlRow.appendChild(fontGroup);
-
-    const positionGroup = document.createElement('div');
-    positionGroup.className = 'bm-text-template-window-control';
-    const positionLabel = document.createElement('label');
-    positionLabel.className = 'bm-text-template-window-label';
-    positionLabel.textContent = 'Position (Px)';
-    const positionRow = document.createElement('div');
-    positionRow.className = 'bm-text-template-window-pair';
-    const positionXInput = document.createElement('input');
-    positionXInput.className = 'bm-text-template-window-number';
-    positionXInput.type = 'number';
-    positionXInput.min = '0';
-    positionXInput.max = String(TEMPLATE_TILE_SIZE - 1);
-    positionXInput.step = '1';
-    positionXInput.placeholder = 'Px X';
-    positionXInput.value = String(previewPixelX);
-    positionXInput.title = 'Pixel X in tile';
-    const positionYInput = document.createElement('input');
-    positionYInput.className = 'bm-text-template-window-number';
-    positionYInput.type = 'number';
-    positionYInput.min = '0';
-    positionYInput.max = String(TEMPLATE_TILE_SIZE - 1);
-    positionYInput.step = '1';
-    positionYInput.placeholder = 'Px Y';
-    positionYInput.value = String(previewPixelY);
-    positionYInput.title = 'Pixel Y in tile';
-    positionRow.appendChild(positionXInput);
-    positionRow.appendChild(positionYInput);
-    positionGroup.appendChild(positionLabel);
-    positionGroup.appendChild(positionRow);
-    controlRow.appendChild(positionGroup);
-
-    body.appendChild(controlRow);
-
-    const previewMeta = document.createElement('div');
-    previewMeta.className = 'bm-text-template-window-meta';
-    previewMeta.textContent = 'Enter text to preview.';
-    body.appendChild(previewMeta);
-
-    const previewWrap = document.createElement('div');
-    previewWrap.className = 'bm-text-template-window-preview';
-    const previewCanvas = document.createElement('canvas');
-    previewCanvas.className = 'bm-text-template-window-canvas';
-    previewWrap.appendChild(previewCanvas);
-    body.appendChild(previewWrap);
-
-    const errorOutput = document.createElement('div');
-    errorOutput.className = 'bm-text-template-window-error';
-    body.appendChild(errorOutput);
-
-    const actions = document.createElement('div');
-    actions.className = 'bm-text-template-window-actions';
-    const cancelBtn = document.createElement('button');
-    cancelBtn.type = 'button';
-    cancelBtn.textContent = 'Cancel';
-    const createBtn = document.createElement('button');
-    createBtn.type = 'button';
-    createBtn.textContent = 'Create Template';
-    createBtn.disabled = true;
-    actions.appendChild(cancelBtn);
-    actions.appendChild(createBtn);
-    body.appendChild(actions);
-
-    panel.appendChild(body);
-
-    let closed = false;
-    let dragState = null;
-    let moveHandler = null;
-    let upHandler = null;
-    let resizeObserver = null;
-    let renderToken = 0;
-    let renderQueued = false;
-
-    const getSelectedColor = () => {
-      const key = colorSelect.value;
-      const option = templateTextPaletteMap.get(key);
-      if (option) return option.rgb.slice();
-      return templateTextPaletteOptions[0]?.rgb?.slice() ?? [0, 0, 0];
-    };
-    const getSelectedFontKey = () => {
-      const key = String(fontFamilySelect.value || '').trim();
-      if (templateTextFontMap.has(key)) return key;
-      return TEMPLATE_TEXT_FONT_DEFAULT_KEY;
-    };
-    const getSelectedFontSize = () => clampNumber(
-      fontSizeNumber.value,
-      TEMPLATE_TEXT_FONT_SIZE_MIN,
-      TEMPLATE_TEXT_FONT_SIZE_MAX,
-      TEMPLATE_TEXT_FONT_SIZE
-    );
-
-    const syncColorSwatch = () => {
-      const color = getSelectedColor();
-      colorSwatch.style.backgroundColor = rgbToCss(color);
-      const optionName = templateTextPaletteMap.get(colorSelect.value)?.name;
-      colorSwatch.title = optionName ? `${optionName} (${color.join(', ')})` : color.join(', ');
-    };
-
-    const syncFontInputs = (value) => {
-      const safeValue = clampNumber(
-        value,
-        TEMPLATE_TEXT_FONT_SIZE_MIN,
-        TEMPLATE_TEXT_FONT_SIZE_MAX,
-        TEMPLATE_TEXT_FONT_SIZE
-      );
-      fontSizeNumber.value = String(safeValue);
-      fontSizeRange.value = String(safeValue);
-      return safeValue;
-    };
-    let previewZoomValue = initialPreviewZoom;
-    const setPreviewZoom = (value) => {
-      const numericValue = Number(value);
-      if (!Number.isFinite(numericValue)) {
-        previewZoomValue = TEMPLATE_TEXT_PREVIEW_ZOOM_DEFAULT;
-        return previewZoomValue;
-      }
-      previewZoomValue = Math.max(TEMPLATE_TEXT_PREVIEW_ZOOM_MIN, numericValue);
-      return previewZoomValue;
-    };
-    const getPreviewZoom = () => previewZoomValue;
-    const syncPreviewPositionInputs = () => {
-      const x = normalizePreviewTilePixel(positionXInput.value);
-      const y = normalizePreviewTilePixel(positionYInput.value);
-      positionXInput.value = String(x);
-      positionYInput.value = String(y);
-      return { x, y };
-    };
-    const getPreviewPosition = () => syncPreviewPositionInputs();
-    const getPreviewSummary = () => {
-      const { x, y } = getPreviewPosition();
-      const zoom = getPreviewZoom();
-      return `Tile ${previewTileX}, ${previewTileY} • Px ${x}, ${y} • Zoom ${zoom.toFixed(1)}x`;
-    };
-
-    const resizePreviewCanvas = () => {
-      const width = Math.max(TEMPLATE_TEXT_PREVIEW_MIN_W, Math.floor(previewWrap.clientWidth || TEMPLATE_TEXT_PREVIEW_MIN_W));
-      const height = Math.max(TEMPLATE_TEXT_PREVIEW_MIN_H, Math.floor(previewWrap.clientHeight || TEMPLATE_TEXT_PREVIEW_MIN_H));
-      const dpr = Math.max(1, window.devicePixelRatio || 1);
-      const targetWidth = Math.floor(width * dpr);
-      const targetHeight = Math.floor(height * dpr);
-      if (previewCanvas.width !== targetWidth || previewCanvas.height !== targetHeight) {
-        previewCanvas.width = targetWidth;
-        previewCanvas.height = targetHeight;
-      }
-      previewCanvas.style.width = `${width}px`;
-      previewCanvas.style.height = `${height}px`;
-      const context = previewCanvas.getContext('2d');
-      if (context) {
-        context.setTransform(dpr, 0, 0, dpr, 0, 0);
-        context.clearRect(0, 0, width, height);
-      }
-      return { width, height, context };
-    };
-
-    const drawPreviewPlaceholder = () => {
-      const { width, height, context } = resizePreviewCanvas();
-      if (!context) return;
-      context.fillStyle = 'rgba(0, 0, 0, 0.25)';
-      context.font = '600 12px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
-      context.textAlign = 'center';
-      context.textBaseline = 'middle';
-      context.fillText('Preview', width / 2, height / 2);
-    };
-    const computePreviewCropBounds = (previewData, textTileX, textTileY, zoomValue) => {
-      const textTileW = Math.max(1, previewData.width);
-      const textTileH = Math.max(1, previewData.height);
-      const margin = Math.max(20, Math.min(220, Math.round(Math.max(textTileW, textTileH) * 0.75)));
-      const baseLeft = textTileX - margin;
-      const baseTop = textTileY - margin;
-      const baseRight = textTileX + textTileW + margin;
-      const baseBottom = textTileY + textTileH + margin;
-      const baseWidth = Math.max(1, baseRight - baseLeft);
-      const baseHeight = Math.max(1, baseBottom - baseTop);
-      const zoom = Number.isFinite(Number(zoomValue)) && Number(zoomValue) > TEMPLATE_TEXT_PREVIEW_ZOOM_MIN
-        ? Number(zoomValue)
-        : TEMPLATE_TEXT_PREVIEW_ZOOM_DEFAULT;
-      const cropWidth = Math.max(textTileW, Math.round(baseWidth / zoom));
-      const cropHeight = Math.max(textTileH, Math.round(baseHeight / zoom));
-      const centerX = textTileX + textTileW / 2;
-      const centerY = textTileY + textTileH / 2;
-      const cropLeft = Math.round(centerX - cropWidth / 2);
-      const cropTop = Math.round(centerY - cropHeight / 2);
-      return { cropLeft, cropTop, cropWidth, cropHeight };
-    };
-    const getPreviewTileOffsetRange = (cropLeft, cropTop, cropWidth, cropHeight) => {
-      const cropRight = cropLeft + cropWidth;
-      const cropBottom = cropTop + cropHeight;
-      return {
-        dxMin: Math.floor(cropLeft / TEMPLATE_TILE_SIZE),
-        dxMax: Math.floor((cropRight - 1) / TEMPLATE_TILE_SIZE),
-        dyMin: Math.floor(cropTop / TEMPLATE_TILE_SIZE),
-        dyMax: Math.floor((cropBottom - 1) / TEMPLATE_TILE_SIZE),
-      };
-    };
-    const drawPreviewTileRegion = (context, width, height, tileSet, previewData, textTileX, textTileY, zoomValue) => {
-      const { cropLeft, cropTop, cropWidth, cropHeight } = computePreviewCropBounds(
-        previewData,
-        textTileX,
-        textTileY,
-        zoomValue
-      );
-
-      const frameX = 0;
-      const frameY = 0;
-      const frameWidth = Math.max(1, width);
-      const frameHeight = Math.max(1, height);
-      // Cover mode: fill the preview frame without letterboxing.
-      const scale = Math.max(frameWidth / cropWidth, frameHeight / cropHeight);
-      const renderedWidth = cropWidth * scale;
-      const renderedHeight = cropHeight * scale;
-      const renderX = frameX + (frameWidth - renderedWidth) / 2;
-      const renderY = frameY + (frameHeight - renderedHeight) / 2;
-
-      context.clearRect(0, 0, width, height);
-      context.fillStyle = 'rgba(0, 0, 0, 0.26)';
-      context.fillRect(frameX, frameY, frameWidth, frameHeight);
-      context.imageSmoothingEnabled = false;
-
-      const cropRight = cropLeft + cropWidth;
-      const cropBottom = cropTop + cropHeight;
-      const tileRange = getPreviewTileOffsetRange(cropLeft, cropTop, cropWidth, cropHeight);
-      context.save();
-      context.beginPath();
-      context.rect(frameX, frameY, frameWidth, frameHeight);
-      context.clip();
-      for (let dy = tileRange.dyMin; dy <= tileRange.dyMax; dy++) {
-        for (let dx = tileRange.dxMin; dx <= tileRange.dxMax; dx++) {
-          const tileImage = tileSet.get(`${dx},${dy}`);
-          if (!tileImage) continue;
-          const tileLeft = dx * TEMPLATE_TILE_SIZE;
-          const tileTop = dy * TEMPLATE_TILE_SIZE;
-          const intersectLeft = Math.max(cropLeft, tileLeft);
-          const intersectTop = Math.max(cropTop, tileTop);
-          const intersectRight = Math.min(cropRight, tileLeft + TEMPLATE_TILE_SIZE);
-          const intersectBottom = Math.min(cropBottom, tileTop + TEMPLATE_TILE_SIZE);
-          const intersectWidth = intersectRight - intersectLeft;
-          const intersectHeight = intersectBottom - intersectTop;
-          if (intersectWidth <= 0 || intersectHeight <= 0) continue;
-          const srcX = intersectLeft - tileLeft;
-          const srcY = intersectTop - tileTop;
-          const dstX = renderX + (intersectLeft - cropLeft) * scale;
-          const dstY = renderY + (intersectTop - cropTop) * scale;
-          const dstW = Math.max(1, intersectWidth * scale);
-          const dstH = Math.max(1, intersectHeight * scale);
-          context.drawImage(tileImage, srcX, srcY, intersectWidth, intersectHeight, dstX, dstY, dstW, dstH);
-        }
-      }
-      context.restore();
-      return {
-        clipX: frameX,
-        clipY: frameY,
-        clipWidth: frameWidth,
-        clipHeight: frameHeight,
-        renderX,
-        renderY,
-        scale,
-        cropLeft,
-        cropTop,
-        cropWidth,
-        cropHeight,
-      };
-    };
-
-    const renderPreview = async () => {
-      if (closed) return;
-      const token = ++renderToken;
-      const text = textInput.value;
-      if (!text.trim()) {
-        errorOutput.textContent = '';
-        previewMeta.textContent = `${getPreviewSummary()} • Enter text to preview.`;
-        createBtn.disabled = true;
-        drawPreviewPlaceholder();
-        return;
-      }
-
-      const selectedColor = getSelectedColor();
-      const selectedFontSize = getSelectedFontSize();
-      let previewData = null;
-      try {
-        previewData = await createTextTemplateBlob(text, {
-          colorRgb: selectedColor,
-          fontSize: selectedFontSize,
-          fontKey: getSelectedFontKey(),
-        });
-      } catch (error) {
-        if (closed || token !== renderToken) return;
-        previewMeta.textContent = `${getPreviewSummary()} • Preview unavailable.`;
-        errorOutput.textContent = error?.message || 'Failed to render preview.';
-        createBtn.disabled = true;
-        drawPreviewPlaceholder();
-        return;
-      }
-      if (closed || token !== renderToken) return;
-
-      const { x: currentPreviewPixelX, y: currentPreviewPixelY } = getPreviewPosition();
-      const currentPreviewZoom = getPreviewZoom();
-      errorOutput.textContent = '';
-      createBtn.disabled = false;
-
-      const previewCrop = computePreviewCropBounds(
-        previewData,
-        currentPreviewPixelX,
-        currentPreviewPixelY,
-        currentPreviewZoom
-      );
-      const tileRange = getPreviewTileOffsetRange(
-        previewCrop.cropLeft,
-        previewCrop.cropTop,
-        previewCrop.cropWidth,
-        previewCrop.cropHeight
-      );
-      const requiredTileCount =
-        (tileRange.dxMax - tileRange.dxMin + 1) *
-        (tileRange.dyMax - tileRange.dyMin + 1);
-      const tileSet = new Map();
-      let tileUnavailable = false;
-      let tilePreviewLimited = false;
-      if (requiredTileCount > TEMPLATE_TEXT_PREVIEW_MAX_TILE_REQUESTS) {
-        tilePreviewLimited = true;
-        try {
-          const centerImage = await loadPreviewTileImage(previewTileX, previewTileY);
-          if (centerImage) {
-            tileSet.set('0,0', centerImage);
-          } else {
-            tileUnavailable = true;
-          }
-        } catch (_) {
-          tileUnavailable = true;
-        }
-      } else {
-        const tileLoadTasks = [];
-        for (let dy = tileRange.dyMin; dy <= tileRange.dyMax; dy++) {
-          for (let dx = tileRange.dxMin; dx <= tileRange.dxMax; dx++) {
-            tileLoadTasks.push((async () => {
-              try {
-                const image = await loadPreviewTileImage(previewTileX + dx, previewTileY + dy);
-                return { dx, dy, image };
-              } catch (_) {
-                return { dx, dy, image: null };
-              }
-            })());
-          }
-        }
-        const tileResults = await Promise.all(tileLoadTasks);
-        tileResults.forEach(({ dx, dy, image }) => {
-          tileSet.set(`${dx},${dy}`, image || null);
-          if (!image) {
-            tileUnavailable = true;
-          }
-        });
-      }
-      if (closed || token !== renderToken) return;
-      previewMeta.textContent = `${getPreviewSummary()} • Result: ${previewData.width} x ${previewData.height}px${tilePreviewLimited ? ' • Tile preview limited' : tileUnavailable ? ' • Tile preview unavailable' : ''}`;
-
-      const { width, height, context } = resizePreviewCanvas();
-      if (!context) return;
-      const bitmap = await createImageBitmap(previewData.blob);
-      if (closed || token !== renderToken) {
-        bitmap.close();
-        return;
-      }
-      const region = drawPreviewTileRegion(
-        context,
-        width,
-        height,
-        tileSet,
-        previewData,
-        currentPreviewPixelX,
-        currentPreviewPixelY,
-        currentPreviewZoom
-      );
-      const textDrawX = region.renderX + (currentPreviewPixelX - region.cropLeft) * region.scale;
-      const textDrawY = region.renderY + (currentPreviewPixelY - region.cropTop) * region.scale;
-      const textDrawW = Math.max(1, Math.round(previewData.width * region.scale));
-      const textDrawH = Math.max(1, Math.round(previewData.height * region.scale));
-      context.save();
-      context.beginPath();
-      context.rect(region.clipX, region.clipY, region.clipWidth, region.clipHeight);
-      context.clip();
-      context.imageSmoothingEnabled = false;
-      context.drawImage(bitmap, textDrawX, textDrawY, textDrawW, textDrawH);
-      context.restore();
-      bitmap.close();
-    };
-
-    const queuePreviewRender = () => {
-      if (renderQueued) return;
-      renderQueued = true;
-      requestAnimationFrame(() => {
-        renderQueued = false;
-        void renderPreview();
-      });
-    };
-
-    const applyTheme = () => {
-      applyOverlayVarsToFloatingElement(panel);
-    };
-    const handleThemeChanged = () => {
-      applyTheme();
-      queuePreviewRender();
-    };
-
-    const cleanupDragHandlers = () => {
-      if (moveHandler) {
-        window.removeEventListener('mousemove', moveHandler);
-        moveHandler = null;
-      }
-      if (upHandler) {
-        window.removeEventListener('mouseup', upHandler);
-        upHandler = null;
-      }
-      dragState = null;
-    };
-
-    const close = (result = null) => {
-      if (closed) return;
-      closed = true;
-      renderToken++;
-      cleanupDragHandlers();
-      if (resizeObserver) {
-        resizeObserver.disconnect();
-        resizeObserver = null;
-      }
-      document.removeEventListener('bm-layout-theme-changed', handleThemeChanged);
-      window.removeEventListener('resize', queuePreviewRender);
-      window.removeEventListener('keydown', handleKeyDown, true);
-      panel.remove();
-      if (textTemplateBuilderSession?.panel === panel) {
-        textTemplateBuilderSession = null;
-      }
-      resolve(result);
-    };
-
-    const handleKeyDown = (event) => {
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      close(null);
-    };
-
-    closeBtn.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      close(null);
-    });
-    cancelBtn.addEventListener('click', () => close(null));
-
-    createBtn.addEventListener('click', async () => {
-      createBtn.disabled = true;
-      errorOutput.textContent = '';
-      try {
-        const { x: resultPreviewPixelX, y: resultPreviewPixelY } = getPreviewPosition();
-        const resultPreviewZoom = getPreviewZoom();
-        const result = await createTextTemplateBlob(textInput.value, {
-          colorRgb: getSelectedColor(),
-          fontSize: getSelectedFontSize(),
-          fontKey: getSelectedFontKey(),
-        });
-        close({
-          ...result,
-          previewTileX,
-          previewTileY,
-          previewPixelX: resultPreviewPixelX,
-          previewPixelY: resultPreviewPixelY,
-          previewZoom: resultPreviewZoom,
-        });
-      } catch (error) {
-        errorOutput.textContent = error?.message || 'Failed to create text template.';
-        queuePreviewRender();
-      }
-    });
-
-    textInput.addEventListener('input', queuePreviewRender);
-    textInput.addEventListener('keydown', (event) => {
-      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
-        event.preventDefault();
-        if (!createBtn.disabled) {
-          createBtn.click();
-        }
-      }
-    });
-    colorSelect.addEventListener('change', () => {
-      syncColorSwatch();
-      queuePreviewRender();
-    });
-    fontFamilySelect.addEventListener('change', () => {
-      queuePreviewRender();
-    });
-    fontSizeNumber.addEventListener('input', () => {
-      syncFontInputs(fontSizeNumber.value);
-      queuePreviewRender();
-    });
-    fontSizeNumber.addEventListener('change', () => {
-      syncFontInputs(fontSizeNumber.value);
-      queuePreviewRender();
-    });
-    fontSizeRange.addEventListener('input', () => {
-      syncFontInputs(fontSizeRange.value);
-      queuePreviewRender();
-    });
-    previewWrap.addEventListener('wheel', (event) => {
-      event.preventDefault();
-      const factor = event.shiftKey ? 1.35 : 1.15;
-      const nextZoom = event.deltaY < 0
-        ? getPreviewZoom() * factor
-        : getPreviewZoom() / factor;
-      setPreviewZoom(nextZoom);
-      queuePreviewRender();
-    }, { passive: false });
-    positionXInput.addEventListener('input', () => {
-      syncPreviewPositionInputs();
-      queuePreviewRender();
-    });
-    positionXInput.addEventListener('change', () => {
-      syncPreviewPositionInputs();
-      queuePreviewRender();
-    });
-    positionYInput.addEventListener('input', () => {
-      syncPreviewPositionInputs();
-      queuePreviewRender();
-    });
-    positionYInput.addEventListener('change', () => {
-      syncPreviewPositionInputs();
-      queuePreviewRender();
-    });
-
-    head.addEventListener('mousedown', (event) => {
-      if (event.button !== 0) return;
-      if (event.target instanceof Element && event.target.closest('button')) return;
-      const rect = panel.getBoundingClientRect();
-      dragState = {
-        offsetX: event.clientX - rect.left,
-        offsetY: event.clientY - rect.top
-      };
-      moveHandler = (moveEvent) => {
-        if (!dragState) return;
-        const currentRect = panel.getBoundingClientRect();
-        const maxLeft = Math.max(8, window.innerWidth - currentRect.width - 8);
-        const maxTop = Math.max(8, window.innerHeight - currentRect.height - 8);
-        const left = Math.min(maxLeft, Math.max(8, moveEvent.clientX - dragState.offsetX));
-        const top = Math.min(maxTop, Math.max(8, moveEvent.clientY - dragState.offsetY));
-        panel.style.left = `${left}px`;
-        panel.style.top = `${top}px`;
-        panel.style.right = 'auto';
-        panel.style.bottom = 'auto';
-      };
-      upHandler = () => {
-        cleanupDragHandlers();
-      };
-      window.addEventListener('mousemove', moveHandler);
-      window.addEventListener('mouseup', upHandler);
-      event.preventDefault();
-    });
-
-    document.body.appendChild(panel);
-    textTemplateBuilderSession = { panel, close };
-    applyTheme();
-    document.addEventListener('bm-layout-theme-changed', handleThemeChanged);
-    window.addEventListener('resize', queuePreviewRender);
-    window.addEventListener('keydown', handleKeyDown, true);
-    if (typeof ResizeObserver !== 'undefined') {
-      resizeObserver = new ResizeObserver(() => queuePreviewRender());
-      resizeObserver.observe(previewWrap);
-    }
-
-    syncColorSwatch();
-    syncFontInputs(initialFontSize);
-    setPreviewZoom(initialPreviewZoom);
-    syncPreviewPositionInputs();
-    queuePreviewRender();
-    textInput.focus();
-    textInput.select();
-  });
-};
-
 const normalizeFlag = (value) => value === true || value === 'true' || value === 1 || value === '1';
+const DEFAULT_REMOTE_TEMPLATE_STREAM = 'root';
+const normalizeTemplateRemoteStream = (value) => {
+  const text = String(value ?? '').trim().toLowerCase();
+  return text || DEFAULT_REMOTE_TEMPLATE_STREAM;
+};
 const isWplaceDarkTheme = () => {
   const theme = String(document.documentElement?.dataset?.theme ?? '').toLowerCase();
   return theme === 'dark' || theme === 'halloween';
@@ -5127,6 +3606,110 @@ const overlayMain = new Overlay(name, version); // Constructs a new Overlay obje
 const templateManager = new TemplateManager(name, version, overlayMain); // Constructs a new TemplateManager object
 templateManagerRef = templateManager;
 const apiManager = new ApiManager(templateManager); // Constructs a new ApiManager object
+const {
+  openRemoteTemplateBuilder,
+  openTemplatePaletteConversionPreview,
+  openRussianFlagTemplateBuilder,
+  openTextTemplateBuilder,
+} = createTemplateCreationUi({
+  applyOverlayVarsToFloatingElement,
+  normalizeTemplatePaletteConversionOptions,
+  templatePaletteConversionDefaults,
+  convertTemplateImageFileToPaletteBlob,
+  convertImageDataToWplacePalette,
+  cleanUpCanvas,
+  consoleWarn,
+  TEMPLATE_PALETTE_PREVIEW_MAX_DIMENSION,
+  ensureTemplateTextWebFontsLoaded,
+  clampNumber,
+  TEMPLATE_TEXT_MAX_CHARS,
+  TEMPLATE_TEXT_FONT_SIZE,
+  TEMPLATE_TEXT_FONT_SIZE_MIN,
+  TEMPLATE_TEXT_FONT_SIZE_MAX,
+  TEMPLATE_TEXT_FONT_DEFAULT_KEY,
+  TEMPLATE_TEXT_PREVIEW_ZOOM_MIN,
+  TEMPLATE_TEXT_PREVIEW_ZOOM_DEFAULT,
+  TEMPLATE_TEXT_PREVIEW_MAX_TILE_REQUESTS,
+  TEMPLATE_TEXT_PREVIEW_MIN_W,
+  TEMPLATE_TEXT_PREVIEW_MIN_H,
+  TEMPLATE_TEXT_WINDOW_DEFAULT_W,
+  TEMPLATE_TEXT_WINDOW_DEFAULT_H,
+  TEMPLATE_TEXT_WINDOW_MIN_W,
+  TEMPLATE_TEXT_WINDOW_MIN_H,
+  TEMPLATE_TILE_SIZE,
+  templateTextFontMap,
+  templateTextFontOptions,
+  resolveTemplateTextColor,
+  rgbToKey,
+  rgbToCss,
+  templateTextPaletteMap,
+  templateTextPaletteOptions,
+  normalizePreviewTileX,
+  normalizePreviewTileY,
+  normalizePreviewTilePixel,
+  loadPreviewTileImage,
+  createTextTemplateBlob,
+  TEMPLATE_FLAG_WINDOW_DEFAULT_W,
+  TEMPLATE_FLAG_WINDOW_DEFAULT_H,
+  TEMPLATE_FLAG_WINDOW_MIN_W,
+  TEMPLATE_FLAG_WINDOW_MIN_H,
+  TEMPLATE_FLAG_DIMENSION_MIN,
+  TEMPLATE_FLAG_DIMENSION_MAX,
+  TEMPLATE_FLAG_DEFAULT_W,
+  TEMPLATE_FLAG_DEFAULT_H,
+  TEMPLATE_FLAG_IGNORE_BACKGROUND_COLOR_COUNT,
+  TEMPLATE_FLAG_ORIENTATION_HORIZONTAL,
+  TEMPLATE_FLAG_ORIENTATION_VERTICAL,
+  TEMPLATE_FLAG_VERTICAL_ORDER_FIRST_LEFT,
+  TEMPLATE_FLAG_VERTICAL_ORDER_FIRST_RIGHT,
+  normalizeRussianFlagStyleKey,
+  normalizeFlagStripeOrientation,
+  normalizeFlagVerticalOrder,
+  normalizeFlagStripeColorKeys,
+  normalizeFlagTemplateDimension,
+  normalizeFlagPointCoords,
+  computeFlagTemplateEndFromStartAndSize,
+  parseFourCoordsFromAnyText,
+  computeFlagTemplateRectFromPoints,
+  getRussianFlagStyle,
+  resolveTemplatePaletteNameByKey,
+  getFlagDefaultStripeColorKeys,
+  normalizeTemplatePaletteKey,
+  templateRussianFlagStyles,
+  TEMPLATE_RUSSIAN_FLAG_DEFAULT_PROTECTED_KEYS,
+  buildRussianFlagTemplateImageData,
+  buildRussianFlagTemplateName,
+  loadLiveRegionImageDataForFlagMask,
+  testCanvasSize,
+});
+const {
+  openArchiveTemplateBuilder,
+  startArchiveTemplatePointCapture,
+  cancelArchiveTemplatePointCapture,
+  handleArchiveTemplatePointCapture,
+  isArchiveTemplatePointCaptureActive,
+} = createArchiveTemplateUi({
+  overlayMain,
+  templateManager,
+  applyOverlayVarsToFloatingElement,
+  getTemplateTimeArchiveMeta,
+  normalizeArchiveTemplateBaseUrl,
+  normalizeTimeArchiveMeta,
+  normalizeTilePixelCoords,
+  formatTilePixelCoords,
+  calculateTopLeftAndSize,
+  TEMPLATE_TILE_SIZE,
+  MAP_WORLD_WIDTH_PX,
+  TEMPLATE_ARCHIVE_BASE_URL,
+  TEMPLATE_ARCHIVE_PREVIEW_MAX_DIMENSION,
+  TEMPLATE_ARCHIVE_PREVIEW_MAX_TILE_REQUESTS,
+  TEMPLATE_ARCHIVE_PREVIEW_DOWNLOAD_CONCURRENCY,
+  gmRequest,
+  downloadTile,
+  testCanvasSize,
+  cleanUpCanvas,
+  consoleWarn,
+});
 apiManager.onCoordsUpdated = (rawCoords) => {
   handleDistanceToolCoordsUpdate(rawCoords);
   handleArchiveTemplatePointCapture(rawCoords);
@@ -5217,6 +3800,7 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
       'lineTemplateButton': false, // Hidden in settings
       'ruspixelFlagEnabled': true,
       'autoSyncTemplates': false,
+      'templateSyncStreams': ['root'],
       'chatDisabled': false,
       'mapCommentsDisabled': false,
     });
@@ -6596,6 +5180,28 @@ async function buildOverlayMain() {
               }
               createFlowBusy = true;
               try {
+                if (createMode === TEMPLATE_CREATE_MODE_REMOTE_NAME) {
+                  const remoteTemplateConfig = await openRemoteTemplateBuilder({
+                    configuredStreams: templateManager.getTemplateSyncStreams?.() ?? [DEFAULT_REMOTE_TEMPLATE_STREAM],
+                  });
+                  if (!remoteTemplateConfig?.templateName) {
+                    return;
+                  }
+                  const trimmedRemoteTemplateName = String(remoteTemplateConfig.templateName ?? '').trim();
+                  const createdTemplate = await templateSync.importTemplateByName({
+                    templateName: trimmedRemoteTemplateName,
+                    onStatus: (message) => instance.handleDisplayStatus(message),
+                    onError: (message) => instance.handleDisplayError(message),
+                    syncToggleList: () => window.syncToggleList?.(),
+                    buildTemplateFilterList: () => window.buildTemplateFilterList?.(),
+                    buildColorFilterList: () => window.buildColorFilterList?.(),
+                    defaultEnabled: true,
+                  });
+                  if (createdTemplate) {
+                    instance.handleDisplayStatus(`Template "${trimmedRemoteTemplateName}" imported as a local template.`);
+                  }
+                  return;
+                }
                 const coordTlX = document.querySelector('#bm-input-tx');
                 if (!coordTlX.checkValidity()) {coordTlX.reportValidity(); instance.handleDisplayError('Coordinates are malformed! Did you try clicking on the canvas first?'); return;}
                 const coordTlY = document.querySelector('#bm-input-ty');
@@ -6612,6 +5218,7 @@ async function buildOverlayMain() {
                 let createWithPaletteConversion = false;
                 let paletteConversionOptions = null;
                 let templateName = sourceFile?.name?.replace(/\.[^/.]+$/, '') || '';
+                let flagCreateMeta = null;
 
                 if (createMode === TEMPLATE_CREATE_MODE_IMAGE && !sourceFile) {
                   instance.handleDisplayError('Image file was not selected.');
@@ -6619,27 +5226,69 @@ async function buildOverlayMain() {
                 }
 
                 if (!sourceFile) {
-                  const textTemplate = await openTextTemplateBuilder({
-                    initialColorKey: getCurrentTemplateTextColorKey(),
-                    initialFontSize: TEMPLATE_TEXT_FONT_SIZE,
-                    previewTileX: Number(coordTlX.value),
-                    previewTileY: Number(coordTlY.value),
-                    previewPixelX: Number(coordPxX.value),
-                    previewPixelY: Number(coordPxY.value),
-                  });
-                  if (!textTemplate) {
+                  if (createMode === TEMPLATE_CREATE_MODE_TEXT) {
+                    const textTemplate = await openTextTemplateBuilder({
+                      initialColorKey: getCurrentTemplateTextColorKey(),
+                      initialFontSize: TEMPLATE_TEXT_FONT_SIZE,
+                      previewTileX: Number(coordTlX.value),
+                      previewTileY: Number(coordTlY.value),
+                      previewPixelX: Number(coordPxX.value),
+                      previewPixelY: Number(coordPxY.value),
+                    });
+                    if (!textTemplate) {
+                      return;
+                    }
+                    sourceFile = textTemplate.blob;
+                    templateName = buildTextTemplateName(textTemplate.text);
+                    if (Number.isFinite(Number(textTemplate.previewPixelX))) {
+                      coordPxX.value = String(normalizePreviewTilePixel(textTemplate.previewPixelX));
+                    }
+                    if (Number.isFinite(Number(textTemplate.previewPixelY))) {
+                      coordPxY.value = String(normalizePreviewTilePixel(textTemplate.previewPixelY));
+                    }
+                    apiManager.updateDownloadButton();
+                    persistCoords();
+                  } else if (createMode === TEMPLATE_CREATE_MODE_RUSSIAN_FLAG) {
+                    const flagTemplate = await openRussianFlagTemplateBuilder({
+                      initialStyleKey: templateFlagStyleTricolor.key,
+                      initialStripeOrientation: TEMPLATE_FLAG_ORIENTATION_HORIZONTAL,
+                      initialWidth: TEMPLATE_FLAG_DEFAULT_W,
+                      initialHeight: TEMPLATE_FLAG_DEFAULT_H,
+                      initialIgnoreArts: false,
+                      initialProtectedColorKeys: TEMPLATE_RUSSIAN_FLAG_DEFAULT_PROTECTED_KEYS,
+                      startCoords: {
+                        tx: Number(coordTlX.value),
+                        ty: Number(coordTlY.value),
+                        px: Number(coordPxX.value),
+                        py: Number(coordPxY.value),
+                      },
+                    });
+                    if (!flagTemplate?.file) {
+                      return;
+                    }
+                    sourceFile = flagTemplate.file;
+                    flagCreateMeta = {
+                      ignoreArts: Boolean(flagTemplate.ignoreArts),
+                      ignoredPixelCount: Math.max(0, Number(flagTemplate.ignoredPixelCount) || 0),
+                    };
+                    if (Array.isArray(flagTemplate.createCoords) && flagTemplate.createCoords.length >= 4) {
+                      coordTlX.value = String(Number(flagTemplate.createCoords[0]) || 0);
+                      coordTlY.value = String(Number(flagTemplate.createCoords[1]) || 0);
+                      coordPxX.value = String(normalizePreviewTilePixel(flagTemplate.createCoords[2]));
+                      coordPxY.value = String(normalizePreviewTilePixel(flagTemplate.createCoords[3]));
+                      apiManager.updateDownloadButton();
+                      persistCoords();
+                    }
+                    templateName = String(flagTemplate.templateName || '').trim() || buildRussianFlagTemplateName({
+                      styleKey: flagTemplate.styleKey,
+                      width: flagTemplate.width,
+                      height: flagTemplate.height,
+                      stripeOrientation: flagTemplate.stripeOrientation,
+                    });
+                  } else {
+                    instance.handleDisplayError('Unsupported template mode.');
                     return;
                   }
-                  sourceFile = textTemplate.blob;
-                  templateName = buildTextTemplateName(textTemplate.text);
-                  if (Number.isFinite(Number(textTemplate.previewPixelX))) {
-                    coordPxX.value = String(normalizePreviewTilePixel(textTemplate.previewPixelX));
-                  }
-                  if (Number.isFinite(Number(textTemplate.previewPixelY))) {
-                    coordPxY.value = String(normalizePreviewTilePixel(textTemplate.previewPixelY));
-                  }
-                  apiManager.updateDownloadButton();
-                  persistCoords();
                 }
 
                 if (sourceIsUploadedImage && sourceFile) {
@@ -6723,7 +5372,13 @@ async function buildOverlayMain() {
                     }
                   }
                 }
-                instance.handleDisplayStatus('Template created!');
+                if (createMode === TEMPLATE_CREATE_MODE_RUSSIAN_FLAG && flagCreateMeta?.ignoreArts) {
+                  instance.handleDisplayStatus(
+                    `Template created with Ignore Arts mask (${flagCreateMeta.ignoredPixelCount.toLocaleString()} pixel(s) transparent).`
+                  );
+                } else {
+                  instance.handleDisplayStatus('Template created!');
+                }
               } finally {
                 createFlowBusy = false;
                 const input = getTemplateFileInput();
@@ -6734,7 +5389,9 @@ async function buildOverlayMain() {
             [
               ['', 'Create template...'],
               [TEMPLATE_CREATE_MODE_IMAGE, 'Image template'],
+              [TEMPLATE_CREATE_MODE_REMOTE_NAME, 'Remote template by name'],
               [TEMPLATE_CREATE_MODE_TEXT, 'Text template'],
+              [TEMPLATE_CREATE_MODE_RUSSIAN_FLAG, 'Russian flag template'],
               [TEMPLATE_CREATE_MODE_TIME_ARCHIVE, 'Time-archive template'],
             ].forEach(([value, label]) => {
               const option = document.createElement('option');
@@ -6748,7 +5405,7 @@ async function buildOverlayMain() {
                 return;
               }
               const nextMode = normalizeTemplateCreateMode(select.value);
-              if (nextMode !== TEMPLATE_CREATE_MODE_TIME_ARCHIVE && archiveTemplatePointCaptureState.active) {
+              if (nextMode !== TEMPLATE_CREATE_MODE_TIME_ARCHIVE && isArchiveTemplatePointCaptureActive()) {
                 cancelArchiveTemplatePointCapture('Time-archive point capture cancelled.');
               }
               select.value = '';
@@ -7054,6 +5711,11 @@ async function buildOverlayMain() {
     if (!template) return false;
     const templateStore = templateManager.templatesJSON?.templates?.[template.storageKey] ?? {};
     return template.isRemote === true || templateStore.remote === true;
+  }
+  function getTemplateRemoteStream(template) {
+    if (!template) return DEFAULT_REMOTE_TEMPLATE_STREAM;
+    const templateStore = templateManager.templatesJSON?.templates?.[template.storageKey] ?? {};
+    return normalizeTemplateRemoteStream(template.remoteStream ?? templateStore.remoteStream);
   }
   const clearTemplatePositionJoystickPending = () => {
     templatePositionJoystickPendingDeltaX = 0;
@@ -7512,6 +6174,62 @@ async function buildOverlayMain() {
         if (aOrderValue !== bOrderValue) return aOrderValue - bOrderValue;
         return a.idx - b.idx;
       });
+      const rootLevelEntries = [];
+      const streamEntryGroups = new Map();
+      const streamGroupContainers = new Map();
+      const ensureStreamGroupContainer = (streamName, count = 0) => {
+        const normalizedStream = normalizeTemplateRemoteStream(streamName);
+        if (normalizedStream === DEFAULT_REMOTE_TEMPLATE_STREAM) {
+          return listContainer;
+        }
+        if (streamGroupContainers.has(normalizedStream)) {
+          return streamGroupContainers.get(normalizedStream);
+        }
+        const details = document.createElement('details');
+        details.open = true;
+        details.style.border = '1px solid var(--bm-border)';
+        details.style.borderRadius = '6px';
+        details.style.padding = '4px 6px';
+        details.style.background = 'var(--bm-panel-bg, transparent)';
+
+        const summary = document.createElement('summary');
+        summary.textContent = count > 0 ? `${normalizedStream} (${count})` : normalizedStream;
+        summary.style.cursor = 'pointer';
+        summary.style.fontSize = '12px';
+        summary.style.fontWeight = '600';
+        summary.style.textTransform = 'lowercase';
+
+        const body = document.createElement('div');
+        body.style.display = 'flex';
+        body.style.flexDirection = 'column';
+        body.style.gap = '4px';
+        body.style.padding = '4px 0 0 12px';
+
+        details.appendChild(summary);
+        details.appendChild(body);
+        listContainer.appendChild(details);
+        streamGroupContainers.set(normalizedStream, body);
+        return body;
+      };
+      for (const entry of entriesIndexed) {
+        const template = entry.t;
+        const isRemote = isTemplateRemote(template);
+        const remoteStream = isRemote ? getTemplateRemoteStream(template) : DEFAULT_REMOTE_TEMPLATE_STREAM;
+        if (!isRemote || remoteStream === DEFAULT_REMOTE_TEMPLATE_STREAM) {
+          rootLevelEntries.push(entry);
+          continue;
+        }
+        if (!streamEntryGroups.has(remoteStream)) {
+          streamEntryGroups.set(remoteStream, []);
+        }
+        streamEntryGroups.get(remoteStream).push(entry);
+      }
+      const entriesToRender = [
+        ...rootLevelEntries,
+        ...[...streamEntryGroups.keys()]
+          .sort((a, b) => a.localeCompare(b))
+          .flatMap((stream) => streamEntryGroups.get(stream) ?? []),
+      ];
 
     const templateEnabledState = Object.fromEntries(
       (templateManager.templatesArray ?? []).map(t => [t.storageKey, t.enabled ?? true])
@@ -7528,11 +6246,12 @@ async function buildOverlayMain() {
       })
     };
 
-      for (const entry of entriesIndexed) {
+      for (const entry of entriesToRender) {
         const template = entry.t;
       const templateName = template["displayName"];
       const templateStore = templateManager.templatesJSON?.templates?.[template.storageKey] ?? {};
       const isRemote = isTemplateRemote(template);
+      const remoteStream = isRemote ? getTemplateRemoteStream(template) : DEFAULT_REMOTE_TEMPLATE_STREAM;
       const timeArchiveMeta = getTemplateTimeArchiveMeta(template);
       const storedWidth = Number(templateStore.width);
       const storedHeight = Number(templateStore.height);
@@ -7708,11 +6427,15 @@ async function buildOverlayMain() {
         }
         if (timeArchiveMeta) {
           const archiveBadge = document.createElement('span');
-          archiveBadge.className = 'bm-remote-badge';
+          archiveBadge.className = 'bm-remote-badge bm-archive-badge';
           archiveBadge.textContent = 'ARCHIVE';
-          archiveBadge.title = timeArchiveMeta.archiveDate
-            ? `Archive: ${timeArchiveMeta.archiveDate} (${timeArchiveMeta.archiveVersion})`
-            : `Archive version: ${timeArchiveMeta.archiveVersion}`;
+          archiveBadge.title = timeArchiveMeta.regionName
+            ? `Archive: ${timeArchiveMeta.regionName} | ${timeArchiveMeta.archiveDate || timeArchiveMeta.archiveVersion} (${timeArchiveMeta.archiveVersion})`
+            : (
+              timeArchiveMeta.archiveDate
+                ? `Archive: ${timeArchiveMeta.archiveDate} (${timeArchiveMeta.archiveVersion})`
+                : `Archive version: ${timeArchiveMeta.archiveVersion}`
+            );
           label.appendChild(archiveBadge);
         }
         if (isHighlighted) {
@@ -7756,7 +6479,10 @@ async function buildOverlayMain() {
         row.appendChild(positionButton);
       }
       row.appendChild(label);
-      listContainer.appendChild(row);
+      const targetContainer = isRemote && remoteStream !== DEFAULT_REMOTE_TEMPLATE_STREAM
+        ? ensureStreamGroupContainer(remoteStream, streamEntryGroups.get(remoteStream)?.length ?? 0)
+        : listContainer;
+      targetContainer.appendChild(row);
     }
     syncTemplatePositionJoystickWindow();
   };
