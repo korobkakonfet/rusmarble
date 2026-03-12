@@ -287,5 +287,17 @@
   "bm-template-sync-streams": "bm-5U",
   "bm-remote-template-window": "bm-5F",
   "bm-archive-badge": "bm-7Q",
-  "bm-link": "bm-90"
+  "bm-link": "bm-90",
+  "bm-template-sync-streams-label": "bm-4W",
+  "bm-template-display-label": "bm-5N",
+  "bm-layout-language-label": "bm-5-",
+  "bm-template-streams-help": "bm-60",
+  "bm-layout-theme-label": "bm-6D",
+  "bm-color-sort-label": "bm-7e",
+  "bm-layout-language": "bm-7u",
+  "bm-user-name-row": "bm-81",
+  "bm-footer-text": "bm-8t",
+  "bm-overlay-title": "bm-88",
+  "bm-overlay-logo": "bm-8u",
+  "bm-layout-language-ru": "bm-6L"
 }

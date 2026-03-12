@@ -1785,12 +1785,27 @@ export default class TemplateManager {
     return String(this.userSettings?.layoutTheme ?? 'classic').toLowerCase();
   }
 
+  /** A utility to return the current layout language.
+   * @returns {string}
+   */
+  getLayoutLanguage() {
+    return String(this.userSettings?.layoutLanguage ?? 'en').toLowerCase();
+  }
+
   /** Sets the current layout theme to a value.
    * @param {string} value - The value
    * @since 0.85.47
    */
   async setLayoutTheme(value) {
     this.userSettings.layoutTheme = String(value ?? 'classic').toLowerCase();
+    await this.storeUserSettings();
+  }
+
+  /** Sets the current layout language to a value.
+   * @param {string} value - The value
+   */
+  async setLayoutLanguage(value) {
+    this.userSettings.layoutLanguage = String(value ?? 'en').toLowerCase();
     await this.storeUserSettings();
   }
 

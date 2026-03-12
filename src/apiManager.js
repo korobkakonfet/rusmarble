@@ -287,7 +287,9 @@ export default class ApiManager {
     const nextPixelPluralElement = document.getElementById('bm-user-nextpixel-plural');
     if (nextPixelElement && nextPixelPluralElement) {
       nextPixelElement.textContent = new Intl.NumberFormat().format(nextLevelPixels);
-      nextPixelPluralElement.textContent = nextLevelPixels == 1 ? '' : 's';
+      nextPixelPluralElement.textContent = typeof window.getBlueMarbleNextPixelPlural === 'function'
+        ? window.getBlueMarbleNextPixelPlural(nextLevelPixels)
+        : (nextLevelPixels == 1 ? '' : 's');
     }
     const nextLevelElement = document.getElementById('bm-user-nextlevel');
     if (nextLevelElement) {
