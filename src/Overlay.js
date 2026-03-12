@@ -38,6 +38,8 @@ export default class Overlay {
     this.apiManager = null; // The API manager instance. Later populated when setApiManager is called
     
     this.outputStatusId = 'bm-output-status'; // ID for status element
+    this.statusLabel = 'Status';
+    this.errorLabel = 'Error';
 
     this.overlay = null; // The overlay root DOM HTMLElement
     this.currentParent = null; // The current parent HTMLElement in the overlay
@@ -49,6 +51,11 @@ export default class Overlay {
    * @since 0.41.4
    */
   setApiManager(apiManager) {this.apiManager = apiManager;}
+
+  setStatusLabels({ status = 'Status', error = 'Error' } = {}) {
+    this.statusLabel = String(status || 'Status');
+    this.errorLabel = String(error || 'Error');
+  }
 
   /** Creates an element.
    * For **internal use** of the {@link Overlay} class.
@@ -778,7 +785,7 @@ export default class Overlay {
   handleDisplayStatus(text) {
     const consoleInfo = console.info; // Creates a copy of the console.info function
     consoleInfo(`${this.name}: ${text}`); // Outputs something like "ScriptName: text" as an info message to the console
-    this.updateInnerHTML(this.outputStatusId, 'Status: ' + text, true); // Update output Status box
+    this.updateInnerHTML(this.outputStatusId, `${this.statusLabel}: ${text}`, true); // Update output Status box
   }
 
   /** Handles error display.
@@ -790,6 +797,6 @@ export default class Overlay {
   handleDisplayError(text) {
     const consoleError = console.error; // Creates a copy of the console.error function
     consoleError(`${this.name}: ${text}`); // Outputs something like "ScriptName: text" as an error message to the console
-    this.updateInnerHTML(this.outputStatusId, 'Error: ' + text, true); // Update output Status box
+    this.updateInnerHTML(this.outputStatusId, `${this.errorLabel}: ${text}`, true); // Update output Status box
   }
 }

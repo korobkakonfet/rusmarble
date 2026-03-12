@@ -12,6 +12,7 @@ import { createTemplateSync, normalizeRemoteOrder } from './templateSync.js';
 import { createMapCommentManager } from './mapComments.js';
 import { createTemplateCreationUi } from './templateCreationUi.js';
 import { createArchiveTemplateUi } from './archiveTemplateUi.js';
+import { layoutLanguageOptions, normalizeLayoutLanguage, translateLayout, getLayoutThemeLabel as getLocalizedLayoutThemeLabel, getTemplateDisplayLabel as getLocalizedTemplateDisplayLabel, getTemplateCreateModeLabel, getChatBanTypeLabel, getColorSortLabel } from './layoutI18n.js';
 import { consoleLog, consoleWarn, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile } from './utils.js';
 import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getCurrentTileSize} from './utilsMaptiler.js';
 // import { getCenterGeoCoords, addTemplate } from './utilsMaptiler.js';
@@ -88,6 +89,10 @@ const templateDisplayOptions = {
   "cross-z-11": "Cross (Z, 11x11)",
   "dot": "Dot (Original)"
 };
+let currentLayoutLanguage = 'en';
+const t = (key, params = {}) => translateLayout(currentLayoutLanguage, key, params);
+const getLayoutThemeLabel = (value) => getLocalizedLayoutThemeLabel(currentLayoutLanguage, value);
+const getTemplateDisplayLabel = (value) => getLocalizedTemplateDisplayLabel(currentLayoutLanguage, value);
 const TEMPLATE_TEXT_MAX_CHARS = 120;
 const TEMPLATE_TEXT_FONT_SIZE = 36;
 const TEMPLATE_TEXT_FONT_SIZE_MIN = 8;
@@ -3327,7 +3332,6 @@ function initChat() {
 inject(() => {
 
   const script = document.currentScript; // Gets the current script HTML Script Element
-  const name = script?.getAttribute('bm-name') || 'Rus Marble'; // Gets the name value that was passed in. Defaults to "Rus Marble" if nothing was found
   const consoleStyle = script?.getAttribute('bm-cStyle') || ''; // Gets the console style value that was passed in. Defaults to no styling if nothing was found
   const fetchedBlobQueue = new Map(); // Blobs being processed
   const REPORT_EVENT_TYPE = 'bm-report-request';
@@ -3787,6 +3791,7 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
       'onlyCurrentColorShown': false,
       'themeOverridden': false,
       'currentTheme': '',
+      'layoutLanguage': 'en',
       'layoutTheme': 'classic',
       'templateDisplay': 'cross',
       'templateListRemaining': true,
@@ -3809,6 +3814,7 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   } else {
     templateManager.setUserSettings(userSettings);
   }
+  currentLayoutLanguage = normalizeLayoutLanguage(templateManager.getLayoutLanguage?.());
   setMapCommentsEnabled(templateManager.isMapCommentsEnabled());
 
   // load templates after user settings
@@ -3826,6 +3832,7 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   observeWplaceTheme();
   await buildOverlayMain(); // Builds the main overlay
   initChat();
+  applyLayoutLanguage(currentLayoutLanguage);
   templateSync.startTemplateUpdatePolling();
   startNotificationPolling();
 
@@ -4337,11 +4344,20 @@ function getDistanceMetrics(startPoint, endPoint) {
 }
 
 function formatDistanceMetrics(metrics) {
-  if (!metrics) return 'Distance: unavailable.';
+  if (!metrics) return t('distance.output.unavailable');
   const numberFmt = new Intl.NumberFormat();
   const euclideanText = metrics.euclidean.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const signed = (value) => `${value >= 0 ? '+' : ''}${numberFmt.format(value)}`;
-  return `Distance: ${euclideanText} px | dx ${signed(metrics.dx)} | dy ${signed(metrics.dy)} | w ${numberFmt.format(metrics.width)} | h ${numberFmt.format(metrics.height)} | inside ${numberFmt.format(metrics.area)} px^2 | grid ${numberFmt.format(metrics.chebyshev)} | manhattan ${numberFmt.format(metrics.manhattan)}`;
+  return t('distance.output', {
+    euclidean: euclideanText,
+    dx: signed(metrics.dx),
+    dy: signed(metrics.dy),
+    width: numberFmt.format(metrics.width),
+    height: numberFmt.format(metrics.height),
+    area: numberFmt.format(metrics.area),
+    grid: numberFmt.format(metrics.chebyshev),
+    manhattan: numberFmt.format(metrics.manhattan),
+  });
 }
 
 function setDistanceToolOutput(text) {
@@ -4357,8 +4373,8 @@ function syncDistanceToolUi() {
   if (button) {
     button.classList.toggle('bm-distance-active', distanceMeasureState.active);
     button.title = distanceMeasureState.active
-      ? 'Distance Tool: Active. Click a start pixel, then move cursor for live line and distance. Right-click to clear.'
-      : 'Distance Tool: Off. Click to enable.';
+      ? t('distance.button.on')
+      : t('distance.button.off');
   }
 
   const output = document.getElementById('bm-distance-output');
@@ -4669,7 +4685,7 @@ function handleDistanceMapMouseLeave() {
   distanceMeasureState.hoverPoint = null;
   if (distanceMeasureState.startPoint) {
     const startText = formatTilePixelCoords(distanceMeasureState.startPoint.coords);
-    setDistanceToolOutput(`Distance start: ${startText}. Move cursor or click another pixel.`);
+    setDistanceToolOutput(t('distance.output.start', { coords: startText }));
   }
   drawDistanceLineOverlay();
 }
@@ -4752,7 +4768,7 @@ function setDistanceToolActive(active, overlayInstance) {
   distanceMeasureState.startPoint = null;
   distanceMeasureState.hoverPoint = null;
   if (distanceMeasureState.active) {
-    setDistanceToolOutput('Distance: click a pixel to set start point.');
+    setDistanceToolOutput(t('distance.output.clickStart'));
     overlayInstance?.handleDisplayStatus('Distance tool enabled. Click one pixel to set start, then move the cursor to measure in real time.');
     doAfterMapFound(() => {
       if (distanceMeasureState.active && ensureDistanceMapAttached()) {
@@ -4786,7 +4802,7 @@ function handleDistanceToolCoordsUpdate(rawCoords) {
   if (!distanceMeasureState.startPoint) {
     distanceMeasureState.startPoint = point;
     const startText = formatTilePixelCoords(point.coords);
-    setDistanceToolOutput(`Distance start: ${startText}. Move cursor or click another pixel.`);
+    setDistanceToolOutput(t('distance.output.start', { coords: startText }));
     overlayMain.handleDisplayStatus(`Distance start point set at (${startText}).`);
     drawDistanceLineOverlay();
     syncDistanceToolUi();
@@ -4813,6 +4829,358 @@ const teleportCoords = () => {
   } catch (_) {}
 };
 
+const setFirstTextNode = (element, text) => {
+  if (!element) return;
+  let textNode = Array.from(element.childNodes).find((node) => node.nodeType === Node.TEXT_NODE);
+  if (!textNode) {
+    textNode = document.createTextNode('');
+    element.insertBefore(textNode, element.firstChild);
+  }
+  textNode.textContent = text;
+};
+
+const setSummaryText = (detailsId, text) => {
+  const summary = document.querySelector(`#${detailsId} > summary`);
+  if (!summary) return;
+  setFirstTextNode(summary, text);
+};
+
+const setCheckboxLabelText = (inputId, text) => {
+  const input = document.getElementById(inputId);
+  const label = input?.parentElement;
+  if (!(label instanceof HTMLLabelElement)) return;
+  let textNode = Array.from(label.childNodes).find((node) => node.nodeType === Node.TEXT_NODE);
+  if (!textNode) {
+    textNode = document.createTextNode('');
+    label.insertBefore(textNode, input.nextSibling);
+  }
+  textNode.textContent = text;
+};
+
+const replaceSelectOptions = (select, entries, selectedValue = null) => {
+  if (!(select instanceof HTMLSelectElement)) return;
+  const nextValue = selectedValue ?? select.value;
+  select.textContent = '';
+  entries.forEach(([value, label]) => {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    if (String(value) === String(nextValue)) {
+      option.selected = true;
+    }
+    select.appendChild(option);
+  });
+  if (nextValue !== null && nextValue !== undefined) {
+    select.value = String(nextValue);
+  }
+};
+
+const syncTemplateStreamsHelpLanguage = () => {
+  const help = document.getElementById('bm-template-streams-help');
+  if (!help) return;
+  help.textContent = '';
+  const beta = document.createElement('b');
+  beta.textContent = t('settings.templateStreams.helpPrefix');
+  help.appendChild(beta);
+  help.append(t('settings.templateStreams.helpBody'));
+  const link = document.createElement('a');
+  link.href = 'https://t.me/rusmarble_bot';
+  link.textContent = '@rusmarble_bot';
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.style.color = 'var(--bm-link, #8ecbff)';
+  link.style.textDecoration = 'underline';
+  help.appendChild(link);
+  help.append('.');
+};
+
+const getNextPixelPluralSuffix = (count) => {
+  const numeric = Math.abs(Number(count));
+  if (currentLayoutLanguage !== 'ru') {
+    return Number.isFinite(numeric) && numeric === 1 ? '' : t('user.morePixelPlural');
+  }
+  if (!Number.isFinite(numeric)) {
+    return 'ей';
+  }
+  const mod100 = numeric % 100;
+  const mod10 = numeric % 10;
+  if (mod100 >= 11 && mod100 <= 14) {
+    return 'ей';
+  }
+  if (mod10 === 1) {
+    return 'ь';
+  }
+  if (mod10 >= 2 && mod10 <= 4) {
+    return 'я';
+  }
+  return 'ей';
+};
+
+const syncNextLevelRowLanguage = () => {
+  const row = document.getElementById('bm-user-nextlevel-row');
+  if (!row) return;
+  const nodes = Array.from(row.childNodes);
+  const morePixelNode = nodes.find((node, index) =>
+    node.nodeType === Node.TEXT_NODE
+    && nodes[index - 1] instanceof HTMLElement
+    && nodes[index - 1].id === 'bm-user-nextpixel'
+  );
+  const toLevelNode = nodes.find((node, index) =>
+    node.nodeType === Node.TEXT_NODE
+    && nodes[index - 1] instanceof HTMLElement
+    && nodes[index - 1].id === 'bm-user-nextpixel-plural'
+  );
+  if (morePixelNode) {
+    morePixelNode.textContent = t('user.morePixel');
+  }
+  if (toLevelNode) {
+    toLevelNode.textContent = t('user.toLevel');
+  }
+  const nextPixel = document.getElementById('bm-user-nextpixel');
+  const plural = document.getElementById('bm-user-nextpixel-plural');
+  if (!plural) return;
+  const numeric = Number(String(nextPixel?.textContent || '').replace(/[^\d.-]/g, ''));
+  plural.textContent = getNextPixelPluralSuffix(numeric);
+};
+
+const syncStatusBoxLanguage = () => {
+  const statusBox = document.getElementById(overlayMain.outputStatusId);
+  if (!(statusBox instanceof HTMLTextAreaElement)) return;
+  statusBox.placeholder = t('status.placeholder', { version });
+  const currentText = String(statusBox.value || statusBox.textContent || '');
+  const match = currentText.match(/^(Status|Статус|Error|Ошибка):\s*(.*)$/s);
+  if (!match) return;
+  const [, prefix, message] = match;
+  const nextPrefix = /error|ошибка/i.test(prefix) ? t('error.label') : t('status.label');
+  statusBox.value = `${nextPrefix}: ${message}`;
+};
+
+const syncChatStaticLanguage = () => {
+  const banTypeSelect = document.getElementById('bm-chat-ban-type');
+  replaceSelectOptions(
+    banTypeSelect,
+    [
+      ['ip', getChatBanTypeLabel(currentLayoutLanguage, 'ip')],
+      ['device', getChatBanTypeLabel(currentLayoutLanguage, 'device')],
+    ],
+    banTypeSelect?.value || 'ip'
+  );
+  const banTarget = document.getElementById('bm-chat-ban-target');
+  if (banTarget) banTarget.placeholder = t('chat.banTargetPlaceholder');
+  const banReason = document.getElementById('bm-chat-ban-reason');
+  if (banReason) banReason.placeholder = t('chat.banReasonPlaceholder');
+  const banBtn = document.getElementById('bm-chat-ban-btn');
+  if (banBtn) banBtn.textContent = t('chat.ban');
+  const bansBtn = document.getElementById('bm-chat-bans-btn');
+  if (bansBtn) bansBtn.textContent = t('chat.bans');
+  const replyLabel = document.getElementById('bm-chat-reply-label');
+  if (replyLabel) {
+    const current = String(replyLabel.textContent || '').trim();
+    const match = current.match(/^(?:Replying to|Ответ на)\s+(.*)$/);
+    replyLabel.textContent = match ? `${t('chat.replyingTo')} ${match[1]}` : t('chat.replyingTo');
+  }
+  const userInput = document.getElementById('bm-chat-user');
+  if (userInput) userInput.placeholder = t('chat.userPlaceholder');
+  const textInput = document.getElementById('bm-chat-text');
+  if (textInput && !/^Banned \(/.test(textInput.placeholder || '')) {
+    textInput.placeholder = t('chat.messagePlaceholder');
+  }
+  const modCodeInput = document.getElementById('bm-chat-modcode');
+  if (modCodeInput) modCodeInput.placeholder = t('chat.codePlaceholder');
+  const statusLight = document.querySelector('.bm-chat-status-light');
+  if (statusLight) statusLight.title = t('chat.statusLightTitle');
+  const floatButton = document.querySelector('.bm-chat-float-toggle');
+  if (floatButton instanceof HTMLButtonElement) {
+    const isDock = floatButton.textContent?.trim() === '⇱';
+    floatButton.title = isDock ? t('chat.dockTitle') : t('chat.floatTitle');
+    floatButton.setAttribute('aria-label', isDock ? t('chat.dockAria') : t('chat.floatAria'));
+  }
+};
+
+const syncTemplatePositionJoystickLanguage = () => {
+  const panel = document.getElementById('bm-template-position-joystick');
+  if (!panel) return;
+  const hint = panel.querySelector('.bm-template-position-joystick-hint');
+  if (hint) hint.textContent = t('joystick.hint');
+  const up = panel.querySelector('.bm-template-position-joystick-up');
+  if (up) up.title = t('joystick.moveUp');
+  const left = panel.querySelector('.bm-template-position-joystick-left');
+  if (left) left.title = t('joystick.moveLeft');
+  const right = panel.querySelector('.bm-template-position-joystick-right');
+  if (right) right.title = t('joystick.moveRight');
+  const down = panel.querySelector('.bm-template-position-joystick-down');
+  if (down) down.title = t('joystick.moveDown');
+  const archiveBtn = panel.querySelector('[data-role="archive-edit-btn"]');
+  if (archiveBtn) {
+    archiveBtn.textContent = t('joystick.archiveDate');
+    archiveBtn.title = t('joystick.archiveDateTitle');
+  }
+};
+
+const syncOverlayBrandLanguage = () => {
+  const title = document.getElementById('bm-overlay-title');
+  if (title) setFirstTextNode(title, t('brand.name'));
+  const logo = document.getElementById('bm-overlay-logo');
+  if (!logo) return;
+  const overlay = document.getElementById('bm-overlay');
+  if (!overlay) {
+    logo.alt = t('brand.iconAlt');
+    return;
+  }
+  logo.alt = overlay.classList.contains('bm-overlay-minimized') ? t('brand.iconAltMin') : t('brand.iconAltMax');
+};
+
+const applyLayoutLanguage = (value = null) => {
+  currentLayoutLanguage = normalizeLayoutLanguage(value ?? templateManager.getLayoutLanguage?.());
+  document.documentElement.dataset.bmLayoutLanguage = currentLayoutLanguage;
+  const overlayElement = document.getElementById('bm-overlay');
+  if (overlayElement) {
+    overlayElement.classList.toggle('bm-layout-language-ru', currentLayoutLanguage === 'ru');
+  }
+  overlayMain.setStatusLabels({ status: t('status.label'), error: t('error.label') });
+  syncOverlayBrandLanguage();
+
+  setSummaryText('bm-checkbox-container', t('settings.section'));
+  const languageLabel = document.getElementById('bm-layout-language-label');
+  if (languageLabel) languageLabel.textContent = t('settings.language.label');
+  const languageSelect = document.getElementById('bm-layout-language');
+  replaceSelectOptions(languageSelect, Object.entries(layoutLanguageOptions), currentLayoutLanguage);
+  const templateStreamsLabel = document.getElementById('bm-template-sync-streams-label');
+  if (templateStreamsLabel) templateStreamsLabel.textContent = t('settings.templateStreams.label');
+  const templateStreamsInput = document.getElementById('bm-template-sync-streams');
+  if (templateStreamsInput) templateStreamsInput.placeholder = t('settings.templateStreams.placeholder');
+  syncTemplateStreamsHelpLanguage();
+  const layoutThemeLabel = document.getElementById('bm-layout-theme-label');
+  if (layoutThemeLabel) layoutThemeLabel.textContent = t('settings.layoutTheme.label');
+  replaceSelectOptions(
+    document.getElementById('bm-layout-theme'),
+    Object.keys(layoutThemeOptions).map((valueKey) => [valueKey, getLayoutThemeLabel(valueKey)]),
+    normalizeLayoutTheme(templateManager.getLayoutTheme())
+  );
+  setCheckboxLabelText('bm-theme-override-enabled', t('settings.themeOverride.label'));
+  setCheckboxLabelText('bm-show-zoom-buttons', t('settings.showIntegerZoomButtons'));
+  setCheckboxLabelText('bm-enable-keybinds', t('settings.enableKeybinds'));
+  setCheckboxLabelText('bm-chat-enabled', t('settings.enableChat'));
+  setCheckboxLabelText('bm-map-comments-enabled', t('settings.enableMapComments'));
+  setCheckboxLabelText('bm-progress-bar-enabled', t('settings.showProgressBar'));
+  setCheckboxLabelText('bm-hide-user-droplets', t('settings.hideDroplets'));
+  setCheckboxLabelText('bm-hide-user-nextlevel', t('settings.hideNextLevel'));
+  setCheckboxLabelText('bm-status-hidden', t('settings.hideStatusDisplay'));
+  const templateDisplayLabel = document.getElementById('bm-template-display-label');
+  if (templateDisplayLabel) templateDisplayLabel.textContent = t('settings.templateDisplay.label');
+  replaceSelectOptions(
+    document.getElementById('bm-template-display'),
+    Object.keys(templateDisplayOptions).map((valueKey) => [valueKey, getTemplateDisplayLabel(valueKey)]),
+    normalizeTemplateDisplay(templateManager.getTemplateDisplayMode())
+  );
+  setCheckboxLabelText('bm-template-list-remaining', t('settings.showRemainingCount'));
+  setCheckboxLabelText('bm-enable-line-template', t('settings.shapeTemplates'));
+  setCheckboxLabelText('bm-ruspixel-flag-enabled', t('settings.ruspixelFlag'));
+  setCheckboxLabelText('bm-auto-sync-templates', t('settings.autoUpdateTemplates'));
+  setCheckboxLabelText('bm-only-current-color-enabled', t('settings.showCurrentColorOnly'));
+  setCheckboxLabelText('bm-checkbox-colors-unlocked', t('settings.hideLockedColors'));
+  setCheckboxLabelText('bm-checkbox-colors-completed', t('settings.hideCompletedColors'));
+  setCheckboxLabelText('bm-show-error-map', t('settings.showErrorMap'));
+  setCheckboxLabelText('bm-show-only-enabled-colors-on-error-map', t('settings.onlyEnabledColorsOnErrorMap'));
+  setCheckboxLabelText('bm-event-enabled', t('settings.enableEvent'));
+  setCheckboxLabelText('bm-event-hide-claimed', t('settings.hideClaimedEventItems'));
+  setCheckboxLabelText('bm-event-hide-unavailable', t('settings.hideUnavailableEventItems'));
+  setCheckboxLabelText('bm-memory-saving-enabled', t('settings.memorySaving'));
+
+  setSummaryText('bm-contain-colorfilter', t('section.colors'));
+  const colorSortLabel = document.getElementById('bm-color-sort-label');
+  if (colorSortLabel) setFirstTextNode(colorSortLabel, t('colors.sortBy'));
+  replaceSelectOptions(
+    document.getElementById('bm-color-sort'),
+    Object.keys(sortByOptions).flatMap((key) => ([
+      [`${key}-asc`, getColorSortLabel(currentLayoutLanguage, key, 'asc')],
+      [`${key}-desc`, getColorSortLabel(currentLayoutLanguage, key, 'desc')],
+    ])),
+    templateManager.getSortBy()
+  );
+  const enableAllColorsButton = document.getElementById('bm-button-colors-enable-all');
+  if (enableAllColorsButton) enableAllColorsButton.textContent = t('colors.enableAll');
+  const disableAllColorsButton = document.getElementById('bm-button-colors-disable-all');
+  if (disableAllColorsButton) disableAllColorsButton.textContent = t('colors.disableAll');
+  const disablePaidColorsButton = document.getElementById('bm-button-colors-disable-paid');
+  if (disablePaidColorsButton) disablePaidColorsButton.textContent = t('colors.disablePaid');
+
+  setSummaryText('bm-contain-templatefilter', t('section.templates'));
+  replaceSelectOptions(
+    document.getElementById('bm-template-create-mode'),
+    [
+      ['', getTemplateCreateModeLabel(currentLayoutLanguage, '')],
+      [TEMPLATE_CREATE_MODE_IMAGE, getTemplateCreateModeLabel(currentLayoutLanguage, TEMPLATE_CREATE_MODE_IMAGE)],
+      [TEMPLATE_CREATE_MODE_REMOTE_NAME, getTemplateCreateModeLabel(currentLayoutLanguage, TEMPLATE_CREATE_MODE_REMOTE_NAME)],
+      [TEMPLATE_CREATE_MODE_TEXT, getTemplateCreateModeLabel(currentLayoutLanguage, TEMPLATE_CREATE_MODE_TEXT)],
+      [TEMPLATE_CREATE_MODE_RUSSIAN_FLAG, getTemplateCreateModeLabel(currentLayoutLanguage, TEMPLATE_CREATE_MODE_RUSSIAN_FLAG)],
+      [TEMPLATE_CREATE_MODE_TIME_ARCHIVE, getTemplateCreateModeLabel(currentLayoutLanguage, TEMPLATE_CREATE_MODE_TIME_ARCHIVE)],
+    ],
+    ''
+  );
+  const syncTemplatesButton = document.getElementById('bm-button-sync-templates');
+  if (syncTemplatesButton) syncTemplatesButton.title = t('templates.syncTitle');
+
+  setSummaryText('bm-contain-chat', t('section.chat'));
+  syncChatStaticLanguage();
+
+  setSummaryText('bm-contain-eventitem', t('section.event'));
+  const setProviderButton = document.getElementById('bm-button-set-eventprovider');
+  if (setProviderButton) setProviderButton.textContent = t('event.setProvider');
+  const refreshEventButton = document.getElementById('bm-button-refresh-event');
+  if (refreshEventButton) refreshEventButton.textContent = t('event.refresh');
+
+  const usernameRow = document.getElementById('bm-user-name-row');
+  if (usernameRow) setFirstTextNode(usernameRow, t('user.username'));
+  const chargesRow = document.getElementById('bm-user-charges');
+  if (chargesRow) setFirstTextNode(chargesRow, t('user.fullChargesIn'));
+  const suspendRow = document.getElementById('bm-user-suspend');
+  if (suspendRow) setFirstTextNode(suspendRow, t('user.suspensionExpiresIn'));
+  const suspendReasonRow = document.getElementById('bm-user-suspend-reason');
+  if (suspendReasonRow) setFirstTextNode(suspendReasonRow, t('user.reason'));
+  const dropletsRow = document.getElementById('bm-user-droplets-row');
+  if (dropletsRow) setFirstTextNode(dropletsRow, t('user.droplets'));
+  syncNextLevelRowLanguage();
+  const txInput = document.getElementById('bm-input-tx');
+  if (txInput) txInput.placeholder = t('coords.placeholder.tx');
+  const tyInput = document.getElementById('bm-input-ty');
+  if (tyInput) tyInput.placeholder = t('coords.placeholder.ty');
+  const pxInput = document.getElementById('bm-input-px');
+  if (pxInput) pxInput.placeholder = t('coords.placeholder.px');
+  const pyInput = document.getElementById('bm-input-py');
+  if (pyInput) pyInput.placeholder = t('coords.placeholder.py');
+  const teleportButton = document.getElementById('bm-button-teleport');
+  if (teleportButton) teleportButton.title = t('coords.teleportTitle');
+
+  syncStatusBoxLanguage();
+  const convertButton = document.getElementById('bm-button-convert');
+  if (convertButton) convertButton.title = t('action.colorConverter');
+  const websiteButton = document.getElementById('bm-button-website');
+  if (websiteButton) websiteButton.title = t('action.website');
+  const footerText = document.getElementById('bm-footer-text');
+  if (footerText) {
+    footerText.textContent = t('footer.forkedBy');
+    footerText.title = t('footer.title');
+  }
+  syncTemplatePositionJoystickLanguage();
+  if (distanceMeasureState.active) {
+    if (distanceMeasureState.hoverPoint && distanceMeasureState.startPoint) {
+      updateDistanceOutputForPoint(distanceMeasureState.hoverPoint, false);
+    } else if (distanceMeasureState.startPoint) {
+      setDistanceToolOutput(t('distance.output.start', {
+        coords: formatTilePixelCoords(distanceMeasureState.startPoint.coords),
+      }));
+    } else {
+      setDistanceToolOutput(t('distance.output.clickStart'));
+    }
+  }
+  syncDistanceToolUi();
+  try { window.buildColorFilterList?.(); } catch (_) {}
+  try { window.buildTemplateFilterList?.(); } catch (_) {}
+  try { window.buildEventList?.(); } catch (_) {}
+};
+window.getBlueMarbleNextPixelPlural = (count) => getNextPixelPluralSuffix(count);
+
 /** Deploys the overlay to the page with minimize/maximize functionality.
  * Creates a responsive overlay UI that can toggle between full-featured and minimized states.
  * 
@@ -4834,7 +5202,7 @@ async function buildOverlayMain() {
   overlayMain.addDiv({'id': 'bm-overlay', 'style': 'top: 10px; right: 75px;'})
     .addDiv({'id': 'bm-contain-header'})
       .addDiv({'id': 'bm-bar-drag'}).buildElement()
-      .addImg({'alt': 'Rus Marble Icon - Click to minimize/maximize', 'src': 'https://raw.githubusercontent.com/korobkakonfet/rusmarble/custom-improve/dist/assets/logo_rusmarble.png', 'style': 'cursor: pointer;'},
+      .addImg({'id': 'bm-overlay-logo', 'alt': t('brand.iconAlt'), 'src': 'https://raw.githubusercontent.com/korobkakonfet/rusmarble/custom-improve/dist/assets/logo_rusmarble.png', 'style': 'cursor: pointer;'},
         (instance, img) => {
           /** Click event handler for overlay minimize/maximize functionality.
            * 
@@ -5048,15 +5416,13 @@ async function buildOverlayMain() {
             // Update accessibility information for screen readers and tooltips
             
             // Update alt text to reflect current state for screen readers and tooltips
-            img.alt = isMinimized ? 
-              'Rus Marble Icon - Minimized (Click to maximize)' : 
-              'Rus Marble Icon - Maximized (Click to minimize)';
+            img.alt = isMinimized ? t('brand.iconAltMin') : t('brand.iconAltMax');
             
             // No status message needed - state change is visually obvious to users
           });
         }
       ).buildElement()
-      .addHeader(1, {'textContent': name})
+      .addHeader(1, {'id': 'bm-overlay-title', 'textContent': t('brand.name')})
         .addSmall({'textContent': ` v${version}`}).buildElement()
       .buildElement()
     .buildElement()
@@ -5064,13 +5430,13 @@ async function buildOverlayMain() {
     .addHr().buildElement()
 
     .addDiv({'id': 'bm-contain-userinfo'})
-      .addP({'textContent': 'Username: '})
+      .addP({'id': 'bm-user-name-row', 'textContent': t('user.username')})
         .addB({'id': 'bm-user-name'}).buildElement()
       .buildElement()
       .addP({'id': 'bm-user-charges'}, (_, element) => {
         element.setAttribute('aria-live', 'polite');
       })
-        .addText('Full Charges in ')
+        .addText(t('user.fullChargesIn'))
         .addSpan({'className': 'bm-charge-countdown', 'textContent': '--:--'}, (_, element) => {
           element.dataset.role = 'countdown';
         }).buildElement()
@@ -5082,15 +5448,15 @@ async function buildOverlayMain() {
       .addP({'id': 'bm-user-suspend', 'style': 'display: none;'}, (_, element) => {
         element.setAttribute('aria-live', 'polite');
       })
-        .addText('Suspension Expires in ')
+        .addText(t('user.suspensionExpiresIn'))
         .addSpan({'className': 'bm-suspend-countdown', 'textContent': '--:--'}, (_, element) => {
           element.dataset.role = 'suspend-countdown';
         }).buildElement()
       .buildElement()
-      .addP({'id': 'bm-user-suspend-reason', 'textContent': 'Reason: ', 'style': 'display: none;'})
+      .addP({'id': 'bm-user-suspend-reason', 'textContent': t('user.reason'), 'style': 'display: none;'})
         .addB({'id': 'bm-suspend-reason', 'textContent': 'Unknown'}).buildElement()
       .buildElement()
-        .addP({'id': 'bm-user-droplets-row', 'textContent': 'Droplets: '}, (_, element) => {
+        .addP({'id': 'bm-user-droplets-row', 'textContent': t('user.droplets')}, (_, element) => {
           if (templateManager.isDropletsHidden()) {
             element.style.display = 'none';
           }
@@ -5103,9 +5469,9 @@ async function buildOverlayMain() {
           }
         })
           .addB({'id': 'bm-user-nextpixel', 'textContent': '--'}).buildElement()
-          .addText(' more pixel')
-        .addSpan({'id': 'bm-user-nextpixel-plural', 'textContent': 's'}).buildElement()
-        .addText(' to Lv. ')
+          .addText(t('user.morePixel'))
+        .addSpan({'id': 'bm-user-nextpixel-plural', 'textContent': t('user.morePixelPlural')}).buildElement()
+        .addText(t('user.toLevel'))
         .addB({'id': 'bm-user-nextlevel', 'textContent': '--'}).buildElement()
       .buildElement()
     .buildElement()
@@ -5138,7 +5504,7 @@ async function buildOverlayMain() {
             }
           }
         ).buildElement()
-        .addInput({'type': 'number', 'id': 'bm-input-tx', 'placeholder': 'Tl X', 'min': 0, 'max': 2047, 'step': 1, 'required': true, 'value': (savedCoords.tx ?? '')}, (instance, input) => {
+        .addInput({'type': 'number', 'id': 'bm-input-tx', 'placeholder': t('coords.placeholder.tx'), 'min': 0, 'max': 2047, 'step': 1, 'required': true, 'value': (savedCoords.tx ?? '')}, (instance, input) => {
           //if a paste happens on tx, split and format it into other coordinates if possible
           input.addEventListener("paste", (event) => {
             const clipboardText = (event.clipboardData || window.clipboardData).getData("text");
@@ -5175,22 +5541,22 @@ async function buildOverlayMain() {
           input.addEventListener('input', handler);
           input.addEventListener('change', handler);
         }).buildElement()
-        .addInput({'type': 'number', 'id': 'bm-input-ty', 'placeholder': 'Tl Y', 'min': 0, 'max': 2047, 'step': 1, 'required': true, 'value': (savedCoords.ty ?? '')}, (instance, input) => {
+        .addInput({'type': 'number', 'id': 'bm-input-ty', 'placeholder': t('coords.placeholder.ty'), 'min': 0, 'max': 2047, 'step': 1, 'required': true, 'value': (savedCoords.ty ?? '')}, (instance, input) => {
           const handler = () => (apiManager.updateDownloadButton(), persistCoords());
           input.addEventListener('input', handler);
           input.addEventListener('change', handler);
         }).buildElement()
-        .addInput({'type': 'number', 'id': 'bm-input-px', 'placeholder': 'Px X', 'min': 0, 'max': 2047, 'step': 1, 'required': true, 'value': (savedCoords.px ?? '')}, (instance, input) => {
+        .addInput({'type': 'number', 'id': 'bm-input-px', 'placeholder': t('coords.placeholder.px'), 'min': 0, 'max': 2047, 'step': 1, 'required': true, 'value': (savedCoords.px ?? '')}, (instance, input) => {
           const handler = () => (apiManager.updateDownloadButton(), persistCoords());
           input.addEventListener('input', handler);
           input.addEventListener('change', handler);
         }).buildElement()
-        .addInput({'type': 'number', 'id': 'bm-input-py', 'placeholder': 'Px Y', 'min': 0, 'max': 2047, 'step': 1, 'required': true, 'value': (savedCoords.py ?? '')}, (instance, input) => {
+        .addInput({'type': 'number', 'id': 'bm-input-py', 'placeholder': t('coords.placeholder.py'), 'min': 0, 'max': 2047, 'step': 1, 'required': true, 'value': (savedCoords.py ?? '')}, (instance, input) => {
           const handler = () => (apiManager.updateDownloadButton(), persistCoords());
           input.addEventListener('input', handler);
           input.addEventListener('change', handler);
         }).buildElement()
-        .addButton({'id': 'bm-button-teleport', 'className': 'bm-help', 'style': 'margin-top: 0;', 'innerHTML': '✈️', 'title': 'Teleport'},
+        .addButton({'id': 'bm-button-teleport', 'className': 'bm-help', 'style': 'margin-top: 0;', 'innerHTML': '✈️', 'title': t('coords.teleportTitle')},
           (instance, button) => {
             button.onclick = () => {
               teleportCoords();
@@ -5204,10 +5570,15 @@ async function buildOverlayMain() {
       overlay: overlayMain,
       templateManager,
       apiManager,
+      layoutLanguageOptions,
       layoutThemeOptions,
       templateDisplayOptions,
+      normalizeLayoutLanguage,
       normalizeLayoutTheme,
       normalizeTemplateDisplay,
+      getLayoutThemeLabel,
+      getTemplateDisplayLabel,
+      applyLayoutLanguage: (value) => applyLayoutLanguage(value),
       applyLayoutTheme,
       forceUpdateTheme: () => forceUpdateTheme(),
       buildColorFilterList: () => buildColorFilterList(),
@@ -5218,14 +5589,15 @@ async function buildOverlayMain() {
       setMapCommentsEnabled: (enabled) => setMapCommentsEnabled(enabled),
       themeList,
       outputStatusId: overlayMain.outputStatusId,
+      t,
     });
 
     overlayMain
-      .addDetails({'id': 'bm-contain-colorfilter', 'textContent': 'Colors', 'style': 'border: 1px solid var(--bm-border); padding: 4px; border-radius: 4px; margin-top: 4px;'}, (instance, summary, details) => {
+      .addDetails({'id': 'bm-contain-colorfilter', 'textContent': t('section.colors'), 'style': 'border: 1px solid var(--bm-border); padding: 4px; border-radius: 4px; margin-top: 4px;'}, (instance, summary, details) => {
         details.open = true;
       })
         // Color sorting
-        .addP({'textContent': 'Sort Colors by ', 'style': 'font-size: small; margin-top: 3px; margin-left: 5px;'})
+        .addP({'id': 'bm-color-sort-label', 'textContent': t('colors.sortBy'), 'style': 'font-size: small; margin-top: 3px; margin-left: 5px;'})
           // Sorting UI
           .addSelect({'id': 'bm-color-sort'}, (instance, select) => {
             const order = [
@@ -5251,7 +5623,7 @@ async function buildOverlayMain() {
         .buildElement()
         // Color buttons
         .addDiv({'id': 'bm-button-colors-container', 'style': 'display: flex; gap: 6px; margin-top: 3px; margin-bottom: 3px;'})
-          .addButton({'id': 'bm-button-colors-enable-all', 'textContent': 'Enable All'}, (instance, button) => {
+          .addButton({'id': 'bm-button-colors-enable-all', 'textContent': t('colors.enableAll')}, (instance, button) => {
             button.onclick = () => {
               templateManager.templatesArray.forEach(t => {
                 if (!t?.colorPalette) { return; }
@@ -5266,7 +5638,7 @@ async function buildOverlayMain() {
               };
             };
           }).buildElement()
-          .addButton({'id': 'bm-button-colors-disable-all', 'textContent': 'Disable All'}, (instance, button) => {
+          .addButton({'id': 'bm-button-colors-disable-all', 'textContent': t('colors.disableAll')}, (instance, button) => {
             button.onclick = () => {
               templateManager.templatesArray.forEach(t => {
                 if (!t?.colorPalette) { return; }
@@ -5282,7 +5654,7 @@ async function buildOverlayMain() {
               };
             };
           }).buildElement()
-          .addButton({'id': 'bm-button-colors-disable-paid', 'textContent': 'Disable Paid'}, (instance, button) => {
+          .addButton({'id': 'bm-button-colors-disable-paid', 'textContent': t('colors.disablePaid')}, (instance, button) => {
             button.onclick = () => {
               templateManager.templatesArray.forEach(t => {
                 if (!t?.colorPalette) { return; }
@@ -5307,7 +5679,7 @@ async function buildOverlayMain() {
         .addDiv({'id': 'bm-colorfilter-list', 'style': 'max-height: 125px; overflow: auto; touch-action: pan-x pan-y; display: flex; flex-direction: column; gap: 4px;'}).buildElement()
       .buildElement()
       // Template filter UI
-      .addDetails({'id': 'bm-contain-templatefilter', 'textContent': 'Templates', 'style': 'border: 1px solid var(--bm-border); padding: 4px; border-radius: 4px; margin-top: 4px;'}, (instance, summary, details) => {
+      .addDetails({'id': 'bm-contain-templatefilter', 'textContent': t('section.templates'), 'style': 'border: 1px solid var(--bm-border); padding: 4px; border-radius: 4px; margin-top: 4px;'}, (instance, summary, details) => {
         details.open = true;
       })
         // Template buttons
@@ -5579,7 +5951,7 @@ async function buildOverlayMain() {
               await runTemplateCreationFlow({ mode: nextMode });
             });
           }).buildElement()
-          .addButton({'id': 'bm-button-sync-templates', 'textContent': '🔄'}, (instance, button) => {
+          .addButton({'id': 'bm-button-sync-templates', 'textContent': '🔄', 'title': t('templates.syncTitle')}, (instance, button) => {
             button.style.position = 'relative';
             button.style.overflow = 'visible';
             const badge = document.createElement('span');
@@ -5640,7 +6012,7 @@ async function buildOverlayMain() {
         .addDiv({'id': 'bm-templatefilter-list', 'style': 'max-height: 125px; overflow: auto; touch-action: pan-x pan-y; display: flex; flex-direction: column; gap: 4px;'}).buildElement()
         .buildElement()
         // Chat UI
-      .addDetails({'id': 'bm-contain-chat', 'textContent': 'Chat', 'style': 'border: 1px solid var(--bm-border); padding: 4px; border-radius: 4px; margin-top: 4px;'}, (instance, summary, details) => {
+      .addDetails({'id': 'bm-contain-chat', 'textContent': t('section.chat'), 'style': 'border: 1px solid var(--bm-border); padding: 4px; border-radius: 4px; margin-top: 4px;'}, (instance, summary, details) => {
           details.open = false;
         })
           .addDiv({'id': 'bm-chat-mod-tools', 'style': 'display: none; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 4px;'})
@@ -5674,13 +6046,13 @@ async function buildOverlayMain() {
           .buildElement()
         .buildElement()
       // Event UI
-      .addDetails({'id': 'bm-contain-eventitem', 'textContent': 'Event', 'style': 'border: 1px solid var(--bm-border); padding: 4px; border-radius: 4px; display: none; margin-top: 4px;'}, (instance, summary, details) => {
+      .addDetails({'id': 'bm-contain-eventitem', 'textContent': t('section.event'), 'style': 'border: 1px solid var(--bm-border); padding: 4px; border-radius: 4px; display: none; margin-top: 4px;'}, (instance, summary, details) => {
         if (templateManager.isEventEnabled()) {
           details.style.display = '';
         }
         details.open = true;
       })
-        .addButton({'id': 'bm-button-set-eventprovider', 'textContent': 'Set Data Provider', 'style': 'margin: 0 1ch;'}, (instance, button) => {
+        .addButton({'id': 'bm-button-set-eventprovider', 'textContent': t('event.setProvider'), 'style': 'margin: 0 1ch;'}, (instance, button) => {
           button.onclick = () => {
             const currentProvider = templateManager.getEventProvider();
             const providerURL = prompt('Enter the event data provider JSON URL:', currentProvider === "" ? "https://wplace.samuelscheit.com/tiles/pumpkin.json" : currentProvider);
@@ -5697,13 +6069,13 @@ async function buildOverlayMain() {
             buildEventList();
           };
         }).buildElement()
-        .addButton({'id': 'bm-button-refresh-event', 'textContent': 'Refresh Data', 'style': 'margin: 0 1ch;'}, (instance, button) => {
+        .addButton({'id': 'bm-button-refresh-event', 'textContent': t('event.refresh'), 'style': 'margin: 0 1ch;'}, (instance, button) => {
           button.onclick = () => buildEventList();
         }).buildElement()
         .addDiv({'id': 'bm-eventitem-list', 'style': 'max-height: 125px; overflow: auto; touch-action: pan-x pan-y; display: flex; flex-direction: column; gap: 4px;'}).buildElement()
       .buildElement()
       // Status
-      .addTextarea({'id': overlayMain.outputStatusId, 'placeholder': `Status: Sleeping...\nVersion: ${version}`, 'readOnly': true}, (instance, textarea) => {
+      .addTextarea({'id': overlayMain.outputStatusId, 'placeholder': t('status.placeholder', { version }), 'readOnly': true}, (instance, textarea) => {
         if (templateManager.isStatusHidden()) {
           textarea.style.display = 'none';
         }
@@ -5713,13 +6085,13 @@ async function buildOverlayMain() {
           // .addButton({'id': 'bm-button-teleport', 'className': 'bm-help', 'textContent': '✈'}).buildElement()
           // .addButton({'id': 'bm-button-favorite', 'className': 'bm-help', 'innerHTML': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><polygon points="10,2 12,7.5 18,7.5 13.5,11.5 15.5,18 10,14 4.5,18 6.5,11.5 2,7.5 8,7.5" fill="white"></polygon></svg>'}).buildElement()
           // .addButton({'id': 'bm-button-templates', 'className': 'bm-help', 'innerHTML': '🖌'}).buildElement()
-          .addButton({'id': 'bm-button-convert', 'className': 'bm-help', 'innerHTML': '<span class="bm-action-icon" aria-hidden="true">🎨</span>', 'title': 'Template Color Converter'}, 
+          .addButton({'id': 'bm-button-convert', 'className': 'bm-help', 'innerHTML': '<span class="bm-action-icon" aria-hidden="true">🎨</span>', 'title': t('action.colorConverter')}, 
             (instance, button) => {
             button.addEventListener('click', () => {
               window.open('https://pepoafonso.github.io/color_converter_wplace/', '_blank', 'noopener noreferrer');
             });
           }).buildElement()
-          .addButton({'id': 'bm-button-distance', 'className': 'bm-help', 'innerHTML': '<span class="bm-action-icon" aria-hidden="true">📏</span>', 'title': 'Distance Tool: Off. Click to enable.'},
+          .addButton({'id': 'bm-button-distance', 'className': 'bm-help', 'innerHTML': '<span class="bm-action-icon" aria-hidden="true">📏</span>', 'title': t('distance.button.off')},
             (instance, button) => {
             button.onclick = () => {
               setDistanceToolActive(!distanceMeasureState.active, instance);
@@ -5732,7 +6104,7 @@ async function buildOverlayMain() {
             });
             syncDistanceToolUi();
           }).buildElement()
-          .addButton({'id': 'bm-button-website', 'className': 'bm-help', 'innerHTML': '<span class="bm-action-icon" aria-hidden="true">🌐</span>', 'title': 'Official Rus Marble Website'}, 
+          .addButton({'id': 'bm-button-website', 'className': 'bm-help', 'innerHTML': '<span class="bm-action-icon" aria-hidden="true">🌐</span>', 'title': t('action.website')}, 
             (instance, button) => {
             button.addEventListener('click', () => {
               window.open('https://t.me/ruswplace', '_blank', 'noopener noreferrer');
@@ -5740,7 +6112,7 @@ async function buildOverlayMain() {
           }).buildElement()
         .buildElement()
         .addDiv({'id': 'bm-footer'})
-          .addSmall({'textContent': `Forked by korobka_konfet`, 'title': 'by SwingTheVine | Forked by TWY | Forked by korobka_konfet', 'style': 'margin-top: auto;'}).buildElement()
+          .addSmall({'id': 'bm-footer-text', 'textContent': t('footer.forkedBy'), 'title': t('footer.title'), 'style': 'margin-top: auto;'}).buildElement()
         .buildElement()
       .buildElement()
     .buildElement()
@@ -5748,6 +6120,7 @@ async function buildOverlayMain() {
   syncDistanceToolUi();
 
   applyLayoutTheme(templateManager.getLayoutTheme());
+  applyLayoutLanguage(currentLayoutLanguage);
 
   // ------- Helper: Build the color filter list -------
   const syncToggleList = () => {
@@ -6135,7 +6508,7 @@ async function buildOverlayMain() {
     const { paletteSum, combinedProgress } = templateManager.getOverallPerColorProgress();
 
     if (!listContainer || !(Object.keys(paletteSum).length)) {
-      if (listContainer) { listContainer.innerHTML = '<small>No template colors to display.</small>'; }
+      if (listContainer) { listContainer.innerHTML = `<small>${t('colors.empty.none')}</small>`; }
       return;
     }
 
@@ -6173,11 +6546,11 @@ async function buildOverlayMain() {
       // Special handling for "other" and "transparent"
       if (rgb === 'other') {
         swatch.style.background = '#888'; // Neutral color for "Other"
-        colorName = "Other";
+        colorName = t('colors.other');
         colorKey = "other";
       } else if (rgb === '#deface') {
         swatch.style.background = '#deface';
-        colorName = "Transparent";
+        colorName = t('colors.transparent');
         colorKey = "transparent";
       } else {
         const [r, g, b] = rgb.split(',').map(Number);
@@ -6203,7 +6576,7 @@ async function buildOverlayMain() {
 
       if (sortByParts[0] === "remaining" || (hideCompleted && sortByParts[0] !== "painted")) {
         const remainingLabelText = (totalCount - paintedCount).toLocaleString();
-        label.textContent = `${colorName} • ${remainingLabelText} Left`;
+        label.textContent = `${colorName} • ${remainingLabelText} ${t('colors.leftSuffix')}`;
       } else {
         const labelText = totalCount.toLocaleString();
         const paintedLabelText = paintedCount.toLocaleString();
@@ -6265,12 +6638,12 @@ async function buildOverlayMain() {
     if (!hasColors && listContainer) {
       if (hideLocked) {
         if (hideCompleted) {
-          listContainer.innerHTML = '<small>All owned colors have been completed.</small>';
+          listContainer.innerHTML = `<small>${t('colors.empty.allOwnedCompleted')}</small>`;
         } else {
-          listContainer.innerHTML = '<small>Remaining colors are all locked.</small>';
+          listContainer.innerHTML = `<small>${t('colors.empty.remainingLocked')}</small>`;
         }
       } else { // hideCompleted
-        listContainer.innerHTML = '<small>All colors have been completed.</small>';
+        listContainer.innerHTML = `<small>${t('colors.empty.allCompleted')}</small>`;
       }
     }
   };
@@ -6283,7 +6656,7 @@ async function buildOverlayMain() {
       templatePositionEditStorageKey = null;
       clearTemplatePositionJoystickPending();
       syncTemplatePositionJoystickWindow();
-      if (listContainer) { listContainer.innerHTML = '<small>No templates to display.</small>'; }
+      if (listContainer) { listContainer.innerHTML = `<small>${t('templates.empty')}</small>`; }
       return;
     }
     const activePositionTemplate = templatePositionEditStorageKey
@@ -6341,7 +6714,9 @@ async function buildOverlayMain() {
         details.style.background = 'var(--bm-panel-bg, transparent)';
 
         const summary = document.createElement('summary');
-        summary.textContent = count > 0 ? `${normalizedStream} (${count})` : normalizedStream;
+        summary.textContent = count > 0
+          ? t('templates.streamGroup', { stream: normalizedStream, count })
+          : normalizedStream;
         summary.style.cursor = 'pointer';
         summary.style.fontSize = '12px';
         summary.style.fontWeight = '600';
@@ -6413,7 +6788,7 @@ async function buildOverlayMain() {
 
       let removeButton = document.createElement('a');
       removeButton.className = 'bm-icon-link';
-      removeButton.title = "Remove template";
+      removeButton.title = t('templates.removeTitle');
       removeButton.textContent = "🗑️";
       removeButton.style.fontSize = '12px';
       removeButton.onclick = () => {
@@ -6424,7 +6799,7 @@ async function buildOverlayMain() {
 
       let teleportButton = document.createElement('a');
       teleportButton.className = 'bm-icon-link';
-      teleportButton.title = "Teleport to template";
+      teleportButton.title = t('templates.teleportTitle');
       teleportButton.textContent = "✈️";
       teleportButton.style.fontSize = '12px';
       teleportButton.onclick = () => {
@@ -6434,10 +6809,10 @@ async function buildOverlayMain() {
       let positionButton = document.createElement('a');
       positionButton.className = 'bm-icon-link bm-template-position-button';
       positionButton.title = isRemote
-        ? 'Remote templates cannot be repositioned.'
+        ? t('templates.position.cannotRemote')
         : (isPositionEditing
-          ? 'Apply position from coordinate inputs. Right-click to cancel.'
-          : 'Adjust template position.');
+          ? t('templates.position.apply')
+          : t('templates.position.adjust'));
       positionButton.textContent = isPositionEditing ? "✅" : "⚙️";
       positionButton.style.fontSize = '12px';
       positionButton.onclick = async () => {
@@ -6520,7 +6895,7 @@ async function buildOverlayMain() {
         renameElement.textContent = templateName;
         renameElement.className = "bm-templatename";
         renameElement.style.cursor = isRemote ? 'not-allowed' : 'text';
-        renameElement.title = isRemote ? 'Remote templates cannot be renamed.' : 'Click to rename.';
+        renameElement.title = isRemote ? t('templates.rename.cannotRemote') : t('templates.rename.click');
         renameElement.addEventListener('click', () => {
         if (isRemote) {
           overlayMain.handleDisplayStatus('Remote templates cannot be renamed.');
@@ -6570,19 +6945,26 @@ async function buildOverlayMain() {
           row.classList.add('bm-template-remote');
           const badge = document.createElement('span');
           badge.className = 'bm-remote-badge';
-          badge.textContent = 'REMOTE';
+          badge.textContent = t('templates.badgeRemote');
           label.appendChild(badge);
         }
         if (timeArchiveMeta) {
           const archiveBadge = document.createElement('span');
           archiveBadge.className = 'bm-remote-badge bm-archive-badge';
-          archiveBadge.textContent = 'ARCHIVE';
+          archiveBadge.textContent = t('templates.badgeArchive');
           archiveBadge.title = timeArchiveMeta.regionName
-            ? `Archive: ${timeArchiveMeta.regionName} | ${timeArchiveMeta.archiveDate || timeArchiveMeta.archiveVersion} (${timeArchiveMeta.archiveVersion})`
+            ? t('templates.archiveTitle.region', {
+              region: timeArchiveMeta.regionName,
+              date: timeArchiveMeta.archiveDate || timeArchiveMeta.archiveVersion,
+              version: timeArchiveMeta.archiveVersion,
+            })
             : (
               timeArchiveMeta.archiveDate
-                ? `Archive: ${timeArchiveMeta.archiveDate} (${timeArchiveMeta.archiveVersion})`
-                : `Archive version: ${timeArchiveMeta.archiveVersion}`
+                ? t('templates.archiveTitle.date', {
+                  date: timeArchiveMeta.archiveDate,
+                  version: timeArchiveMeta.archiveVersion,
+                })
+                : t('templates.archiveTitle.version', { version: timeArchiveMeta.archiveVersion })
             );
           label.appendChild(archiveBadge);
         }
@@ -6596,7 +6978,7 @@ async function buildOverlayMain() {
       const countSpan = document.createElement('span');
       countSpan.className = 'bm-template-count';
       countSpan.textContent = showRemaining
-        ? ` left ${remainingLabelText}`
+        ? t('templates.count.left', { count: remainingLabelText })
         : ` • ${filledLabelText} / ${totalLabelText}`;
       label.appendChild(countSpan);
 
@@ -6642,12 +7024,12 @@ async function buildOverlayMain() {
     const showUnavailable = templateManager.isEventUnavailableShown();
     const provider = apiManager.eventDataURL ?? templateManager.getEventProvider();
     if (apiManager.eventClaimed === null) {
-      listContainer.innerHTML = '<small>The event claimed items list is not loaded. Make sure you have clicked the ongoing Event button from the top left corner.</small>';
+      listContainer.innerHTML = `<small>${t('event.noClaimedLoaded')}</small>`;
       return;
     };
     if (apiManager.eventData === null && (provider === null || provider == "")) {
       // rely on external sources
-      listContainer.innerHTML = '<small>Event data provider is not set.</small>';
+      listContainer.innerHTML = `<small>${t('event.providerNotSet')}</small>`;
       return;
     };
     const eventClaimedList = new Set(apiManager.eventClaimed);
@@ -6666,7 +7048,7 @@ async function buildOverlayMain() {
     ).then(data => {
       consoleLog("event Location data", data);
       if (typeof data !== 'object') {
-        listContainer.innerHTML = '<small>The event data provider does not provide a known format.</small>';
+        listContainer.innerHTML = `<small>${t('event.unknownFormat')}</small>`;
         return;
       }
       listContainer.textContent = "";
@@ -6708,7 +7090,7 @@ async function buildOverlayMain() {
             const foundTimestamp = new Date(info['foundAt']).getTime();
             const foundHour = foundTimestamp - (foundTimestamp % 3600000);
             if (currentHour !== foundHour) {
-              coordStatus = "Expired • ";
+              coordStatus = t('event.expiredPrefix');
               if (!showUnavailable) return;
             }
           }
@@ -6717,7 +7099,7 @@ async function buildOverlayMain() {
         if (coords !== null) {
           let teleportButton = document.createElement('a');
           teleportButton.className = 'bm-icon-link';
-          teleportButton.title = "Teleport to event item";
+          teleportButton.title = t('event.teleportTitle');
           teleportButton.textContent = "✈️";
           teleportButton.style.fontSize = '12px';
           teleportButton.onclick = () => {
@@ -6740,21 +7122,24 @@ async function buildOverlayMain() {
           }
           row.appendChild(teleportButton);
         } else {
-          coordStatus = "Unknown Coordinate Format • ";
+          coordStatus = t('event.unknownCoordsPrefix');
         }
 
         let label = document.createElement('span');
         label.style.fontSize = '12px';
-        label.textContent = `#${itemId} • ${coordStatus}${eventClaimedList.has(itemId) ? "Claimed" : "Unclaimed"}`;
+        label.textContent = `#${itemId} • ${coordStatus}${eventClaimedList.has(itemId) ? t('event.claimed') : t('event.unclaimed')}`;
         row.appendChild(label);
         listContainer.appendChild(row);
         hasEntries = true;
       });
       if (!hasEntries && listContainer) {
-        listContainer.innerHTML = `<small>No ${showClaimed ? "" : "unclaimed "}items have ${showUnavailable ? "" : "recent "}data available.</small>`;
+        listContainer.innerHTML = `<small>${t('event.noItems', {
+          claimed: showClaimed ? '' : t('event.unclaimedQualifier'),
+          recent: showUnavailable ? '' : t('event.recentQualifier'),
+        })}</small>`;
       }
     }).catch(err => {
-      listContainer.innerHTML = '<small>Failed fetching the event item info from the event data provider. Make sure the provider URL is a valid JSON resource and can be accessed with appropriate CORS.</small>';
+      listContainer.innerHTML = `<small>${t('event.fetchFailed')}</small>`;
     });
 
   };

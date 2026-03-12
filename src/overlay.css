@@ -380,6 +380,54 @@ div#bm-overlay {
   vertical-align: middle;
 }
 
+#bm-overlay.bm-layout-language-ru:not(.bm-overlay-minimized) {
+  width: min(340px, calc(100vw - 24px)) !important;
+  max-width: min(340px, calc(100vw - 24px)) !important;
+}
+
+#bm-overlay.bm-layout-language-ru:not(.bm-overlay-minimized) #bm-contain-header {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 1px;
+}
+
+#bm-overlay.bm-layout-language-ru:not(.bm-overlay-minimized) #bm-bar-drag {
+  grid-column: 1 / -1;
+  grid-row: 1;
+}
+
+#bm-overlay.bm-layout-language-ru:not(.bm-overlay-minimized) #bm-overlay-logo {
+  grid-column: 1;
+  grid-row: 2;
+  margin-right: 0;
+}
+
+#bm-overlay.bm-layout-language-ru:not(.bm-overlay-minimized) #bm-overlay-title {
+  grid-column: 2;
+  grid-row: 2;
+  display: flex;
+  flex-direction: column;
+  justify-self: start;
+  width: auto;
+  max-width: 100%;
+  margin: 0;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+#bm-overlay.bm-layout-language-ru:not(.bm-overlay-minimized) #bm-overlay-title small {
+  display: block;
+  margin-top: 1px;
+  font-size: 9px;
+  letter-spacing: 0;
+}
+
 /* Checkboxes in the automation container */
 #bm-contain-automation input[type="checkbox"] {
   vertical-align: middle;
