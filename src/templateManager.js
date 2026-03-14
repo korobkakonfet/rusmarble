@@ -1,8 +1,10 @@
 ﻿import Template from "./Template";
-import { base64ToUint8, numberToEncoded, cleanUpCanvas, rgbToMeta, sortByOptions, testCanvasSize, getCurrentColor, sleep } from "./utils";
+import { base64ToUint8, numberToEncoded, cleanUpCanvas, rgbToMeta, sortByOptions, testCanvasSize, getCurrentColor, sleep, createBitmapPreservingPixels } from "./utils";
 import { themeList, addTemplateCanvas, removeLayer, doAfterMapFound, forceRefreshTiles, coordsGeoCoordsToTileCoords, getMapBounds } from './utilsMaptiler.js';
 
 const DEFAULT_TEMPLATE_SYNC_STREAM = 'root';
+const LIVE_TILE_COLOR_MATCH_DELTA = 3;
+const REMOTE_TEMPLATE_IMPORT_SNAP_DELTA = 6;
 const normalizeFlagValue = (value) => value === true || value === 'true' || value === 1 || value === '1';
 const normalizeTemplateSyncStreamValue = (value) => {
   const text = String(value ?? '').trim().toLowerCase();
@@ -202,6 +204,7 @@ export default class TemplateManager {
       tileSize: this.tileSize,
       forcePaletteConversion: Boolean(options?.convertToPalette),
       paletteConversionOptions: options?.convertOptions || null,
+      nearPaletteSnapDelta: (options?.nearPaletteSnapDelta ?? ((options?.remote || options?.normalizeRemotePalette) ? REMOTE_TEMPLATE_IMPORT_SNAP_DELTA : 0)),
     });
     const timeArchiveMeta = normalizeTimeArchiveMeta(options?.timeArchiveMeta);
     template.timeArchiveMeta = timeArchiveMeta;
@@ -436,7 +439,7 @@ export default class TemplateManager {
     // Per-template stat
     let templateStats = {};
     
-    const tileBitmap = await createImageBitmap(tileBlob);
+    const tileBitmap = await createBitmapPreservingPixels(tileBlob);
 
     const isErrorMapShown = this.isErrorMapShown();
   
@@ -445,7 +448,7 @@ export default class TemplateManager {
     const tileSize = this.tileSize; // Calculate draw multiplier for scaling
 
     let canvas = new OffscreenCanvas(tileSize, tileSize);
-    const context = canvas.getContext('2d');
+    const context = canvas.getContext('2d', { willReadFrequently: true });
 
     context.imageSmoothingEnabled = false; // Nearest neighbor
 
@@ -529,6 +532,7 @@ export default class TemplateManager {
             const templatePixelCenterGreen = templateData[templatePixelCenter + 1]; // Shread block's center pixel's GREEN value
             const templatePixelCenterBlue = templateData[templatePixelCenter + 2]; // Shread block's center pixel's BLUE value
             const templatePixelCenterAlpha = templateData[templatePixelCenter + 3]; // Shread block's center pixel's ALPHA value
+            const templatePaletteKey = rgbToMeta.has(`${templatePixelCenterRed},${templatePixelCenterGreen},${templatePixelCenterBlue}`) ? `${templatePixelCenterRed},${templatePixelCenterGreen},${templatePixelCenterBlue}` : 'other';
 
             // Strict center-pixel matching. Treat transparent tile pixels as unpainted (not wrong)
             const realPixelCenter = (gyr * tileSize + gxr) * 4;
@@ -559,8 +563,7 @@ export default class TemplateManager {
             }
 
             // errorMapOnlyEnabledColors
-            let colorKey = `${templatePixelCenterRed},${templatePixelCenterGreen},${templatePixelCenterBlue}`;
-            if (!rgbToMeta.has(colorKey)) colorKey = 'other';
+            let colorKey = templatePaletteKey;
             const shouldThisColorInvolvedInErrorMap = (!errorMapOnlyEnabledColors) || displayedColors.has(colorKey);
 
             // IF the alpha of the pixel is less than 64...
@@ -576,7 +579,18 @@ export default class TemplateManager {
               }
 
               // ELSE IF the pixel matches the template center pixel color
-            } else if (realPixelRed === templatePixelCenterRed && realPixelCenterGreen === templatePixelCenterGreen && realPixelCenterBlue === templatePixelCenterBlue) {
+            } else if (
+              realPixelCenterAlpha >= 64
+              && (
+                (realPixelRed === templatePixelCenterRed && realPixelCenterGreen === templatePixelCenterGreen && realPixelCenterBlue === templatePixelCenterBlue)
+                || (
+                  templatePaletteKey !== 'other'
+                  && Math.abs(realPixelRed - templatePixelCenterRed) <= LIVE_TILE_COLOR_MATCH_DELTA
+                  && Math.abs(realPixelCenterGreen - templatePixelCenterGreen) <= LIVE_TILE_COLOR_MATCH_DELTA
+                  && Math.abs(realPixelCenterBlue - templatePixelCenterBlue) <= LIVE_TILE_COLOR_MATCH_DELTA
+                )
+              )
+            ) {
               paintedCount++; // ...the pixel is painted correctly
               isPainted = true;
               if (paletteStats[colorKey] === undefined) {
@@ -617,8 +631,7 @@ export default class TemplateManager {
             }
             if (!isPainted) {
               // add to palette stat
-              let key = `${templatePixelCenterRed},${templatePixelCenterGreen},${templatePixelCenterBlue}`;
-              if (!rgbToMeta.has(key)) key = 'other';
+              let key = templatePaletteKey;
               const example = [ // use this tile as example
                 tileCoords,
                 [ gxr, gyr ]
@@ -1047,6 +1060,10 @@ export default class TemplateManager {
           const templateWorldWidth = 2048 * this.tileSize;
           const topLeftWorldX = templateCoords[0] * this.tileSize + templateCoords[2];
           const topLeftWorldY = templateCoords[1] * this.tileSize + templateCoords[3];
+          const persistedPalette = (templateValue.palette && typeof templateValue.palette === 'object')
+            ? templateValue.palette
+            : null;
+          const hasPersistedPalette = !!(persistedPalette && Object.keys(persistedPalette).length);
           let inferredImageWidth = Number.isFinite(Number(templateValue.width))
             ? Math.max(1, Math.trunc(Number(templateValue.width)))
             : 0;
@@ -1065,13 +1082,7 @@ export default class TemplateManager {
               const templateUint8Array = base64ToUint8(encodedTemplateBase64); // Base 64 -> Uint8Array
 
               const templateBlob = new Blob([templateUint8Array], { type: "image/png" }); // Uint8Array -> Blob
-              const templateBitmap = await createImageBitmap(templateBlob) // Blob -> Bitmap
-              if (currentMemorySavingMode) {
-                templateTiles[tile] = null;
-              } else {
-                templateTiles[tile] = templateBitmap;
-              }
-              templateTilesBuffer[tile] = templateUint8Array;
+              const templateBitmap = await createBitmapPreservingPixels(templateBlob); // Blob -> Bitmap
 
               const tileCoords = tile.split(',').map(Number);
               if (tileCoords.length >= 4 && tileCoords.slice(0, 4).every(Number.isFinite)) {
@@ -1088,7 +1099,7 @@ export default class TemplateManager {
               }
 
               // Count required pixels in this bitmap (center pixels with alpha >= 64 and not #deface)
-              try {
+              if (!hasPersistedPalette) try {
                 const w = templateBitmap.width;
                 const h = templateBitmap.height;
                 let c = new OffscreenCanvas(w, h);
@@ -1097,8 +1108,6 @@ export default class TemplateManager {
                 cx.clearRect(0, 0, w, h);
                 cx.drawImage(templateBitmap, 0, 0);
                 const data = cx.getImageData(0, 0, w, h).data;
-                cleanUpCanvas(c);
-                c = null;
                 // Optimize for-loop
                 // Only count center pixels of each mult-x block
                 for (let y = this.drawMultCenter; y < h; y += this.drawMult) {
@@ -1115,12 +1124,18 @@ export default class TemplateManager {
                     paletteMap.set(key, (paletteMap.get(key) || 0) + 1);
                   }
                 }
+                cleanUpCanvas(c);
+                c = null;
               } catch (e) {
                 console.warn('Failed to count required pixels for imported tile', e);
               }
               if (currentMemorySavingMode) {
+                templateTiles[tile] = null;
                 templateBitmap.close();
+              } else {
+                templateTiles[tile] = templateBitmap;
               }
+              templateTilesBuffer[tile] = templateUint8Array;
             }
           }
 
@@ -1132,6 +1147,7 @@ export default class TemplateManager {
             coords: templateCoords,
             imageWidth: inferredImageWidth > 0 ? inferredImageWidth : null,
             imageHeight: inferredImageHeight > 0 ? inferredImageHeight : null,
+            nearPaletteSnapDelta: templateValue.remote === true ? REMOTE_TEMPLATE_IMPORT_SNAP_DELTA : 0,
           });
           if (template.sortID > this.largestSeenSortID) { this.largestSeenSortID = template.sortID; }
           template.shreadSize = parsedShreadSize; // Copy to template's shread Size
@@ -1163,9 +1179,21 @@ export default class TemplateManager {
             templates[templateKey].height = inferredImageHeight;
           }
           // Construct colorPalette from paletteMap
-          const paletteObj = {};
-          for (const [key, count] of paletteMap.entries()) { paletteObj[key] = { count, enabled: true }; }
-          template.colorPalette = paletteObj;
+          if (hasPersistedPalette) {
+            const paletteObj = {};
+            let persistedRequiredPixelCount = 0;
+            for (const [key, meta] of Object.entries(persistedPalette)) {
+              const count = Math.max(0, Number(meta?.count) || 0);
+              paletteObj[key] = { count, enabled: meta?.enabled !== false };
+              persistedRequiredPixelCount += count;
+            }
+            template.requiredPixelCount = persistedRequiredPixelCount;
+            template.colorPalette = paletteObj;
+          } else {
+            const paletteObj = {};
+            for (const [key, count] of paletteMap.entries()) { paletteObj[key] = { count, enabled: true }; }
+            template.colorPalette = paletteObj;
+          }
           // Populate tilePrefixes for fast-scoping
           try { Object.keys(templateTiles).forEach(k => { template.tilePrefixes?.add(k.split(',').slice(0,2).join(',')); }); } catch (_) {}
           // Merge persisted palette (enabled/disabled) if present
