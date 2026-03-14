@@ -517,11 +517,12 @@ export var overrideRandom = {
 /** Teleport user to coordinate
  * @param {*} lat - latitude
  * @param {*} lng - longitude
- * @param {boolean} smooth - smooth transition
+ * @param {{ revealPixelInfo?: boolean }?} options
  * @since 0.85.9
  */
-export async function teleportToGeoCoords(lat, lng) {
+export async function teleportToGeoCoords(lat, lng, options = null) {
   let smooth = false;
+  const revealPixelInfo = options?.revealPixelInfo !== false;
 
   if (isMapTilerLoaded()) {
     const funcName = smooth ? "flyTo" : "jumpTo";
@@ -529,7 +530,7 @@ export async function teleportToGeoCoords(lat, lng) {
       map[funcName]({'center': [lng, lat], 'zoom': 16});
     }, lat, lng, funcName);
     const allianceOrRankingButton = document.querySelector(".flex>.btn.btn-square.relative.shadow-md");
-    if (allianceOrRankingButton) {
+    if (revealPixelInfo && allianceOrRankingButton) {
       // not in painting mode, click on center to show pixel info
       const canvas = document.querySelector("canvas.maplibregl-canvas");
       const ev = new MouseEvent("click", {
@@ -558,12 +559,12 @@ export async function teleportToGeoCoords(lat, lng) {
 /** Teleport user to coordinate
  * @param {number[]} coordsTile
  * @param {number[]} coordsPixel
- * @param {boolean} smooth - smooth transition (removed)
+ * @param {{ revealPixelInfo?: boolean }?} options
  * @since 0.85.9
  */
-export async function teleportToTileCoords(coordsTile, coordsPixel) {
+export async function teleportToTileCoords(coordsTile, coordsPixel, options = null) {
   const geoCoords = coordsTileCoordsToGeoCoords(coordsTile, coordsPixel);
-  await teleportToGeoCoords(geoCoords[0], geoCoords[1]);
+  await teleportToGeoCoords(geoCoords[0], geoCoords[1], options);
 }
 
 /** Returns the real World coordinates

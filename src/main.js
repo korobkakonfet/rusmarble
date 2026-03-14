@@ -40,6 +40,7 @@ const REPORT_CLICK_FALLBACK_MS = 5000;
 const REPORT_POST_SEND_HIDE_MS = 1000;
 const MAP_WORLD_WIDTH_PX = 2048 * 1000;
 const MAP_WORLD_HEIGHT_PX = 2048 * 1000;
+const NEXT_TEMPLATE_PIXEL_ZOOM_LEVEL = 10;
 const TEMPLATE_FOCUS_VIEWPORT_RATIO = 0.72;
 const TEMPLATE_FOCUS_SCALE_PADDING = 1.5;
 const TEMPLATE_FOCUS_SCALE_MIN = 0.0001;
@@ -3803,6 +3804,7 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
       'showOnlyEnabledColorsErrorMap': false, // Hidden in settings
       'showIntegerZoom': false,
       'enableKeybinds': false,
+      'enableNextTemplatePixelShortcut': true,
       'lineTemplateButton': false, // Hidden in settings
       'ruspixelFlagEnabled': true,
       'autoSyncTemplates': false,
@@ -3888,16 +3890,32 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   }
 
   document.addEventListener('keydown', (event) => {
-    // Don't pan if disabled
-    if (!templateManager.areKeybindsEnabled()) {
-        return;
-    }
     // Don't pan if user is typing in an input
-    if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') {
+    if (
+      document.activeElement?.tagName === 'INPUT'
+      || document.activeElement?.tagName === 'TEXTAREA'
+      || document.activeElement?.isContentEditable
+    ) {
         return;
     }
 
     const key = event.key.toLowerCase();
+    if (
+      key === 'j'
+      && templateManager.isNextTemplatePixelShortcutEnabled()
+      && !event.repeat
+      && !event.ctrlKey
+      && !event.metaKey
+      && !event.altKey
+    ) {
+      event.preventDefault();
+      void jumpToNextUnpaintedTemplatePixel();
+      return;
+    }
+    // Don't pan if disabled
+    if (!templateManager.areKeybindsEnabled()) {
+        return;
+    }
     const validKeys = ['w', 'a', 's', 'd']; //, 'arrowup', 'arrowdown', 'arrowleft', 'arrowright']; // also used by wplace to handle rotation, so not capturing these
 
     // Ignore invalid keys or repeated keydown events
@@ -3961,7 +3979,7 @@ function createZoomButtons() {
         setZoom(Math.log2(8 * currentTileSize * currentTileSize) / 2 + epsilon);
         return;
       }
-      setZoom(Math.log2(4000 * actualZoomLevel / window['devicePixelRatio']));
+      applyIntegerZoomLevel(actualZoomLevel);
     };
 
     container.appendChild(zoomBtn); // Adds the zoom level button
@@ -4295,6 +4313,418 @@ function applyTemplateFocusZoom(imageWidth, imageHeight) {
   if (!Number.isFinite(focusZoom)) return false;
   setZoom(focusZoom);
   return true;
+}
+
+function resolveIntegerZoomMapValue(zoomLevel) {
+  const numericZoomLevel = Number(zoomLevel);
+  if (!Number.isFinite(numericZoomLevel) || numericZoomLevel <= 0) return null;
+  const dpr = Math.max(0.25, Number(window.devicePixelRatio) || 1);
+  const zoomValue = Math.log2((4000 * numericZoomLevel) / dpr);
+  return Number.isFinite(zoomValue) ? zoomValue : null;
+}
+
+function applyIntegerZoomLevel(zoomLevel) {
+  const zoomValue = resolveIntegerZoomMapValue(zoomLevel);
+  if (!Number.isFinite(zoomValue)) return false;
+  setZoom(zoomValue);
+  return true;
+}
+
+function isElementActuallyVisible(element) {
+  if (!(element instanceof HTMLElement)) return false;
+  if (!element.isConnected) return false;
+  const style = window.getComputedStyle(element);
+  if (
+    style.display === 'none'
+    || style.visibility === 'hidden'
+    || style.pointerEvents === 'none'
+    || Number(style.opacity || 1) <= 0
+  ) {
+    return false;
+  }
+  const rect = element.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
+}
+
+function getNormalizedElementText(element) {
+  return String(element?.textContent || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function isLikelyPixelInfoHeadingText(text) {
+  const normalized = String(text || '').trim().toLowerCase();
+  if (!normalized || !/#\d+\b/.test(normalized)) return false;
+  return !/(leaderboard|notifications?|active bans|report user|rus marble|distance)/.test(normalized);
+}
+
+function getCloseLikeControls(container) {
+  if (!(container instanceof HTMLElement)) return [];
+  const controls = Array.from(container.querySelectorAll('button, [role="button"], [aria-label], [title]'));
+  return controls.filter((control) => {
+    if (!(control instanceof HTMLElement)) return false;
+    if (!isElementActuallyVisible(control)) return false;
+    if (control.closest('#bm-overlay')) return false;
+    if (control instanceof HTMLButtonElement && control.disabled) return false;
+    const text = [
+      control.textContent,
+      control.getAttribute('aria-label'),
+      control.getAttribute('title'),
+      control.getAttribute('name'),
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+    return (
+      text === 'x'
+      || text === '×'
+      || text === '✕'
+      || /\b(close|dismiss|cancel|back)\b/.test(text)
+    );
+  });
+}
+
+function scoreCloseLikeControl(control) {
+  const text = [
+    control.textContent,
+    control.getAttribute('aria-label'),
+    control.getAttribute('title'),
+    control.getAttribute('name'),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+  let score = 0;
+  if (/\bclose\b/.test(text)) score += 10;
+  if (/\b(dismiss|cancel|back)\b/.test(text)) score += 6;
+  if (text === '✕' || text === '×' || text === 'x') score += 8;
+  const rect = control.getBoundingClientRect();
+  if (rect.width <= 48 && rect.height <= 48) score += 2;
+  return score;
+}
+
+function clickElementLikeUser(element) {
+  if (!(element instanceof HTMLElement)) return false;
+  try {
+    element.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 }));
+    element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+    element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, button: 0 }));
+    element.click();
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function closePixelInfoWindows() {
+  const visitedContainers = new Set();
+  const headings = Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, h6, [role="heading"]'))
+    .filter((heading) => heading instanceof HTMLElement)
+    .filter((heading) => isElementActuallyVisible(heading))
+    .filter((heading) => isLikelyPixelInfoHeadingText(getNormalizedElementText(heading)));
+  for (const heading of headings) {
+    let container = heading;
+    let depth = 0;
+    while (container && container instanceof HTMLElement && container !== document.body && depth < 8) {
+      if (visitedContainers.has(container)) break;
+      const closeControls = getCloseLikeControls(container)
+        .sort((left, right) => scoreCloseLikeControl(right) - scoreCloseLikeControl(left));
+      if (closeControls.length > 0) {
+        visitedContainers.add(container);
+        clickElementLikeUser(closeControls[0]);
+        break;
+      }
+      container = container.parentElement;
+      depth += 1;
+    }
+  }
+}
+
+function getTemplateJumpOriginCoords() {
+  try {
+    const geoCoords = getCenterGeoCoords();
+    const [coordsTile, coordsPixel] = coordsGeoCoordsToTileCoords(geoCoords[0], geoCoords[1], true);
+    return normalizeTilePixelCoords([coordsTile[0], coordsTile[1], coordsPixel[0], coordsPixel[1]]);
+  } catch (_) {
+    return normalizeTilePixelCoords(apiManager?.coordsTilePixel ?? null);
+  }
+}
+
+function getWrappedRangeDistance(currentValue, minValue, maxValue, worldSize = null) {
+  const current = Number(currentValue);
+  const min = Number(minValue);
+  const max = Number(maxValue);
+  if (![current, min, max].every(Number.isFinite)) return Infinity;
+  const calculateDistance = (value) => {
+    if (value < min) return min - value;
+    if (value > max) return value - max;
+    return 0;
+  };
+  if (!Number.isFinite(worldSize) || worldSize <= 0) {
+    return calculateDistance(current);
+  }
+  return Math.min(
+    calculateDistance(current),
+    calculateDistance(current - worldSize),
+    calculateDistance(current + worldSize)
+  );
+}
+
+function getTileLowerBoundDistanceSq(originPoint, tileX, tileY) {
+  const minX = tileX * TEMPLATE_TILE_SIZE;
+  const maxX = minX + TEMPLATE_TILE_SIZE - 1;
+  const minY = tileY * TEMPLATE_TILE_SIZE;
+  const maxY = minY + TEMPLATE_TILE_SIZE - 1;
+  const dx = getWrappedRangeDistance(originPoint?.x, minX, maxX, MAP_WORLD_WIDTH_PX);
+  const dy = getWrappedRangeDistance(originPoint?.y, minY, maxY);
+  return dx * dx + dy * dy;
+}
+
+function getTilePixelDistanceSq(originPoint, rawCoords) {
+  const coords = normalizeTilePixelCoords(rawCoords);
+  if (!originPoint || !coords) return Infinity;
+  const targetWorldX = coords[0] * TEMPLATE_TILE_SIZE + coords[2];
+  const targetWorldY = coords[1] * TEMPLATE_TILE_SIZE + coords[3];
+  const dx = computeWrappedWorldDeltaX(originPoint.x, targetWorldX);
+  const dy = targetWorldY - originPoint.y;
+  return dx * dx + dy * dy;
+}
+
+function findNearestCachedTemplatePixel(originPoint, displayedColorSet, excludedCoordsKey) {
+  let bestCandidate = null;
+  for (const stats of templateManager.tileProgress.values()) {
+    for (const [colorKey, content] of Object.entries(stats?.palette ?? {})) {
+      if (!displayedColorSet.has(colorKey)) continue;
+      const examples = content?.examplesEnabled ?? [];
+      for (const example of examples) {
+        if (!Array.isArray(example) || example.length < 2) continue;
+        const coords = normalizeTilePixelCoords([
+          example?.[0]?.[0],
+          example?.[0]?.[1],
+          example?.[1]?.[0],
+          example?.[1]?.[1],
+        ]);
+        if (!coords) continue;
+        const coordsKey = coords.join(',');
+        if (coordsKey === excludedCoordsKey) continue;
+        const distanceSq = getTilePixelDistanceSq(originPoint, coords);
+        if (!Number.isFinite(distanceSq)) continue;
+        if (!bestCandidate || distanceSq < bestCandidate.distanceSq) {
+          bestCandidate = { coords, coordsKey, distanceSq };
+        }
+      }
+    }
+  }
+  return bestCandidate;
+}
+
+async function getLiveTilePixels(tileX, tileY) {
+  const tileImage = await downloadTile(tileX, tileY);
+  let canvas = new OffscreenCanvas(TEMPLATE_TILE_SIZE, TEMPLATE_TILE_SIZE);
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) {
+    cleanUpCanvas(canvas);
+    canvas = null;
+    throw new Error('Failed to initialize live tile canvas.');
+  }
+  context.imageSmoothingEnabled = false;
+  context.clearRect(0, 0, TEMPLATE_TILE_SIZE, TEMPLATE_TILE_SIZE);
+  context.drawImage(tileImage, 0, 0, TEMPLATE_TILE_SIZE, TEMPLATE_TILE_SIZE);
+  const imageData = context.getImageData(0, 0, TEMPLATE_TILE_SIZE, TEMPLATE_TILE_SIZE).data;
+  cleanUpCanvas(canvas);
+  canvas = null;
+  return imageData;
+}
+
+async function findNearestTemplatePixelInTile(tileCandidate, liveTilePixels, originPoint, displayedColorSet, excludedCoordsKey, memorySavingMode) {
+  let bestCandidate = null;
+  for (const entry of tileCandidate.entries) {
+    const templateBitmap = await entry.template.getChunked(entry.tileKey, memorySavingMode);
+    if (!templateBitmap) continue;
+
+    let templateCanvas = new OffscreenCanvas(templateBitmap.width, templateBitmap.height);
+    const templateContext = templateCanvas.getContext('2d', { willReadFrequently: true });
+    if (!templateContext) {
+      cleanUpCanvas(templateCanvas);
+      templateCanvas = null;
+      if (memorySavingMode) {
+        templateBitmap.close();
+      }
+      continue;
+    }
+
+    templateContext.imageSmoothingEnabled = false;
+    templateContext.clearRect(0, 0, templateBitmap.width, templateBitmap.height);
+    templateContext.drawImage(templateBitmap, 0, 0);
+    const templateData = templateContext.getImageData(0, 0, templateBitmap.width, templateBitmap.height).data;
+    const drawMult = Math.max(1, Number(entry.template.shreadSize) || templateManager.drawMult);
+    const drawMultCenter = (drawMult - 1) >> 1;
+
+    for (
+      let yt = drawMultCenter, pixelY = entry.offsetY;
+      yt < templateBitmap.height;
+      yt += drawMult, pixelY++
+    ) {
+      if (pixelY < 0 || pixelY >= TEMPLATE_TILE_SIZE) continue;
+      for (
+        let xt = drawMultCenter, pixelX = entry.offsetX;
+        xt < templateBitmap.width;
+        xt += drawMult, pixelX++
+      ) {
+        if (pixelX < 0 || pixelX >= TEMPLATE_TILE_SIZE) continue;
+
+        const templateIndex = (yt * templateBitmap.width + xt) * 4;
+        const templateRed = templateData[templateIndex];
+        const templateGreen = templateData[templateIndex + 1];
+        const templateBlue = templateData[templateIndex + 2];
+        const templateAlpha = templateData[templateIndex + 3];
+        if (templateAlpha < 64) continue;
+
+        const colorKey = `${templateRed},${templateGreen},${templateBlue}`;
+        const colorMeta = rgbToMeta.get(colorKey);
+        if (!colorMeta || colorMeta.id === 0 || !displayedColorSet.has(colorKey)) continue;
+
+        const tileIndex = (pixelY * TEMPLATE_TILE_SIZE + pixelX) * 4;
+        const liveAlpha = liveTilePixels[tileIndex + 3];
+        const isPainted = liveAlpha >= 64
+          && liveTilePixels[tileIndex] === templateRed
+          && liveTilePixels[tileIndex + 1] === templateGreen
+          && liveTilePixels[tileIndex + 2] === templateBlue;
+        if (isPainted) continue;
+
+        const coords = [tileCandidate.tileX, tileCandidate.tileY, pixelX, pixelY];
+        const coordsKey = coords.join(',');
+        if (coordsKey === excludedCoordsKey) continue;
+        const distanceSq = getTilePixelDistanceSq(originPoint, coords);
+        if (!Number.isFinite(distanceSq)) continue;
+        if (!bestCandidate || distanceSq < bestCandidate.distanceSq) {
+          bestCandidate = {
+            coords,
+            coordsKey,
+            distanceSq,
+            templateName: entry.template.displayName,
+          };
+        }
+      }
+    }
+
+    cleanUpCanvas(templateCanvas);
+    templateCanvas = null;
+    if (memorySavingMode) {
+      templateBitmap.close();
+    }
+  }
+  return bestCandidate;
+}
+
+let isJumpToNextTemplatePixelRunning = false;
+async function jumpToNextUnpaintedTemplatePixel() {
+  if (isJumpToNextTemplatePixelRunning) return;
+  isJumpToNextTemplatePixelRunning = true;
+  try {
+    closePixelInfoWindows();
+    const activeTemplates = (templateManager.templatesArray ?? []).filter((template) => template?.enabled);
+    if (!activeTemplates.length) {
+      overlayMain.handleDisplayStatus('No active templates enabled.');
+      return;
+    }
+
+    const displayedColors = templateManager.getDisplayedColorsSorted().filter((rgb) => {
+      const meta = rgbToMeta.get(rgb);
+      return typeof meta?.id === 'number' && meta.id > 0;
+    });
+    if (!displayedColors.length) {
+      overlayMain.handleDisplayStatus('No active template colors available for jump.');
+      return;
+    }
+
+    const originCoords = getTemplateJumpOriginCoords();
+    const originPoint = tilePixelCoordsToWorldPoint(originCoords);
+    if (!originPoint) {
+      overlayMain.handleDisplayError('Map position is unavailable.');
+      return;
+    }
+
+    overlayMain.handleDisplayStatus('Searching for the next unpainted template pixel...');
+    const excludedCoordsKey = originPoint.coords.join(',');
+    const displayedColorSet = new Set(displayedColors);
+    let bestCandidate = findNearestCachedTemplatePixel(originPoint, displayedColorSet, excludedCoordsKey);
+    const tileCandidatesMap = new Map();
+    for (const template of activeTemplates) {
+      const tileKeys = Object.keys(template.chunkedBuffer ?? template.chunked ?? {});
+      for (const tileKey of tileKeys) {
+        const parsedTileKey = parseTemplateChunkKey(tileKey);
+        if (!parsedTileKey) continue;
+        const tilePrefix = `${parsedTileKey[0].toString().padStart(4, '0')},${parsedTileKey[1].toString().padStart(4, '0')}`;
+        if (!tileCandidatesMap.has(tilePrefix)) {
+          tileCandidatesMap.set(tilePrefix, {
+            tileX: parsedTileKey[0],
+            tileY: parsedTileKey[1],
+            lowerBoundDistanceSq: getTileLowerBoundDistanceSq(originPoint, parsedTileKey[0], parsedTileKey[1]),
+            entries: [],
+          });
+        }
+        tileCandidatesMap.get(tilePrefix).entries.push({
+          template,
+          tileKey,
+          offsetX: parsedTileKey[2],
+          offsetY: parsedTileKey[3],
+        });
+      }
+    }
+
+    const tileCandidates = [...tileCandidatesMap.values()]
+      .sort((left, right) => left.lowerBoundDistanceSq - right.lowerBoundDistanceSq);
+    const memorySavingMode = templateManager.isMemorySavingModeOn();
+    for (const tileCandidate of tileCandidates) {
+      if (bestCandidate && tileCandidate.lowerBoundDistanceSq > bestCandidate.distanceSq) {
+        break;
+      }
+      try {
+        const liveTilePixels = await getLiveTilePixels(tileCandidate.tileX, tileCandidate.tileY);
+        const tileCandidateBest = await findNearestTemplatePixelInTile(
+          tileCandidate,
+          liveTilePixels,
+          originPoint,
+          displayedColorSet,
+          excludedCoordsKey,
+          memorySavingMode
+        );
+        if (tileCandidateBest && (!bestCandidate || tileCandidateBest.distanceSq < bestCandidate.distanceSq)) {
+          bestCandidate = tileCandidateBest;
+        }
+      } catch (error) {
+        consoleWarn('Failed to inspect live tile for next template pixel jump.', {
+          tileX: tileCandidate.tileX,
+          tileY: tileCandidate.tileY,
+          error,
+        });
+      }
+    }
+
+    if (!bestCandidate) {
+      overlayMain.handleDisplayStatus('No other unpainted pixels found for active templates.');
+      return;
+    }
+
+    await teleportToTileCoords(bestCandidate.coords.slice(0, 2), bestCandidate.coords.slice(2, 4), {
+      revealPixelInfo: false,
+    });
+    closePixelInfoWindows();
+    applyIntegerZoomLevel(NEXT_TEMPLATE_PIXEL_ZOOM_LEVEL);
+    const templateLabel = bestCandidate.templateName ? ` in "${bestCandidate.templateName}"` : '';
+    overlayMain.handleDisplayStatus(`Jumped to next unpainted pixel${templateLabel}: ${formatTilePixelCoords(bestCandidate.coords)}.`);
+  } catch (error) {
+    consoleWarn('Failed to jump to the next unpainted template pixel.', error);
+    overlayMain.handleDisplayError('Failed to find the next unpainted template pixel.');
+  } finally {
+    isJumpToNextTemplatePixelRunning = false;
+  }
 }
 
 function resolveDistanceMapInstance() {
@@ -5060,6 +5490,7 @@ const applyLayoutLanguage = (value = null) => {
   setCheckboxLabelText('bm-theme-override-enabled', t('settings.themeOverride.label'));
   setCheckboxLabelText('bm-show-zoom-buttons', t('settings.showIntegerZoomButtons'));
   setCheckboxLabelText('bm-enable-keybinds', t('settings.enableKeybinds'));
+  setCheckboxLabelText('bm-enable-next-template-pixel-shortcut', t('settings.enableNextTemplatePixelShortcut'));
   setCheckboxLabelText('bm-chat-enabled', t('settings.enableChat'));
   setCheckboxLabelText('bm-map-comments-enabled', t('settings.enableMapComments'));
   setCheckboxLabelText('bm-progress-bar-enabled', t('settings.showProgressBar'));

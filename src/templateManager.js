@@ -2042,6 +2042,23 @@ export default class TemplateManager {
     await this.storeUserSettings();
   }
 
+  /** A utility to enable / disable the jump-to-next-template-pixel shortcut.
+   * @returns {boolean}
+   * @since 0.90.0
+   */
+  isNextTemplatePixelShortcutEnabled() {
+    return this.userSettings?.enableNextTemplatePixelShortcut ?? true;
+  }
+
+  /** Sets the jump-to-next-template-pixel shortcut enabled state.
+   * @param {boolean} value - The value
+   * @since 0.90.0
+   */
+  async setNextTemplatePixelShortcutEnabled(value) {
+    this.userSettings.enableNextTemplatePixelShortcut = Boolean(value);
+    await this.storeUserSettings();
+  }
+
   /** A utility to check if chat is disabled.
    * @returns {boolean}
    * @since 0.88.1

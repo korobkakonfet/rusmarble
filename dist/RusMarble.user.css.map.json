@@ -299,5 +299,6 @@
   "bm-help": "bm-4F",
   "bm-link": "bm-4G",
   "bm-fg": "bm-4H",
-  "bm-bg": "bm-4I"
+  "bm-bg": "bm-4I",
+  "bm-enable-next-template-pixel-shortcut": "bm-4M"
 }

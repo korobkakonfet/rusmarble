@@ -191,6 +191,20 @@ export function buildUserSettingsSection({
             };
           });
         }).buildElement()
+        .addCheckbox({
+          'id': 'bm-enable-next-template-pixel-shortcut',
+          'textContent': t('settings.enableNextTemplatePixelShortcut'),
+          'checked': templateManager.isNextTemplatePixelShortcutEnabled?.() ?? true
+        }, (instance, label, checkbox) => {
+          checkbox.addEventListener('change', () => {
+            templateManager.setNextTemplatePixelShortcutEnabled?.(checkbox.checked);
+            if (checkbox.checked) {
+              instance.handleDisplayStatus('J shortcut for next template pixel is now Enabled.');
+            } else {
+              instance.handleDisplayStatus('J shortcut for next template pixel is now Disabled.');
+            }
+          });
+        }).buildElement()
         .addCheckbox({'id': 'bm-chat-enabled', 'textContent': t('settings.enableChat'), 'checked': !templateManager.isChatDisabled()}, (instance, label, checkbox) => {
           checkbox.addEventListener('change', () => {
             const enabled = checkbox.checked;
