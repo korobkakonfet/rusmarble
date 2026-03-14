@@ -328,6 +328,37 @@ export function removeLayer(usage = null, sortID = null) {
   }, toRemove, bmCanvas);
 }
 
+export function removeTemplateCanvasSources(sourceIDs, usage = "overlay") {
+  const safeSourceIDs = Array.isArray(sourceIDs)
+    ? sourceIDs.filter((sourceID) => typeof sourceID === 'string' && sourceID)
+    : [];
+  if (!safeSourceIDs.length) return;
+
+  safeSourceIDs.forEach((sourceID) => {
+    if (bmCanvas[usage]?.[sourceID] !== undefined) {
+      delete bmCanvas[usage][sourceID];
+    }
+  });
+
+  return controlMapTiler((map, sourceIDs, bmCanvas) => {
+    document.head["__bmCanvas"] = bmCanvas;
+    sourceIDs.forEach((sourceID) => {
+      if (map["getLayer"](sourceID)) {
+        map["removeLayer"](sourceID);
+      }
+      if (map["getSource"](sourceID)) {
+        map["removeSource"](sourceID);
+      }
+      const canvas = document.getElementById(sourceID);
+      if (canvas) {
+        canvas.width = 0;
+        canvas.height = 0;
+        canvas.remove();
+      }
+    });
+  }, safeSourceIDs, bmCanvas);
+}
+
 /** Try to force the on-screen tiles to be refreshed
  * @since 0.85.37
  */

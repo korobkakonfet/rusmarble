@@ -390,7 +390,7 @@ export const collectTemplateProgressFromSamples = ({
   const ensureTemplateProgress = () => {
     if (!templateKey) return null;
     if (templateStats[templateKey] === undefined) {
-      templateStats[templateKey] = { painted: 0, required: 0 };
+      templateStats[templateKey] = { painted: 0 };
     }
     return templateStats[templateKey];
   };
@@ -413,9 +413,6 @@ export const collectTemplateProgressFromSamples = ({
 
     requiredCount++;
     const templateProgress = ensureTemplateProgress();
-    if (templateProgress) {
-      templateProgress.required++;
-    }
     const colorKey = rgbToMeta.has(`${templateRed},${templateGreen},${templateBlue}`)
       ? `${templateRed},${templateGreen},${templateBlue}`
       : 'other';
