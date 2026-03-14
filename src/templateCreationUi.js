@@ -139,7 +139,7 @@ export const createTemplateCreationUi = (deps = {}) => {
     let previewHeight = 0;
     if (sourceFile) {
       try {
-        const sourceBitmap = await createImageBitmap(sourceFile, { colorSpaceConversion: 'none' });
+        const sourceBitmap = await createImageBitmap(sourceFile);
         const maxDimension = Math.max(1, Math.max(sourceBitmap.width, sourceBitmap.height));
         const ratio = Math.min(1, TEMPLATE_PALETTE_PREVIEW_MAX_DIMENSION / maxDimension);
         previewWidth = Math.max(1, Math.round(sourceBitmap.width * ratio));

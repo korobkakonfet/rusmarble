@@ -164,10 +164,57 @@ export var bmCanvas = {
 
 }; // sourceID => coords
 
+function resolveCanvasSourceSize(source) {
+  if (!source || typeof source !== 'object') return null;
+  if (typeof ImageData !== 'undefined' && source instanceof ImageData) {
+    return [source.width, source.height];
+  }
+  const width = Number(source.width ?? source.videoWidth ?? source.naturalWidth);
+  const height = Number(source.height ?? source.videoHeight ?? source.naturalHeight);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width < 1 || height < 1) {
+    return null;
+  }
+  return [Math.max(1, Math.trunc(width)), Math.max(1, Math.trunc(height))];
+}
+
+function ensureTemplateCanvasElement(sourceID, width, height) {
+  let canvas = document.getElementById(sourceID);
+  if (!(canvas instanceof HTMLCanvasElement)) {
+    canvas = document.createElement("canvas");
+    canvas.id = sourceID;
+    canvas.style.display = "none";
+    document.body.appendChild(canvas);
+  }
+  if (canvas.width !== width) canvas.width = width;
+  if (canvas.height !== height) canvas.height = height;
+  return canvas;
+}
+
+function syncTemplateCanvasSource(targetCanvas, source) {
+  const size = resolveCanvasSourceSize(source);
+  if (!size) {
+    throw new Error("Unsupported template canvas source.");
+  }
+  const [width, height] = size;
+  const canvas = ensureTemplateCanvasElement(targetCanvas.id, width, height);
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) {
+    throw new Error("Could not initialize template source canvas context.");
+  }
+  context.imageSmoothingEnabled = false;
+  context.clearRect(0, 0, width, height);
+  if (typeof ImageData !== 'undefined' && source instanceof ImageData) {
+    context.putImageData(source, 0, 0);
+  } else {
+    context.drawImage(source, 0, 0);
+  }
+  return canvas;
+}
+
 /** add Template to Maptiler's Source
  * @since 0.85.27
  */
-export function addTemplateCanvas(sortID, tileName, templateSize, blob, usage) {
+export function addTemplateCanvas(sortID, tileName, templateSize, source, usage) {
   // templateSize is for coordinate calculation only
   const tileCoords = tileName.split(',').map(Number);
   const [tileWidth, tileHeight] = templateSize;
@@ -187,28 +234,10 @@ export function addTemplateCanvas(sortID, tileName, templateSize, blob, usage) {
   let prefix = "BM"; // avoid that mangleSelectors
   const sourceID = `${prefix}-${usage}-${tileName}-${sortID}`; // tileName before sortID so startsWith() works
   bmCanvas[usage][sourceID] = [geoCoords1, geoCoords2];
-  const blobUrl = URL.createObjectURL(blob);
+  syncTemplateCanvasSource({ id: sourceID }, source);
 
-  return controlMapTiler(async (map, sourceID, tileName, templateSize, blobUrl, geoCoords1, geoCoords2, usage, bmCanvas) => {
+  return controlMapTiler((map, sourceID, geoCoords1, geoCoords2, usage, bmCanvas) => {
     document.head["__bmCanvas"] = bmCanvas; // sync bmCanvas to document
-    const overlayImg = document.createElement("img");
-    overlayImg.src = blobUrl;
-    await new Promise(resolve => overlayImg.addEventListener("load", () => resolve(overlayImg)));
-    const currentCanvas = document.getElementById(sourceID);
-    if (currentCanvas) {
-      currentCanvas.width = 0;
-      currentCanvas.height = 0;
-      currentCanvas.remove();
-    };
-    const canvas = document.createElement("canvas");
-    canvas.id = sourceID;
-    canvas.style.display = "none";
-    document.body.appendChild(canvas);
-    canvas.width = overlayImg.naturalWidth,
-    canvas.height = overlayImg.naturalHeight;
-    const overlayContext = canvas.getContext("2d");
-    overlayContext.drawImage(overlayImg, 0, 0);
-    URL.revokeObjectURL(blobUrl);
     if (map["getLayer"](sourceID)) {
       map["removeLayer"](sourceID);
     };
@@ -241,7 +270,6 @@ export function addTemplateCanvas(sortID, tileName, templateSize, blob, usage) {
       (usage === "overlay" && layer.startsWith(prefix + "-error-")) ||
       layer === hoverLayerName + "-ghost"
     ));
-    console.log("moveLayer", sourceID, nextLayer);
     map["moveLayer"](sourceID, nextLayer);
     // add ghost layer to prevent wplace inserting paint-preview and paint-crosshair right before the hover layer
     if (!map["getLayer"](hoverLayerName + "-ghost")) {
@@ -257,11 +285,10 @@ export function addTemplateCanvas(sortID, tileName, templateSize, blob, usage) {
     } else {
       const layers = map["getLayersOrder"]();
       if (layers && layers.length && layers[layers.length - 1] !== hoverLayerName + "-ghost") {
-        console.log("moveLayer-1", hoverLayerName + "-ghost");
         map["moveLayer"](hoverLayerName + "-ghost"); // move to top
       }
     }
-  }, sourceID, tileName, templateSize, blobUrl, geoCoords1, geoCoords2, usage, bmCanvas);
+  }, sourceID, geoCoords1, geoCoords2, usage, bmCanvas);
 }
 
 /** remove layers from a specified template from Maptiler's Source
