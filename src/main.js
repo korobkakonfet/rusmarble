@@ -7173,7 +7173,6 @@ async function buildOverlayMain() {
       row.style.display = 'flex';
       row.style.alignItems = 'center';
       row.style.gap = '6px';
-      row.classList.toggle('bm-template-inactive', !template.enabled);
 
       let swatch = document.createElement('div');
       swatch.style.width = '14px';
@@ -7401,13 +7400,9 @@ async function buildOverlayMain() {
         Object.entries(stats.template).forEach(([storageKey, content]) => {
           if (templateEnabledState[storageKey] === false) return;
           if (combinedTemplate[storageKey] === undefined) {
-            combinedTemplate[storageKey] = {
-              painted: Number(content?.painted) || 0,
-              required: Number(content?.required) || 0,
-            };
+            combinedTemplate[storageKey] = Object.fromEntries(Object.entries(content));
           } else {
-            combinedTemplate[storageKey].painted += Number(content?.painted) || 0;
-            combinedTemplate[storageKey].required += Number(content?.required) || 0;
+            combinedTemplate[storageKey].painted += content.painted;
           }
         });
       }
@@ -7530,15 +7525,11 @@ async function buildOverlayMain() {
 
         const isHighlighted = normalizeFlag(template.remoteHighlighted) || normalizeFlag(templateStore.remoteHighlighted);
         const filledCount = combinedTemplate[template.storageKey]?.painted ?? 0;
-        const countedRequired = combinedTemplate[template.storageKey]?.required ?? 0;
         const filledLabelText = `${filledCount.toLocaleString()}`;
         const remainingCount = Math.max(0, totalCount - filledCount);
         const remainingLabelText = `${remainingCount.toLocaleString()}`;
         const showRemaining = templateManager.isTemplateListRemainingEnabled();
-        const shouldShowReliableRemaining = showRemaining
-          && template.enabled
-          && totalCount > 0
-          && countedRequired >= totalCount;
+        const shouldShowCount = !showRemaining || template.enabled;
         const renameElement = document.createElement('span');
         renameElement.textContent = templateName;
         renameElement.className = "bm-templatename";
@@ -7623,7 +7614,7 @@ async function buildOverlayMain() {
         row.classList.add('bm-template-position-editing');
       }
       label.appendChild(renameElement);
-      if (!showRemaining || shouldShowReliableRemaining) {
+      if (shouldShowCount) {
         const countSpan = document.createElement('span');
         countSpan.className = 'bm-template-count';
         countSpan.textContent = showRemaining

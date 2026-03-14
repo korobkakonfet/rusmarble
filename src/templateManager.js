@@ -1,6 +1,6 @@
 ﻿import Template from "./Template";
 import { numberToEncoded, cleanUpCanvas, rgbToMeta, sortByOptions, testCanvasSize, getCurrentColor, sleep, createBitmapPreservingPixels } from "./utils";
-import { themeList, addTemplateCanvas, removeLayer, forceRefreshTiles, coordsGeoCoordsToTileCoords, getMapBounds, doAfterMapFound, isMapTilerLoaded } from './utilsMaptiler.js';
+import { themeList, addTemplateCanvas, removeLayer, removeTemplateCanvasSources, forceRefreshTiles, coordsGeoCoordsToTileCoords, getMapBounds, doAfterMapFound, isMapTilerLoaded, bmCanvas } from './utilsMaptiler.js';
 import { buildMaskRowSpans, collectTemplateProgressFromSamples, mergeTemplateExampleReservoir, renderSampleDataToImage } from './templateChunkUtils.js';
 
 const DEFAULT_TEMPLATE_SYNC_STREAM = 'root';
@@ -687,8 +687,8 @@ export default class TemplateManager {
   async createOverlayOnMapVisibleOnly(sortID = null) {
     const visiblePrefixes = this.getVisibleTilePrefixes();
     if (visiblePrefixes && visiblePrefixes.size) {
-      removeLayer("overlay", sortID);
-      return this.createOverlayOnMap(sortID, { tilePrefixes: visiblePrefixes, immediate: true });
+      this.pruneOverlayToVisiblePrefixes(sortID, visiblePrefixes);
+      return this.createOverlayOnMap(sortID, { tilePrefixes: visiblePrefixes, immediate: true, skipExisting: true });
     }
     if (!isMapTilerLoaded()) {
       doAfterMapFound(() => {
@@ -706,6 +706,7 @@ export default class TemplateManager {
    */
   async _createOverlayOnMapInternal(sortID = null, options = null) {
     const tilePrefixSet = options?.tilePrefixes ?? null;
+    const skipExisting = options?.skipExisting === true;
 
     const currentMemorySavingMode = this.isMemorySavingModeOn(); // To make sure that we do not free the object if it is stored due to race conditions.
     const templates = (this.templatesArray ?? []).filter(t => t.enabled && (sortID === null || t.sortID == sortID));
@@ -732,6 +733,10 @@ export default class TemplateManager {
         continue;
       }
       for (const tileKey of tileKeys) {
+        const sourceID = `BM-overlay-${tileKey}-${template.sortID}`;
+        if (skipExisting && bmCanvas.overlay?.[sourceID] !== undefined) {
+          continue;
+        }
         const drawMultTemplate = template.shreadSize;
         const drawMultCenterTemplate = (template.shreadSize - 1) >> 1;
         const nativeSampleData = template.hasNativeChunkSamples(tileKey)
@@ -1262,6 +1267,31 @@ export default class TemplateManager {
     template._tileKeysByPrefix = map;
     template._tileKeysByPrefixVersion = version;
     return map;
+  }
+
+  pruneOverlayToVisiblePrefixes(sortID, visiblePrefixes) {
+    if (!(visiblePrefixes instanceof Set) || visiblePrefixes.size === 0) {
+      return;
+    }
+
+    const overlaySources = Object.keys(bmCanvas.overlay ?? {});
+    if (!overlaySources.length) {
+      return;
+    }
+
+    const toRemove = overlaySources.filter((sourceID) => {
+      if (!sourceID.startsWith('BM-overlay-')) return false;
+      if (sortID !== null && !sourceID.endsWith(`-${sortID}`)) return false;
+      const suffixIndex = sourceID.lastIndexOf('-');
+      if (suffixIndex < 'BM-overlay-'.length) return false;
+      const tileKey = sourceID.slice('BM-overlay-'.length, suffixIndex);
+      const prefix = tileKey.split(',').slice(0, 2).join(',');
+      return !visiblePrefixes.has(prefix);
+    });
+
+    if (toRemove.length) {
+      removeTemplateCanvasSources(toRemove, 'overlay');
+    }
   }
 
   _getTemplateTileKeys(template, prefixSet) {
