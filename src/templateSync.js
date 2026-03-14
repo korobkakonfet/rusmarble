@@ -82,6 +82,7 @@ export function createTemplateSync({
   autoSyncSyncToggleList,
   autoSyncBuildTemplateFilterList,
   autoSyncBuildColorFilterList,
+  requestProgressRefresh,
 } = {}) {
   const logSync = (message, options = {}) => {
     const { level = 'log', statusHandler = autoSyncOnStatus, err = null } = options;
@@ -744,7 +745,8 @@ export function createTemplateSync({
           remoteHighlighted: payload.highlighted,
           remoteHighlightedAt: payload.highlightedAt,
           remoteOrder: payload.order,
-          enabled: preferredTemplate ? existingEnabled : defaultEnabled
+          enabled: preferredTemplate ? existingEnabled : defaultEnabled,
+          normalizeRemotePalette: true,
         }
       );
       if (created && existingPalette) {
@@ -759,6 +761,7 @@ export function createTemplateSync({
         templateManager.createOverlayOnMap();
         safeCall(buildTemplateFilterListOverride ?? buildTemplateFilterList);
         safeCall(buildColorFilterListOverride ?? autoSyncBuildColorFilterList);
+        safeCall(requestProgressRefresh);
         resetTemplateUpdateBadge();
         checkTemplateUpdates();
       }
@@ -823,6 +826,7 @@ export function createTemplateSync({
         templateManager.getAnchor(),
         {
           enabled: defaultEnabled,
+          normalizeRemotePalette: true,
         }
       );
       if (refreshUi) {
@@ -830,6 +834,7 @@ export function createTemplateSync({
         templateManager.createOverlayOnMap();
         safeCall(buildTemplateFilterListOverride ?? buildTemplateFilterList);
         safeCall(buildColorFilterListOverride ?? autoSyncBuildColorFilterList);
+        safeCall(requestProgressRefresh);
       }
       if (typeof statusHandler === 'function') {
         statusHandler(`Imported "${trimmedName}" from stream "${payload.normalizedStream}" as a local template.`);
@@ -897,6 +902,7 @@ export function createTemplateSync({
       templateManager.createOverlayOnMap();
       safeCall(buildTemplateFilterListOverride ?? buildTemplateFilterList);
       safeCall(buildColorFilterListOverride);
+      safeCall(requestProgressRefresh);
       if (typeof statusHandler === 'function') {
         statusHandler(`Synced ${importedCount} template${importedCount === 1 ? '' : 's'}.`);
       }

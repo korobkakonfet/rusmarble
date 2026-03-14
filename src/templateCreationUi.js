@@ -17,6 +17,7 @@
  */
 export const createTemplateCreationUi = (deps = {}) => {
   const {
+    t: translate = null,
     applyOverlayVarsToFloatingElement,
     normalizeTemplatePaletteConversionOptions,
     templatePaletteConversionDefaults,
@@ -91,6 +92,27 @@ export const createTemplateCreationUi = (deps = {}) => {
   let russianFlagTemplateBuilderSession = null;
   let remoteTemplateBuilderSession = null;
   let textTemplateBuilderSession = null;
+  const interpolateText = (text, params = {}) => String(text).replace(/\{(\w+)\}/g, (_, key) => String(params?.[key] ?? ''));
+  const tt = (key, fallback, params = {}) => {
+    const translated = typeof translate === 'function' ? translate(key, params) : '';
+    if (translated && translated !== key) {
+      return translated;
+    }
+    return interpolateText(fallback, params);
+  };
+  const getFlagStyleLabel = (styleOrKey) => {
+    const key = typeof styleOrKey === 'string' ? styleOrKey : String(styleOrKey?.key || '').trim();
+    if (key === 'tricolor') return tt('dialog.flag.style.tricolor', 'Russian Tricolor');
+    if (key === 'imperial') return tt('dialog.flag.style.imperial', 'Russian Imperial');
+    return typeof styleOrKey === 'object' && styleOrKey?.name
+      ? String(styleOrKey.name)
+      : key;
+  };
+  const getFlagOrientationLabel = (value) => (
+    value === TEMPLATE_FLAG_ORIENTATION_VERTICAL
+      ? tt('dialog.flag.orientation.vertical', 'Vertical')
+      : tt('dialog.flag.orientation.horizontal', 'Horizontal')
+  );
 
   /**
    * Opens a preview dialog that lets the user inspect and tweak palette conversion settings
@@ -169,13 +191,13 @@ export const createTemplateCreationUi = (deps = {}) => {
       panel.style.pointerEvents = 'auto';
       panel.setAttribute('role', 'dialog');
       panel.setAttribute('aria-modal', 'true');
-      panel.setAttribute('aria-label', 'Template color conversion preview');
+      panel.setAttribute('aria-label', tt('dialog.palette.ariaLabel', 'Template color conversion preview'));
       applyOverlayVarsToFloatingElement(panel);
 
       const title = document.createElement('div');
       title.textContent = postCreation
-        ? 'Template still has "other" pixels'
-        : 'Non-palette colors detected';
+        ? tt('dialog.palette.title.postCreation', 'Template still has "other" pixels')
+        : tt('dialog.palette.title.detected', 'Non-palette colors detected');
       title.style.fontWeight = '700';
       title.style.fontSize = '13px';
       panel.appendChild(title);
@@ -186,12 +208,23 @@ export const createTemplateCreationUi = (deps = {}) => {
       text.style.whiteSpace = 'pre-line';
       text.textContent = postCreation
         ? [
-            `The created template has ${pixelText} pixel${safePixelCount === 1 ? '' : 's'} in "other".`,
-            'Preview settings below, then convert and recreate.'
+            tt(
+              'dialog.palette.text.postCreationPixels',
+              'The created template has {count} "other" pixels.',
+              { count: pixelText }
+            ),
+            tt('dialog.palette.text.postCreationHint', 'Preview settings below, then convert and recreate.')
           ].join('\n')
         : [
-            `${pixelText} pixel${safePixelCount === 1 ? '' : 's'} use ${colorText} non-palette color${safeColorCount === 1 ? '' : 's'}.`,
-            'Tune conversion settings and preview the result before applying.'
+            tt(
+              'dialog.palette.text.detectedPixels',
+              '{pixelCount} pixels use {colorCount} non-palette colors.',
+              {
+                pixelCount: pixelText,
+                colorCount: colorText,
+              }
+            ),
+            tt('dialog.palette.text.detectedHint', 'Tune conversion settings and preview the result before applying.')
           ].join('\n');
       panel.appendChild(text);
 
@@ -216,17 +249,17 @@ export const createTemplateCreationUi = (deps = {}) => {
         return { label, titleEl };
       };
 
-      const { label: ditherLabel } = buildControlLabel('Dithering');
+      const { label: ditherLabel } = buildControlLabel(tt('dialog.palette.control.dithering', 'Dithering'));
       const ditherModeSelect = document.createElement('select');
       ditherModeSelect.innerHTML = [
-        '<option value="none">Off</option>',
-        '<option value="floyd-steinberg">Floyd-Steinberg</option>'
+        `<option value="none">${tt('dialog.palette.option.off', 'Off')}</option>`,
+        `<option value="floyd-steinberg">${tt('dialog.palette.option.floydSteinberg', 'Floyd-Steinberg')}</option>`
       ].join('');
       ditherModeSelect.value = defaults.ditherMode;
       ditherLabel.appendChild(ditherModeSelect);
       controls.appendChild(ditherLabel);
 
-      const { label: ditherStrengthLabel, titleEl: ditherStrengthTitle } = buildControlLabel('Dither Strength');
+      const { label: ditherStrengthLabel, titleEl: ditherStrengthTitle } = buildControlLabel(tt('dialog.palette.control.ditherStrength', 'Dither Strength'));
       const ditherStrengthRange = document.createElement('input');
       ditherStrengthRange.type = 'range';
       ditherStrengthRange.min = '0';
@@ -236,17 +269,17 @@ export const createTemplateCreationUi = (deps = {}) => {
       ditherStrengthLabel.appendChild(ditherStrengthRange);
       controls.appendChild(ditherStrengthLabel);
 
-      const { label: distanceLabel } = buildControlLabel('Distance');
+      const { label: distanceLabel } = buildControlLabel(tt('dialog.palette.control.distance', 'Distance'));
       const distanceSelect = document.createElement('select');
       distanceSelect.innerHTML = [
-        '<option value="weighted">Perceptual</option>',
-        '<option value="euclidean">RGB Euclidean</option>'
+        `<option value="weighted">${tt('dialog.palette.option.perceptual', 'Perceptual')}</option>`,
+        `<option value="euclidean">${tt('dialog.palette.option.rgbEuclidean', 'RGB Euclidean')}</option>`
       ].join('');
       distanceSelect.value = defaults.distanceMode;
       distanceLabel.appendChild(distanceSelect);
       controls.appendChild(distanceLabel);
 
-      const { label: alphaLabel, titleEl: alphaTitle } = buildControlLabel('Alpha Threshold');
+      const { label: alphaLabel, titleEl: alphaTitle } = buildControlLabel(tt('dialog.palette.control.alphaThreshold', 'Alpha Threshold'));
       const alphaRange = document.createElement('input');
       alphaRange.type = 'range';
       alphaRange.min = '0';
@@ -256,7 +289,7 @@ export const createTemplateCreationUi = (deps = {}) => {
       alphaLabel.appendChild(alphaRange);
       controls.appendChild(alphaLabel);
 
-      const { label: antiLabel, titleEl: antiTitle } = buildControlLabel('Anti-Dither (Smooth)');
+      const { label: antiLabel, titleEl: antiTitle } = buildControlLabel(tt('dialog.palette.control.antiDither', 'Anti-Dither (Smooth)'));
       const antiRange = document.createElement('input');
       antiRange.type = 'range';
       antiRange.min = '0';
@@ -276,7 +309,7 @@ export const createTemplateCreationUi = (deps = {}) => {
       serpentineCheckbox.type = 'checkbox';
       serpentineCheckbox.checked = defaults.serpentine;
       serpentineWrap.appendChild(serpentineCheckbox);
-      serpentineWrap.appendChild(document.createTextNode('Serpentine Dither Scan'));
+      serpentineWrap.appendChild(document.createTextNode(tt('dialog.palette.control.serpentine', 'Serpentine Dither Scan')));
       controls.appendChild(serpentineWrap);
       panel.appendChild(controls);
 
@@ -318,8 +351,8 @@ export const createTemplateCreationUi = (deps = {}) => {
           return { block, canvas };
         };
 
-        const originalBlock = makePreviewBlock('Original');
-        const convertedBlock = makePreviewBlock('Converted Preview');
+        const originalBlock = makePreviewBlock(tt('dialog.palette.preview.original', 'Original'));
+        const convertedBlock = makePreviewBlock(tt('dialog.palette.preview.converted', 'Converted Preview'));
         previewGrid.appendChild(originalBlock.block);
         previewGrid.appendChild(convertedBlock.block);
         panel.appendChild(previewGrid);
@@ -331,7 +364,7 @@ export const createTemplateCreationUi = (deps = {}) => {
           originalCtx.putImageData(previewImageData, 0, 0);
         }
       } else {
-        previewMeta.textContent = 'Preview unavailable for this image; settings will still apply.';
+        previewMeta.textContent = tt('dialog.palette.preview.unavailableDetails', 'Preview unavailable for this image; settings will still apply.');
       }
 
       const actions = document.createElement('div');
@@ -341,7 +374,9 @@ export const createTemplateCreationUi = (deps = {}) => {
 
       const keepButton = document.createElement('button');
       keepButton.type = 'button';
-      keepButton.textContent = postCreation ? 'Keep Current' : 'Keep Original';
+      keepButton.textContent = postCreation
+        ? tt('dialog.palette.button.keepCurrent', 'Keep Current')
+        : tt('dialog.palette.button.keepOriginal', 'Keep Original');
       keepButton.style.border = '1px solid var(--bm-border-strong, rgba(255, 255, 255, 0.3))';
       keepButton.style.background = 'transparent';
       keepButton.style.color = 'inherit';
@@ -351,7 +386,7 @@ export const createTemplateCreationUi = (deps = {}) => {
 
       const downloadButton = document.createElement('button');
       downloadButton.type = 'button';
-      downloadButton.textContent = 'Download Result';
+      downloadButton.textContent = tt('dialog.palette.button.downloadResult', 'Download Result');
       downloadButton.style.border = '1px solid var(--bm-border-strong, rgba(255, 255, 255, 0.3))';
       downloadButton.style.background = 'var(--bm-subtle-bg, rgba(0, 0, 0, 0.2))';
       downloadButton.style.color = 'inherit';
@@ -361,14 +396,16 @@ export const createTemplateCreationUi = (deps = {}) => {
       if (!sourceFile) {
         downloadButton.disabled = true;
         downloadButton.style.opacity = '0.55';
-        downloadButton.title = 'No source image available to download.';
+        downloadButton.title = tt('dialog.palette.download.unavailable', 'No source image available to download.');
       } else {
-        downloadButton.title = 'Download converted PNG with current settings.';
+        downloadButton.title = tt('dialog.palette.download.title', 'Download converted PNG with current settings.');
       }
 
       const convertButton = document.createElement('button');
       convertButton.type = 'button';
-      convertButton.textContent = postCreation ? 'Convert & Recreate' : 'Apply Conversion';
+      convertButton.textContent = postCreation
+        ? tt('dialog.palette.button.convertRecreate', 'Convert & Recreate')
+        : tt('dialog.palette.button.apply', 'Apply Conversion');
       convertButton.style.border = '1px solid var(--bm-btn-bg, #8b1e2f)';
       convertButton.style.background = 'var(--bm-btn-bg, #8b1e2f)';
       convertButton.style.color = 'var(--bm-btn-text, #fff)';
@@ -400,7 +437,7 @@ export const createTemplateCreationUi = (deps = {}) => {
         if (!sourceFile || downloadInProgress) return;
         downloadInProgress = true;
         const previousText = downloadButton.textContent;
-        downloadButton.textContent = 'Preparing...';
+        downloadButton.textContent = tt('dialog.palette.download.preparing', 'Preparing...');
         downloadButton.disabled = true;
         try {
           const selectedOptions = getSelectedOptions();
@@ -414,10 +451,14 @@ export const createTemplateCreationUi = (deps = {}) => {
           link.remove();
           window.setTimeout(() => URL.revokeObjectURL(url), 60000);
           const convertedPixels = new Intl.NumberFormat().format(Number(conversion?.stats?.convertedPixels) || 0);
-          previewMeta.textContent = `Downloaded converted PNG (${convertedPixels} pixels changed).`;
+          previewMeta.textContent = tt(
+            'dialog.palette.download.success',
+            'Downloaded converted PNG ({count} pixels changed).',
+            { count: convertedPixels }
+          );
         } catch (error) {
           consoleWarn('Failed to prepare converted image download.', error);
-          previewMeta.textContent = 'Failed to prepare converted image download.';
+          previewMeta.textContent = tt('dialog.palette.download.failed', 'Failed to prepare converted image download.');
         } finally {
           downloadInProgress = false;
           downloadButton.textContent = previousText;
@@ -426,9 +467,21 @@ export const createTemplateCreationUi = (deps = {}) => {
       };
 
       const updateControlMeta = () => {
-        ditherStrengthTitle.textContent = `Dither Strength (${ditherStrengthRange.value}%)`;
-        alphaTitle.textContent = `Alpha Threshold (${alphaRange.value})`;
-        antiTitle.textContent = `Anti-Dither (Smooth) (${antiRange.value}%)`;
+        ditherStrengthTitle.textContent = tt(
+          'dialog.palette.control.ditherStrengthValue',
+          'Dither Strength ({value}%)',
+          { value: ditherStrengthRange.value }
+        );
+        alphaTitle.textContent = tt(
+          'dialog.palette.control.alphaThresholdValue',
+          'Alpha Threshold ({value})',
+          { value: alphaRange.value }
+        );
+        antiTitle.textContent = tt(
+          'dialog.palette.control.antiDitherValue',
+          'Anti-Dither (Smooth) ({value}%)',
+          { value: antiRange.value }
+        );
         const ditheringEnabled = ditherModeSelect.value === 'floyd-steinberg';
         ditherStrengthRange.disabled = !ditheringEnabled;
         serpentineCheckbox.disabled = !ditheringEnabled;
@@ -446,7 +499,19 @@ export const createTemplateCreationUi = (deps = {}) => {
         updateControlMeta();
         if (!previewImageData || !convertedCtx) {
           const selected = getSelectedOptions();
-          previewMeta.textContent = `Dithering: ${selected.ditherMode === 'none' ? 'Off' : 'Floyd-Steinberg'} • Anti-dither: ${Math.round(selected.antiDitherStrength * 100)}% • Distance: ${selected.distanceMode}`;
+          previewMeta.textContent = tt(
+            'dialog.palette.preview.summaryNoImage',
+            'Dithering: {dither} • Anti-dither: {anti}% • Distance: {distance}',
+            {
+              dither: selected.ditherMode === 'none'
+                ? tt('dialog.palette.option.off', 'Off')
+                : tt('dialog.palette.option.floydSteinberg', 'Floyd-Steinberg'),
+              anti: Math.round(selected.antiDitherStrength * 100),
+              distance: selected.distanceMode === 'weighted'
+                ? tt('dialog.palette.option.perceptual', 'Perceptual')
+                : tt('dialog.palette.option.rgbEuclidean', 'RGB Euclidean'),
+            }
+          );
           return;
         }
         const token = ++renderToken;
@@ -463,12 +528,17 @@ export const createTemplateCreationUi = (deps = {}) => {
         const stats = conversion.stats || {};
         const convertedText = new Intl.NumberFormat().format(Number(stats.convertedPixels) || 0);
         const otherText = new Intl.NumberFormat().format(Number(stats.remainingOtherPixels) || 0);
-        previewMeta.textContent = [
-          `Preview size ${previewWidth}x${previewHeight}`,
-          `changed: ${convertedText}`,
-          `remaining other: ${otherText}`,
-          `anti-dither: ${Math.round(options.antiDitherStrength * 100)}%`,
-        ].join(' • ');
+        previewMeta.textContent = tt(
+          'dialog.palette.preview.summary',
+          'Preview size {width}x{height} • changed: {changed} • remaining other: {other} • anti-dither: {anti}%',
+          {
+            width: previewWidth,
+            height: previewHeight,
+            changed: convertedText,
+            other: otherText,
+            anti: Math.round(options.antiDitherStrength * 100),
+          }
+        );
       };
 
       const onInput = () => renderPreview();
@@ -574,15 +644,15 @@ export const createTemplateCreationUi = (deps = {}) => {
 
       const head = document.createElement('div');
       head.className = 'bm-text-template-window-head';
-      head.title = 'Drag to move';
+      head.title = tt('dialog.common.dragToMove', 'Drag to move');
       const title = document.createElement('span');
       title.className = 'bm-text-template-window-title';
-      title.textContent = 'Remote Template';
+      title.textContent = tt('dialog.remote.title', 'Remote Template');
       const closeBtn = document.createElement('button');
       closeBtn.type = 'button';
       closeBtn.className = 'bm-text-template-window-close';
       closeBtn.textContent = '✖';
-      closeBtn.title = 'Close';
+      closeBtn.title = tt('dialog.common.close', 'Close');
       head.appendChild(title);
       head.appendChild(closeBtn);
       panel.appendChild(head);
@@ -594,11 +664,11 @@ export const createTemplateCreationUi = (deps = {}) => {
       nameGroup.className = 'bm-text-template-window-control';
       const nameLabel = document.createElement('label');
       nameLabel.className = 'bm-text-template-window-label';
-      nameLabel.textContent = 'Template Name';
+      nameLabel.textContent = tt('dialog.remote.templateName', 'Template Name');
       const nameInput = document.createElement('input');
       nameInput.type = 'text';
       nameInput.className = 'bm-text-template-window-number';
-      nameInput.placeholder = 'Enter remote template name...';
+      nameInput.placeholder = tt('dialog.remote.templateNamePlaceholder', 'Enter remote template name...');
       nameInput.value = initialTemplateName;
       nameGroup.appendChild(nameLabel);
       nameGroup.appendChild(nameInput);
@@ -611,7 +681,7 @@ export const createTemplateCreationUi = (deps = {}) => {
       configuredGroup.className = 'bm-text-template-window-control';
       const configuredLabel = document.createElement('label');
       configuredLabel.className = 'bm-text-template-window-label';
-      configuredLabel.textContent = 'Configured Streams';
+      configuredLabel.textContent = tt('dialog.remote.configuredStreams', 'Configured Streams');
       const configuredMeta = document.createElement('div');
       configuredMeta.className = 'bm-text-template-window-meta';
       configuredMeta.style.border = '1px solid var(--bm-border-strong)';
@@ -630,7 +700,10 @@ export const createTemplateCreationUi = (deps = {}) => {
 
       const info = document.createElement('div');
       info.className = 'bm-text-template-window-meta';
-      info.textContent = 'Imports as a local template. Configured streams are searched in order until the name is found.';
+      info.textContent = tt(
+        'dialog.remote.info',
+        'Imports as a local template. Configured streams are searched in order until the name is found.'
+      );
       body.appendChild(info);
 
       const errorOutput = document.createElement('div');
@@ -641,10 +714,10 @@ export const createTemplateCreationUi = (deps = {}) => {
       actions.className = 'bm-text-template-window-actions';
       const cancelBtn = document.createElement('button');
       cancelBtn.type = 'button';
-      cancelBtn.textContent = 'Cancel';
+      cancelBtn.textContent = tt('dialog.common.cancel', 'Cancel');
       const importBtn = document.createElement('button');
       importBtn.type = 'button';
-      importBtn.textContent = 'Import';
+      importBtn.textContent = tt('dialog.remote.import', 'Import');
       actions.appendChild(cancelBtn);
       actions.appendChild(importBtn);
       body.appendChild(actions);
@@ -693,7 +766,7 @@ export const createTemplateCreationUi = (deps = {}) => {
       const submit = () => {
         const templateName = String(nameInput.value || '').trim();
         if (!templateName) {
-          errorOutput.textContent = 'Template name is required.';
+          errorOutput.textContent = tt('dialog.remote.templateNameRequired', 'Template name is required.');
           syncImportState();
           return;
         }
@@ -822,15 +895,15 @@ export const createTemplateCreationUi = (deps = {}) => {
 
       const head = document.createElement('div');
       head.className = 'bm-text-template-window-head';
-      head.title = 'Drag to move';
+      head.title = tt('dialog.common.dragToMove', 'Drag to move');
       const title = document.createElement('span');
       title.className = 'bm-text-template-window-title';
-      title.textContent = 'Russian Flag Template';
+      title.textContent = tt('dialog.flag.title', 'Russian Flag Template');
       const closeBtn = document.createElement('button');
       closeBtn.type = 'button';
       closeBtn.className = 'bm-text-template-window-close';
       closeBtn.textContent = '✖';
-      closeBtn.title = 'Close';
+      closeBtn.title = tt('dialog.common.close', 'Close');
       head.appendChild(title);
       head.appendChild(closeBtn);
       panel.appendChild(head);
@@ -845,13 +918,13 @@ export const createTemplateCreationUi = (deps = {}) => {
       styleGroup.className = 'bm-text-template-window-control';
       const styleLabel = document.createElement('label');
       styleLabel.className = 'bm-text-template-window-label';
-      styleLabel.textContent = 'Flag Type';
+      styleLabel.textContent = tt('dialog.flag.type', 'Flag Type');
       const styleSelect = document.createElement('select');
       styleSelect.className = 'bm-text-template-window-select';
       templateRussianFlagStyles.forEach((entry) => {
         const option = document.createElement('option');
         option.value = entry.key;
-        option.textContent = entry.name;
+        option.textContent = getFlagStyleLabel(entry);
         styleSelect.appendChild(option);
       });
       styleSelect.value = initialStyleKey;
@@ -863,12 +936,12 @@ export const createTemplateCreationUi = (deps = {}) => {
       orientationGroup.className = 'bm-text-template-window-control';
       const orientationLabel = document.createElement('label');
       orientationLabel.className = 'bm-text-template-window-label';
-      orientationLabel.textContent = 'Stripes';
+      orientationLabel.textContent = tt('dialog.flag.stripes', 'Stripes');
       const orientationSelect = document.createElement('select');
       orientationSelect.className = 'bm-text-template-window-select';
       [
-        [TEMPLATE_FLAG_ORIENTATION_HORIZONTAL, 'Horizontal'],
-        [TEMPLATE_FLAG_ORIENTATION_VERTICAL, 'Vertical'],
+        [TEMPLATE_FLAG_ORIENTATION_HORIZONTAL, getFlagOrientationLabel(TEMPLATE_FLAG_ORIENTATION_HORIZONTAL)],
+        [TEMPLATE_FLAG_ORIENTATION_VERTICAL, getFlagOrientationLabel(TEMPLATE_FLAG_ORIENTATION_VERTICAL)],
       ].forEach(([value, label]) => {
         const option = document.createElement('option');
         option.value = value;
@@ -884,7 +957,7 @@ export const createTemplateCreationUi = (deps = {}) => {
       verticalOrderGroup.className = 'bm-text-template-window-control';
       const verticalOrderLabel = document.createElement('label');
       verticalOrderLabel.className = 'bm-text-template-window-label';
-      verticalOrderLabel.textContent = 'Vertical Rotate';
+      verticalOrderLabel.textContent = tt('dialog.flag.verticalRotate', 'Vertical Rotate');
       const verticalOrderSelect = document.createElement('select');
       verticalOrderSelect.className = 'bm-text-template-window-select';
       const verticalOrderOptionFirstLeft = document.createElement('option');
@@ -902,7 +975,11 @@ export const createTemplateCreationUi = (deps = {}) => {
       sizeGroup.className = 'bm-text-template-window-control';
       const sizeLabel = document.createElement('label');
       sizeLabel.className = 'bm-text-template-window-label';
-      sizeLabel.textContent = `Size (px, ${TEMPLATE_FLAG_DIMENSION_MIN}-${TEMPLATE_FLAG_DIMENSION_MAX})`;
+      sizeLabel.textContent = tt(
+        'dialog.flag.size',
+        'Size (px, {min}-{max})',
+        { min: TEMPLATE_FLAG_DIMENSION_MIN, max: TEMPLATE_FLAG_DIMENSION_MAX }
+      );
       const sizeRow = document.createElement('div');
       sizeRow.className = 'bm-text-template-window-pair';
       const widthInput = document.createElement('input');
@@ -912,7 +989,7 @@ export const createTemplateCreationUi = (deps = {}) => {
       widthInput.max = String(TEMPLATE_FLAG_DIMENSION_MAX);
       widthInput.step = '1';
       widthInput.value = String(initialWidth);
-      widthInput.placeholder = 'Width';
+      widthInput.placeholder = tt('dialog.flag.width', 'Width');
       const heightInput = document.createElement('input');
       heightInput.className = 'bm-text-template-window-number';
       heightInput.type = 'number';
@@ -920,7 +997,7 @@ export const createTemplateCreationUi = (deps = {}) => {
       heightInput.max = String(TEMPLATE_FLAG_DIMENSION_MAX);
       heightInput.step = '1';
       heightInput.value = String(initialHeight);
-      heightInput.placeholder = 'Height';
+      heightInput.placeholder = tt('dialog.flag.height', 'Height');
       sizeRow.appendChild(widthInput);
       sizeRow.appendChild(heightInput);
       sizeGroup.appendChild(sizeLabel);
@@ -932,7 +1009,7 @@ export const createTemplateCreationUi = (deps = {}) => {
       stripeColorGroup.style.gridColumn = '1 / -1';
       const stripeColorLabel = document.createElement('label');
       stripeColorLabel.className = 'bm-text-template-window-label';
-      stripeColorLabel.textContent = 'Stripe Colors';
+      stripeColorLabel.textContent = tt('dialog.flag.stripeColors', 'Stripe Colors');
       const stripeColorRow = document.createElement('div');
       stripeColorRow.style.display = 'grid';
       stripeColorRow.style.gridTemplateColumns = 'repeat(3, minmax(0, 1fr))';
@@ -964,7 +1041,7 @@ export const createTemplateCreationUi = (deps = {}) => {
       pointsGroup.style.gridColumn = '1 / -1';
       const pointsLabel = document.createElement('label');
       pointsLabel.className = 'bm-text-template-window-label';
-      pointsLabel.textContent = 'Start / End Points (Tl X, Tl Y, Px X, Px Y)';
+      pointsLabel.textContent = tt('dialog.flag.points', 'Start / End Points (Tl X, Tl Y, Px X, Px Y)');
       pointsGroup.appendChild(pointsLabel);
 
       const buildPointRow = (labelText, point) => {
@@ -981,25 +1058,25 @@ export const createTemplateCreationUi = (deps = {}) => {
         txInput.className = 'bm-text-template-window-number';
         txInput.type = 'number';
         txInput.step = '1';
-        txInput.placeholder = 'Tl X';
+        txInput.placeholder = tt('dialog.flag.coords.tx', 'Tl X');
         txInput.value = String(point.tx);
         const tyInput = document.createElement('input');
         tyInput.className = 'bm-text-template-window-number';
         tyInput.type = 'number';
         tyInput.step = '1';
-        tyInput.placeholder = 'Tl Y';
+        tyInput.placeholder = tt('dialog.flag.coords.ty', 'Tl Y');
         tyInput.value = String(point.ty);
         const pxInput = document.createElement('input');
         pxInput.className = 'bm-text-template-window-number';
         pxInput.type = 'number';
         pxInput.step = '1';
-        pxInput.placeholder = 'Px X';
+        pxInput.placeholder = tt('dialog.flag.coords.px', 'Px X');
         pxInput.value = String(point.px);
         const pyInput = document.createElement('input');
         pyInput.className = 'bm-text-template-window-number';
         pyInput.type = 'number';
         pyInput.step = '1';
-        pyInput.placeholder = 'Px Y';
+        pyInput.placeholder = tt('dialog.flag.coords.py', 'Px Y');
         pyInput.value = String(point.py);
         row.appendChild(label);
         row.appendChild(txInput);
@@ -1009,8 +1086,8 @@ export const createTemplateCreationUi = (deps = {}) => {
         return { row, txInput, tyInput, pxInput, pyInput };
       };
 
-      const startRowInputs = buildPointRow('Start', initialStartCoords);
-      const endRowInputs = buildPointRow('End', initialEndCoords);
+      const startRowInputs = buildPointRow(tt('dialog.flag.start', 'Start'), initialStartCoords);
+      const endRowInputs = buildPointRow(tt('dialog.flag.end', 'End'), initialEndCoords);
       pointsGroup.appendChild(startRowInputs.row);
       pointsGroup.appendChild(endRowInputs.row);
       controls.appendChild(pointsGroup);
@@ -1019,7 +1096,7 @@ export const createTemplateCreationUi = (deps = {}) => {
       ignoreGroup.className = 'bm-text-template-window-control';
       const ignoreLabel = document.createElement('label');
       ignoreLabel.className = 'bm-text-template-window-label';
-      ignoreLabel.textContent = 'Ignore existing arts';
+      ignoreLabel.textContent = tt('dialog.flag.ignoreArts', 'Ignore existing arts');
       const ignoreToggle = document.createElement('input');
       ignoreToggle.type = 'checkbox';
       ignoreToggle.checked = initialIgnoreArts;
@@ -1033,7 +1110,7 @@ export const createTemplateCreationUi = (deps = {}) => {
       protectedGroup.className = 'bm-text-template-window-control';
       const protectedLabel = document.createElement('label');
       protectedLabel.className = 'bm-text-template-window-label';
-      protectedLabel.textContent = 'Colors Not Ignored';
+      protectedLabel.textContent = tt('dialog.flag.protectedColors', 'Colors Not Ignored');
       const protectedTools = document.createElement('div');
       protectedTools.style.display = 'grid';
       protectedTools.style.gridTemplateColumns = '1fr auto auto';
@@ -1048,10 +1125,10 @@ export const createTemplateCreationUi = (deps = {}) => {
       });
       const addProtectedColorButton = document.createElement('button');
       addProtectedColorButton.type = 'button';
-      addProtectedColorButton.textContent = 'Add';
+      addProtectedColorButton.textContent = tt('dialog.flag.add', 'Add');
       const resetProtectedColorButton = document.createElement('button');
       resetProtectedColorButton.type = 'button';
-      resetProtectedColorButton.textContent = 'Default';
+      resetProtectedColorButton.textContent = tt('dialog.flag.default', 'Default');
       protectedTools.appendChild(protectedColorSelect);
       protectedTools.appendChild(addProtectedColorButton);
       protectedTools.appendChild(resetProtectedColorButton);
@@ -1091,10 +1168,10 @@ export const createTemplateCreationUi = (deps = {}) => {
       actions.className = 'bm-text-template-window-actions';
       const cancelBtn = document.createElement('button');
       cancelBtn.type = 'button';
-      cancelBtn.textContent = 'Cancel';
+      cancelBtn.textContent = tt('dialog.common.cancel', 'Cancel');
       const createBtn = document.createElement('button');
       createBtn.type = 'button';
-      createBtn.textContent = 'Create Template';
+      createBtn.textContent = tt('dialog.common.createTemplate', 'Create Template');
       actions.appendChild(cancelBtn);
       actions.appendChild(createBtn);
       body.appendChild(actions);
@@ -1203,7 +1280,7 @@ export const createTemplateCreationUi = (deps = {}) => {
       };
       const getFirstStripeColorName = () => {
         const keys = readStripeColorKeysFromInputs();
-        return resolveTemplatePaletteNameByKey(keys[0]) || 'First color';
+        return resolveTemplatePaletteNameByKey(keys[0]) || tt('dialog.flag.firstColor', 'First color');
       };
       const updateStripeColorSlotLabels = () => {
         const orientation = getStripeOrientation();
@@ -1211,18 +1288,30 @@ export const createTemplateCreationUi = (deps = {}) => {
         const labels = orientation === TEMPLATE_FLAG_ORIENTATION_VERTICAL
           ? (
             verticalOrder === TEMPLATE_FLAG_VERTICAL_ORDER_FIRST_RIGHT
-              ? ['Right stripe', 'Middle stripe', 'Left stripe']
-              : ['Left stripe', 'Middle stripe', 'Right stripe']
+              ? [
+                  tt('dialog.flag.rightStripe', 'Right stripe'),
+                  tt('dialog.flag.middleStripe', 'Middle stripe'),
+                  tt('dialog.flag.leftStripe', 'Left stripe'),
+                ]
+              : [
+                  tt('dialog.flag.leftStripe', 'Left stripe'),
+                  tt('dialog.flag.middleStripe', 'Middle stripe'),
+                  tt('dialog.flag.rightStripe', 'Right stripe'),
+                ]
           )
-          : ['Top stripe', 'Middle stripe', 'Bottom stripe'];
+          : [
+              tt('dialog.flag.topStripe', 'Top stripe'),
+              tt('dialog.flag.middleStripe', 'Middle stripe'),
+              tt('dialog.flag.bottomStripe', 'Bottom stripe'),
+            ];
         stripeColorInputs.forEach((entry, index) => {
-          entry.label.textContent = labels[index] || `Stripe ${index + 1}`;
+          entry.label.textContent = labels[index] || tt('dialog.flag.stripeNumber', 'Stripe {index}', { index: index + 1 });
         });
       };
       const updateVerticalOrderLabels = () => {
         const firstColorName = getFirstStripeColorName();
-        verticalOrderOptionFirstLeft.textContent = `${firstColorName} left`;
-        verticalOrderOptionFirstRight.textContent = `${firstColorName} right`;
+        verticalOrderOptionFirstLeft.textContent = tt('dialog.flag.verticalOrder.left', '{color} left', { color: firstColorName });
+        verticalOrderOptionFirstRight.textContent = tt('dialog.flag.verticalOrder.right', '{color} right', { color: firstColorName });
       };
       const updateStripeControls = () => {
         readStripeColorKeysFromInputs();
@@ -1232,8 +1321,21 @@ export const createTemplateCreationUi = (deps = {}) => {
       const getProtectedColorKeys = () => [...protectedColorKeys].filter((key) => templateTextPaletteMap.has(key));
       const getMaskCoordsText = (rect = null) => {
         const targetRect = rect || getCurrentRect();
-        if (!targetRect?.topLeft || !targetRect?.bottomRight) return 'Coords unavailable';
-        return `Tl ${targetRect.topLeft.tx}, ${targetRect.topLeft.ty} • Px ${targetRect.topLeft.px}, ${targetRect.topLeft.py} → Tl ${targetRect.bottomRight.tx}, ${targetRect.bottomRight.ty} • Px ${targetRect.bottomRight.px}, ${targetRect.bottomRight.py}`;
+        if (!targetRect?.topLeft || !targetRect?.bottomRight) return tt('dialog.flag.coordsUnavailable', 'Coords unavailable');
+        return tt(
+          'dialog.flag.coordsSummary',
+          'Tl {startTx}, {startTy} • Px {startPx}, {startPy} -> Tl {endTx}, {endTy} • Px {endPx}, {endPy}',
+          {
+            startTx: targetRect.topLeft.tx,
+            startTy: targetRect.topLeft.ty,
+            startPx: targetRect.topLeft.px,
+            startPy: targetRect.topLeft.py,
+            endTx: targetRect.bottomRight.tx,
+            endTy: targetRect.bottomRight.ty,
+            endPx: targetRect.bottomRight.px,
+            endPy: targetRect.bottomRight.py,
+          }
+        );
       };
       const updateActionState = () => {
         const rect = getCurrentRect();
@@ -1266,7 +1368,7 @@ export const createTemplateCreationUi = (deps = {}) => {
         }
         return { width, height, context };
       };
-      const drawPreviewPlaceholder = (message = 'Preview') => {
+      const drawPreviewPlaceholder = (message = tt('dialog.common.preview', 'Preview')) => {
         const { width, height, context } = resizePreviewCanvas();
         if (!context) return;
         context.clearRect(0, 0, width, height);
@@ -1312,7 +1414,7 @@ export const createTemplateCreationUi = (deps = {}) => {
         if (!sortedKeys.length) {
           const empty = document.createElement('small');
           empty.style.opacity = '0.85';
-          empty.textContent = 'No protected colors selected.';
+          empty.textContent = tt('dialog.flag.noProtectedColors', 'No protected colors selected.');
           protectedList.appendChild(empty);
         } else {
           sortedKeys.forEach((key) => {
@@ -1320,7 +1422,7 @@ export const createTemplateCreationUi = (deps = {}) => {
             if (!option) return;
             const item = document.createElement('button');
             item.type = 'button';
-            item.title = 'Remove from protected colors';
+            item.title = tt('dialog.flag.removeProtectedColor', 'Remove from protected colors');
             item.style.display = 'inline-flex';
             item.style.alignItems = 'center';
             item.style.gap = '5px';
@@ -1368,15 +1470,23 @@ export const createTemplateCreationUi = (deps = {}) => {
         try {
           const rect = getCurrentRect();
           if (!rect?.topLeft) {
-            throw new Error('Start/end points are invalid.');
+            throw new Error(tt('dialog.flag.invalidPoints', 'Start/end points are invalid.'));
           }
           const width = Math.max(1, Math.trunc(rect.width));
           const height = Math.max(1, Math.trunc(rect.height));
           if (width > TEMPLATE_FLAG_DIMENSION_MAX || height > TEMPLATE_FLAG_DIMENSION_MAX) {
-            throw new Error(`Size from points is too large (${width}x${height}). Limit: ${TEMPLATE_FLAG_DIMENSION_MAX}px per side.`);
+            throw new Error(tt(
+              'dialog.flag.sizeTooLarge',
+              'Size from points is too large ({width}x{height}). Limit: {limit}px per side.',
+              { width, height, limit: TEMPLATE_FLAG_DIMENSION_MAX }
+            ));
           }
           if (!testCanvasSize(width, height)) {
-            throw new Error(`Canvas limit exceeded for ${width}x${height}.`);
+            throw new Error(tt(
+              'dialog.flag.canvasLimit',
+              'Canvas limit exceeded for {width}x{height}.',
+              { width, height }
+            ));
           }
           let mapRegion = null;
           if (ignoreToggle.checked) {
@@ -1415,14 +1525,51 @@ export const createTemplateCreationUi = (deps = {}) => {
             .slice(0, TEMPLATE_FLAG_IGNORE_BACKGROUND_COLOR_COUNT)
             .map(([key]) => resolveTemplatePaletteNameByKey(normalizeTemplatePaletteKey(key)))
             .filter(Boolean);
-          const orientationLabel = result.orientation === TEMPLATE_FLAG_ORIENTATION_VERTICAL ? 'Vertical' : 'Horizontal';
-          const firstStripeName = resolveTemplatePaletteNameByKey(result.stripeColorKeys?.[0]) || 'First color';
+          const orientationLabel = getFlagOrientationLabel(result.orientation);
+          const firstStripeName = resolveTemplatePaletteNameByKey(result.stripeColorKeys?.[0]) || tt('dialog.flag.firstColor', 'First color');
           const verticalOrderLabel = result.orientation === TEMPLATE_FLAG_ORIENTATION_VERTICAL
-            ? ` (${firstStripeName} ${result.verticalOrder === TEMPLATE_FLAG_VERTICAL_ORDER_FIRST_RIGHT ? 'right' : 'left'})`
+            ? tt(
+                'dialog.flag.verticalOrderSuffix',
+                ' ({color} {side})',
+                {
+                  color: firstStripeName,
+                  side: result.verticalOrder === TEMPLATE_FLAG_VERTICAL_ORDER_FIRST_RIGHT
+                    ? tt('dialog.flag.side.right', 'right')
+                    : tt('dialog.flag.side.left', 'left'),
+                }
+              )
             : '';
+          const styleLabel = getFlagStyleLabel(style);
           previewMeta.textContent = ignoreToggle.checked
-            ? `${style.name} • ${orientationLabel}${verticalOrderLabel} • ${width}x${height}px • ignored ${result.ignoredPixelCount.toLocaleString()} px (${ignoredRatio}) • ${getMaskCoordsText(rect)}${backgroundNames.length ? ` • background: ${backgroundNames.join(', ')}` : ''}`
-            : `${style.name} • ${orientationLabel}${verticalOrderLabel} • ${width}x${height}px • ${getMaskCoordsText(rect)}`;
+            ? tt(
+                'dialog.flag.preview.summaryIgnored',
+                '{style} • {orientation}{verticalOrder} • {width}x{height}px • ignored {ignored} px ({ratio}) • {coords}{background}',
+                {
+                  style: styleLabel,
+                  orientation: orientationLabel,
+                  verticalOrder: verticalOrderLabel,
+                  width,
+                  height,
+                  ignored: result.ignoredPixelCount.toLocaleString(),
+                  ratio: ignoredRatio,
+                  coords: getMaskCoordsText(rect),
+                  background: backgroundNames.length
+                    ? tt('dialog.flag.backgroundSuffix', ' • background: {colors}', { colors: backgroundNames.join(', ') })
+                    : '',
+                }
+              )
+            : tt(
+                'dialog.flag.preview.summary',
+                '{style} • {orientation}{verticalOrder} • {width}x{height}px • {coords}',
+                {
+                  style: styleLabel,
+                  orientation: orientationLabel,
+                  verticalOrder: verticalOrderLabel,
+                  width,
+                  height,
+                  coords: getMaskCoordsText(rect),
+                }
+              );
           lastRenderResult = {
             ...result,
             rect,
@@ -1436,10 +1583,18 @@ export const createTemplateCreationUi = (deps = {}) => {
         } catch (error) {
           if (!closed && token === previewRenderToken) {
             lastRenderResult = null;
-            errorOutput.textContent = error?.message || 'Failed to render flag preview.';
-            drawPreviewPlaceholder('Preview unavailable');
+            errorOutput.textContent = error?.message || tt('dialog.flag.preview.failed', 'Failed to render flag preview.');
+            drawPreviewPlaceholder(tt('dialog.common.previewUnavailable', 'Preview unavailable'));
             const { width, height } = readDimensions();
-            previewMeta.textContent = `${style.name} • ${width}x${height}px`;
+            previewMeta.textContent = tt(
+              'dialog.flag.preview.fallback',
+              '{style} • {width}x{height}px',
+              {
+                style: getFlagStyleLabel(style),
+                width,
+                height,
+              }
+            );
           }
           return null;
         } finally {
@@ -1600,14 +1755,14 @@ export const createTemplateCreationUi = (deps = {}) => {
         try {
           const rendered = await renderPreview();
           if (!rendered) {
-            throw new Error('Could not prepare flag template image.');
+            throw new Error(tt('dialog.flag.create.prepareFailed', 'Could not prepare flag template image.'));
           }
           let exportCanvas = new OffscreenCanvas(rendered.width, rendered.height);
           const exportContext = exportCanvas.getContext('2d');
           if (!exportContext) {
             cleanUpCanvas(exportCanvas);
             exportCanvas = null;
-            throw new Error('Could not initialize export canvas.');
+            throw new Error(tt('dialog.flag.create.exportCanvasFailed', 'Could not initialize export canvas.'));
           }
           exportContext.putImageData(rendered.imageData, 0, 0);
           const blob = await exportCanvas.convertToBlob({ type: 'image/png' });
@@ -1642,7 +1797,7 @@ export const createTemplateCreationUi = (deps = {}) => {
               : null,
           });
         } catch (error) {
-          errorOutput.textContent = error?.message || 'Failed to create flag template.';
+          errorOutput.textContent = error?.message || tt('dialog.flag.create.failed', 'Failed to create flag template.');
         } finally {
           if (!closed) {
             createBusy = false;
@@ -1694,7 +1849,7 @@ export const createTemplateCreationUi = (deps = {}) => {
       renderProtectedList();
       syncRectFromPoints({ canonicalize: true });
       updateActionState();
-      drawPreviewPlaceholder('Loading preview...');
+      drawPreviewPlaceholder(tt('dialog.common.loadingPreview', 'Loading preview...'));
       queuePreviewRender();
     });
   };
@@ -1760,15 +1915,15 @@ export const createTemplateCreationUi = (deps = {}) => {
 
       const head = document.createElement('div');
       head.className = 'bm-text-template-window-head';
-      head.title = 'Drag to move';
+      head.title = tt('dialog.common.dragToMove', 'Drag to move');
       const title = document.createElement('span');
       title.className = 'bm-text-template-window-title';
-      title.textContent = 'Text Template';
+      title.textContent = tt('dialog.text.title', 'Text Template');
       const closeBtn = document.createElement('button');
       closeBtn.type = 'button';
       closeBtn.className = 'bm-text-template-window-close';
       closeBtn.textContent = '✖';
-      closeBtn.title = 'Close';
+      closeBtn.title = tt('dialog.common.close', 'Close');
       head.appendChild(title);
       head.appendChild(closeBtn);
       panel.appendChild(head);
@@ -1778,13 +1933,13 @@ export const createTemplateCreationUi = (deps = {}) => {
 
       const textLabel = document.createElement('label');
       textLabel.className = 'bm-text-template-window-label';
-      textLabel.textContent = `Text (max ${TEMPLATE_TEXT_MAX_CHARS})`;
+      textLabel.textContent = tt('dialog.text.label', 'Text (max {max})', { max: TEMPLATE_TEXT_MAX_CHARS });
       body.appendChild(textLabel);
 
       const textInput = document.createElement('textarea');
       textInput.className = 'bm-text-template-window-input';
       textInput.maxLength = TEMPLATE_TEXT_MAX_CHARS;
-      textInput.placeholder = 'Enter template text...';
+      textInput.placeholder = tt('dialog.text.placeholder', 'Enter template text...');
       textInput.value = initialText;
       body.appendChild(textInput);
 
@@ -1795,7 +1950,7 @@ export const createTemplateCreationUi = (deps = {}) => {
       colorGroup.className = 'bm-text-template-window-control';
       const colorLabel = document.createElement('label');
       colorLabel.className = 'bm-text-template-window-label';
-      colorLabel.textContent = 'Color';
+      colorLabel.textContent = tt('dialog.text.color', 'Color');
       const colorSelect = document.createElement('select');
       colorSelect.className = 'bm-text-template-window-select';
       templateTextPaletteOptions.forEach((option) => {
@@ -1819,7 +1974,7 @@ export const createTemplateCreationUi = (deps = {}) => {
       fontFamilyGroup.className = 'bm-text-template-window-control';
       const fontFamilyLabel = document.createElement('label');
       fontFamilyLabel.className = 'bm-text-template-window-label';
-      fontFamilyLabel.textContent = 'Font';
+      fontFamilyLabel.textContent = tt('dialog.text.font', 'Font');
       const fontFamilySelect = document.createElement('select');
       fontFamilySelect.className = 'bm-text-template-window-select';
       templateTextFontOptions.forEach((option) => {
@@ -1840,7 +1995,7 @@ export const createTemplateCreationUi = (deps = {}) => {
       fontGroup.className = 'bm-text-template-window-control';
       const fontLabel = document.createElement('label');
       fontLabel.className = 'bm-text-template-window-label';
-      fontLabel.textContent = 'Font Size';
+      fontLabel.textContent = tt('dialog.text.fontSize', 'Font Size');
       const fontSizeNumber = document.createElement('input');
       fontSizeNumber.className = 'bm-text-template-window-number';
       fontSizeNumber.type = 'number';
@@ -1864,7 +2019,7 @@ export const createTemplateCreationUi = (deps = {}) => {
       positionGroup.className = 'bm-text-template-window-control';
       const positionLabel = document.createElement('label');
       positionLabel.className = 'bm-text-template-window-label';
-      positionLabel.textContent = 'Position (Px)';
+      positionLabel.textContent = tt('dialog.text.position', 'Position (Px)');
       const positionRow = document.createElement('div');
       positionRow.className = 'bm-text-template-window-pair';
       const positionXInput = document.createElement('input');
@@ -1873,18 +2028,18 @@ export const createTemplateCreationUi = (deps = {}) => {
       positionXInput.min = '0';
       positionXInput.max = String(TEMPLATE_TILE_SIZE - 1);
       positionXInput.step = '1';
-      positionXInput.placeholder = 'Px X';
+      positionXInput.placeholder = tt('dialog.text.positionXPlaceholder', 'Px X');
       positionXInput.value = String(previewPixelX);
-      positionXInput.title = 'Pixel X in tile';
+      positionXInput.title = tt('dialog.text.positionXTitle', 'Pixel X in tile');
       const positionYInput = document.createElement('input');
       positionYInput.className = 'bm-text-template-window-number';
       positionYInput.type = 'number';
       positionYInput.min = '0';
       positionYInput.max = String(TEMPLATE_TILE_SIZE - 1);
       positionYInput.step = '1';
-      positionYInput.placeholder = 'Px Y';
+      positionYInput.placeholder = tt('dialog.text.positionYPlaceholder', 'Px Y');
       positionYInput.value = String(previewPixelY);
-      positionYInput.title = 'Pixel Y in tile';
+      positionYInput.title = tt('dialog.text.positionYTitle', 'Pixel Y in tile');
       positionRow.appendChild(positionXInput);
       positionRow.appendChild(positionYInput);
       positionGroup.appendChild(positionLabel);
@@ -1895,7 +2050,7 @@ export const createTemplateCreationUi = (deps = {}) => {
 
       const previewMeta = document.createElement('div');
       previewMeta.className = 'bm-text-template-window-meta';
-      previewMeta.textContent = 'Enter text to preview.';
+      previewMeta.textContent = tt('dialog.text.enterPreview', 'Enter text to preview.');
       body.appendChild(previewMeta);
 
       const previewWrap = document.createElement('div');
@@ -1913,10 +2068,10 @@ export const createTemplateCreationUi = (deps = {}) => {
       actions.className = 'bm-text-template-window-actions';
       const cancelBtn = document.createElement('button');
       cancelBtn.type = 'button';
-      cancelBtn.textContent = 'Cancel';
+      cancelBtn.textContent = tt('dialog.common.cancel', 'Cancel');
       const createBtn = document.createElement('button');
       createBtn.type = 'button';
-      createBtn.textContent = 'Create Template';
+      createBtn.textContent = tt('dialog.common.createTemplate', 'Create Template');
       createBtn.disabled = true;
       actions.appendChild(cancelBtn);
       actions.appendChild(createBtn);
@@ -1990,7 +2145,17 @@ export const createTemplateCreationUi = (deps = {}) => {
       const getPreviewSummary = () => {
         const { x, y } = getPreviewPosition();
         const zoom = getPreviewZoom();
-        return `Tile ${previewTileX}, ${previewTileY} • Px ${x}, ${y} • Zoom ${zoom.toFixed(1)}x`;
+        return tt(
+          'dialog.text.previewSummary',
+          'Tile {tileX}, {tileY} • Px {px}, {py} • Zoom {zoom}x',
+          {
+            tileX: previewTileX,
+            tileY: previewTileY,
+            px: x,
+            py: y,
+            zoom: zoom.toFixed(1),
+          }
+        );
       };
 
       const resizePreviewCanvas = () => {
@@ -2020,7 +2185,7 @@ export const createTemplateCreationUi = (deps = {}) => {
         context.font = '600 12px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
         context.textAlign = 'center';
         context.textBaseline = 'middle';
-        context.fillText('Preview', width / 2, height / 2);
+        context.fillText(tt('dialog.common.preview', 'Preview'), width / 2, height / 2);
       };
       const computePreviewCropBounds = (previewData, textTileX, textTileY, zoomValue) => {
         const textTileW = Math.max(1, previewData.width);
@@ -2127,7 +2292,7 @@ export const createTemplateCreationUi = (deps = {}) => {
         const text = textInput.value;
         if (!text.trim()) {
           errorOutput.textContent = '';
-          previewMeta.textContent = `${getPreviewSummary()} • Enter text to preview.`;
+          previewMeta.textContent = `${getPreviewSummary()} • ${tt('dialog.text.enterPreview', 'Enter text to preview.')}`;
           createBtn.disabled = true;
           drawPreviewPlaceholder();
           return;
@@ -2144,8 +2309,8 @@ export const createTemplateCreationUi = (deps = {}) => {
           });
         } catch (error) {
           if (closed || token !== renderToken) return;
-          previewMeta.textContent = `${getPreviewSummary()} • Preview unavailable.`;
-          errorOutput.textContent = error?.message || 'Failed to render preview.';
+          previewMeta.textContent = `${getPreviewSummary()} • ${tt('dialog.common.previewUnavailable', 'Preview unavailable.')}`;
+          errorOutput.textContent = error?.message || tt('dialog.text.previewFailed', 'Failed to render preview.');
           createBtn.disabled = true;
           drawPreviewPlaceholder();
           return;
@@ -2210,7 +2375,20 @@ export const createTemplateCreationUi = (deps = {}) => {
           });
         }
         if (closed || token !== renderToken) return;
-        previewMeta.textContent = `${getPreviewSummary()} • Result: ${previewData.width} x ${previewData.height}px${tilePreviewLimited ? ' • Tile preview limited' : tileUnavailable ? ' • Tile preview unavailable' : ''}`;
+        previewMeta.textContent = tt(
+          'dialog.text.resultSummary',
+          '{summary} • Result: {width} x {height}px{suffix}',
+          {
+            summary: getPreviewSummary(),
+            width: previewData.width,
+            height: previewData.height,
+            suffix: tilePreviewLimited
+              ? ` • ${tt('dialog.text.tilePreviewLimited', 'Tile preview limited')}`
+              : tileUnavailable
+                ? ` • ${tt('dialog.text.tilePreviewUnavailable', 'Tile preview unavailable')}`
+                : '',
+          }
+        );
 
         const { width, height, context } = resizePreviewCanvas();
         if (!context) return;
@@ -2324,7 +2502,7 @@ export const createTemplateCreationUi = (deps = {}) => {
             previewZoom: resultPreviewZoom,
           });
         } catch (error) {
-          errorOutput.textContent = error?.message || 'Failed to create text template.';
+          errorOutput.textContent = error?.message || tt('dialog.text.createFailed', 'Failed to create text template.');
           queuePreviewRender();
         }
       });

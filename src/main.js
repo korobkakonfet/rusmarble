@@ -13,7 +13,7 @@ import { createMapCommentManager } from './mapComments.js';
 import { createTemplateCreationUi } from './templateCreationUi.js';
 import { createArchiveTemplateUi } from './archiveTemplateUi.js';
 import { layoutLanguageOptions, normalizeLayoutLanguage, translateLayout, getLayoutThemeLabel as getLocalizedLayoutThemeLabel, getTemplateDisplayLabel as getLocalizedTemplateDisplayLabel, getTemplateCreateModeLabel, getChatBanTypeLabel, getColorSortLabel } from './layoutI18n.js';
-import { consoleLog, consoleWarn, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile } from './utils.js';
+import { consoleLog, consoleWarn, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels } from './utils.js';
 import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getCurrentTileSize} from './utilsMaptiler.js';
 // import { getCenterGeoCoords, addTemplate } from './utilsMaptiler.js';
 
@@ -43,6 +43,7 @@ const MAP_WORLD_HEIGHT_PX = 2048 * 1000;
 const NEXT_TEMPLATE_PIXEL_ZOOM_LEVEL = 10;
 const TEMPLATE_FOCUS_VIEWPORT_RATIO = 0.72;
 const TEMPLATE_FOCUS_SCALE_PADDING = 1.5;
+const LIVE_TILE_COLOR_MATCH_DELTA = 3;
 const TEMPLATE_FOCUS_SCALE_MIN = 0.0001;
 const TEMPLATE_FOCUS_ZOOM_MIN = 0;
 const TEMPLATE_FOCUS_ZOOM_MAX = 22;
@@ -1117,6 +1118,163 @@ const resolveTemplateArchiveBounds = (template) => {
   const bottomRight = normalizeTilePixelCoords([tx2, ty2, px2, py2]);
   if (!bottomRight) return null;
   return { topLeft, bottomRight, width, height };
+};
+const sanitizeTemplateFileNamePart = (value, fallback = 'template') => {
+  const text = String(value ?? '')
+    .trim()
+    .replace(/[<>:"/\\|?*\u0000-\u001f]+/g, ' ')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return text || fallback;
+};
+const buildTemplateImageFileName = (templateOrName) => {
+  const templateName = typeof templateOrName === 'string'
+    ? templateOrName
+    : (templateOrName?.displayName
+      || templateManager?.templatesJSON?.templates?.[templateOrName?.storageKey]?.name
+      || 'template');
+  return `${sanitizeTemplateFileNamePart(templateName, 'template')}.png`;
+};
+const triggerTemplateBlobDownload = (blob, fileName) => {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+};
+const createTemplateImageBlob = async (templateOrStorageKey) => {
+  const template = typeof templateOrStorageKey === 'string'
+    ? (templateManager.templatesArray ?? []).find((entry) => entry?.storageKey === String(templateOrStorageKey))
+    : templateOrStorageKey;
+  if (!template) {
+    throw new Error('Template image download requires a valid template.');
+  }
+  if (
+    typeof Blob !== 'undefined'
+    && template.file instanceof Blob
+    && String(template.file.type || '').toLowerCase() === 'image/png'
+    && template.forcePaletteConversion !== true
+    && Math.max(0, Math.trunc(Number(template.nearPaletteSnapDelta) || 0)) < 1
+  ) {
+    return {
+      blob: template.file,
+      fileName: buildTemplateImageFileName(template),
+    };
+  }
+  const templateStore = templateManager?.templatesJSON?.templates?.[template?.storageKey] ?? {};
+  const bounds = resolveTemplateArchiveBounds(template);
+  if (!bounds) {
+    throw new Error('Could not resolve template image size.');
+  }
+  const { topLeft, width, height } = bounds;
+  if (!testCanvasSize(width, height)) {
+    throw new Error(`Template image is too large to download in this browser (${width} x ${height}).`);
+  }
+  const shreadSize = Math.max(1, Math.trunc(Number(template?.shreadSize || templateStore?.shreadSize || templateManager?.drawMult || 1)));
+  const shreadCenter = (shreadSize - 1) >> 1;
+  const topLeftWorldX = topLeft[0] * TEMPLATE_TILE_SIZE + topLeft[2];
+  const topLeftWorldY = topLeft[1] * TEMPLATE_TILE_SIZE + topLeft[3];
+  const templateWorldWidth = 2048 * TEMPLATE_TILE_SIZE;
+  const tileKeys = Object.keys(template.chunkedBuffer ?? template.chunked ?? {});
+  let resultCanvas = new OffscreenCanvas(width, height);
+  const resultContext = resultCanvas.getContext('2d', { willReadFrequently: true });
+  if (!resultContext) {
+    cleanUpCanvas(resultCanvas);
+    resultCanvas = null;
+    throw new Error('Could not initialize download canvas.');
+  }
+  resultContext.imageSmoothingEnabled = false;
+  resultContext.clearRect(0, 0, width, height);
+
+  try {
+    for (const tileKey of tileKeys) {
+      const coords = tileKey.split(',').map(Number);
+      if (coords.length < 4 || coords.some((value) => !Number.isFinite(value))) continue;
+      const chunkBitmapSource = template.chunked?.[tileKey];
+      const canReuseBitmap = typeof ImageBitmap !== 'undefined' && chunkBitmapSource instanceof ImageBitmap;
+      let chunkBitmap = null;
+      let shouldCloseBitmap = false;
+      let chunkCanvas = null;
+      try {
+        if (canReuseBitmap) {
+          chunkBitmap = chunkBitmapSource;
+        } else if (template.chunkedBuffer?.[tileKey]) {
+          const chunkBlob = new Blob([template.chunkedBuffer[tileKey]], { type: 'image/png' });
+          chunkBitmap = await createBitmapPreservingPixels(chunkBlob);
+          shouldCloseBitmap = true;
+        }
+        if (!chunkBitmap) continue;
+
+        const chunkWidth = Math.max(1, Math.round(chunkBitmap.width / shreadSize));
+        const chunkHeight = Math.max(1, Math.round(chunkBitmap.height / shreadSize));
+        chunkCanvas = new OffscreenCanvas(chunkBitmap.width, chunkBitmap.height);
+        const chunkContext = chunkCanvas.getContext('2d', { willReadFrequently: true });
+        if (!chunkContext) continue;
+        chunkContext.imageSmoothingEnabled = false;
+        chunkContext.clearRect(0, 0, chunkBitmap.width, chunkBitmap.height);
+        chunkContext.drawImage(chunkBitmap, 0, 0);
+        const sourceData = chunkContext.getImageData(0, 0, chunkBitmap.width, chunkBitmap.height).data;
+        const chunkImageData = chunkContext.createImageData(chunkWidth, chunkHeight);
+
+        for (let y = 0; y < chunkHeight; y++) {
+          for (let x = 0; x < chunkWidth; x++) {
+            const sourceX = Math.min(chunkBitmap.width - 1, x * shreadSize + shreadCenter);
+            const sourceY = Math.min(chunkBitmap.height - 1, y * shreadSize + shreadCenter);
+            const sourceIndex = (sourceY * chunkBitmap.width + sourceX) * 4;
+            const targetIndex = (y * chunkWidth + x) * 4;
+            let red = sourceData[sourceIndex];
+            let green = sourceData[sourceIndex + 1];
+            let blue = sourceData[sourceIndex + 2];
+            let alpha = sourceData[sourceIndex + 3];
+            if (alpha <= 32 && (red === 0 || red === 255) && green === red && blue === red) {
+              alpha = 0;
+            }
+            chunkImageData.data[targetIndex] = red;
+            chunkImageData.data[targetIndex + 1] = green;
+            chunkImageData.data[targetIndex + 2] = blue;
+            chunkImageData.data[targetIndex + 3] = alpha;
+          }
+        }
+
+        const chunkWorldX = coords[0] * TEMPLATE_TILE_SIZE + coords[2];
+        const chunkWorldY = coords[1] * TEMPLATE_TILE_SIZE + coords[3];
+        const offsetX = ((chunkWorldX - topLeftWorldX) % templateWorldWidth + templateWorldWidth) % templateWorldWidth;
+        const offsetY = chunkWorldY - topLeftWorldY;
+        resultContext.putImageData(chunkImageData, offsetX, offsetY);
+      } finally {
+        if (shouldCloseBitmap) {
+          chunkBitmap?.close?.();
+        }
+        if (chunkCanvas) {
+          cleanUpCanvas(chunkCanvas);
+          chunkCanvas = null;
+        }
+      }
+    }
+    const blob = await resultCanvas.convertToBlob({ type: 'image/png' });
+    return {
+      blob,
+      fileName: buildTemplateImageFileName(template),
+    };
+  } finally {
+    cleanUpCanvas(resultCanvas);
+    resultCanvas = null;
+  }
+};
+const downloadTemplateImage = async (templateOrStorageKey) => {
+  const { blob, fileName } = await createTemplateImageBlob(templateOrStorageKey);
+  triggerTemplateBlobDownload(blob, fileName);
+  return { fileName };
+};
+const downloadTemplateImageBlob = async (blob, templateName) => {
+  const fileName = buildTemplateImageFileName(templateName);
+  triggerTemplateBlobDownload(blob, fileName);
+  return { fileName };
 };
 const normalizeFlag = (value) => value === true || value === 'true' || value === 1 || value === '1';
 const DEFAULT_REMOTE_TEMPLATE_STREAM = 'root';
@@ -3611,12 +3769,40 @@ const overlayMain = new Overlay(name, version); // Constructs a new Overlay obje
 const templateManager = new TemplateManager(name, version, overlayMain); // Constructs a new TemplateManager object
 templateManagerRef = templateManager;
 const apiManager = new ApiManager(templateManager); // Constructs a new ApiManager object
+let templateProgressRefreshTimer = null;
+
+function scheduleTemplateProgressRefresh(delayMs = 150) {
+  if (templateProgressRefreshTimer !== null) {
+    clearTimeout(templateProgressRefreshTimer);
+  }
+  templateProgressRefreshTimer = setTimeout(() => {
+    templateProgressRefreshTimer = null;
+    if (!templateManager?.templatesArray?.length) {
+      return;
+    }
+    try {
+      apiManager.tileCache = {};
+    } catch (_) {}
+    doAfterMapFound(() => {
+      try {
+        templateManager.createOverlayOnMapVisibleFirst();
+      } catch (_) {}
+      setTimeout(() => {
+        try {
+          forceRefreshTiles();
+        } catch (_) {}
+      }, 0);
+    });
+  }, Math.max(0, Math.trunc(Number(delayMs) || 0)));
+}
+
 const {
   openRemoteTemplateBuilder,
   openTemplatePaletteConversionPreview,
   openRussianFlagTemplateBuilder,
   openTextTemplateBuilder,
 } = createTemplateCreationUi({
+  t,
   applyOverlayVarsToFloatingElement,
   normalizeTemplatePaletteConversionOptions,
   templatePaletteConversionDefaults,
@@ -3694,6 +3880,7 @@ const {
   handleArchiveTemplatePointCapture,
   isArchiveTemplatePointCaptureActive,
 } = createArchiveTemplateUi({
+  t,
   overlayMain,
   templateManager,
   applyOverlayVarsToFloatingElement,
@@ -3714,6 +3901,7 @@ const {
   testCanvasSize,
   cleanUpCanvas,
   consoleWarn,
+  downloadTemplateImageBlob,
 });
 apiManager.onCoordsUpdated = (rawCoords) => {
   handleDistanceToolCoordsUpdate(rawCoords);
@@ -3737,6 +3925,7 @@ const templateSync = createTemplateSync({
   autoSyncSyncToggleList: () => window.syncToggleList?.(),
   autoSyncBuildTemplateFilterList: () => window.buildTemplateFilterList?.(),
   autoSyncBuildColorFilterList: () => window.buildColorFilterList?.(),
+  requestProgressRefresh: () => scheduleTemplateProgressRefresh(),
 });
 
 document.addEventListener('click', (event) => {
@@ -3828,6 +4017,13 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
 
   console.log(storageTemplates);
   templateManager.importJSON(storageTemplates); // Loads the templates
+  try {
+    templateManager.importPromise?.then(() => {
+      if ((templateManager.templatesArray?.length ?? 0) > 0) {
+        scheduleTemplateProgressRefresh(250);
+      }
+    }).catch(() => {});
+  } catch (_) {}
 
   await waitForBody();
   observeWplaceTheme();
@@ -4443,10 +4639,17 @@ async function findNearestTemplatePixelInTile(tileCandidate, liveTilePixels, ori
 
         const tileIndex = (pixelY * TEMPLATE_TILE_SIZE + pixelX) * 4;
         const liveAlpha = liveTilePixels[tileIndex + 3];
-        const isPainted = liveAlpha >= 64
-          && liveTilePixels[tileIndex] === templateRed
-          && liveTilePixels[tileIndex + 1] === templateGreen
-          && liveTilePixels[tileIndex + 2] === templateBlue;
+        const liveRed = liveTilePixels[tileIndex];
+        const liveGreen = liveTilePixels[tileIndex + 1];
+        const liveBlue = liveTilePixels[tileIndex + 2];
+        const isPainted = liveAlpha >= 64 && (
+          (liveRed === templateRed && liveGreen === templateGreen && liveBlue === templateBlue)
+          || (
+            Math.abs(liveRed - templateRed) <= LIVE_TILE_COLOR_MATCH_DELTA
+            && Math.abs(liveGreen - templateGreen) <= LIVE_TILE_COLOR_MATCH_DELTA
+            && Math.abs(liveBlue - templateBlue) <= LIVE_TILE_COLOR_MATCH_DELTA
+          )
+        );
         if (isPainted) continue;
 
         const coords = [tileCandidate.tileX, tileCandidate.tileY, pixelX, pixelY];
@@ -5297,6 +5500,11 @@ const syncTemplatePositionJoystickLanguage = () => {
     archiveBtn.textContent = t('joystick.archiveDate');
     archiveBtn.title = t('joystick.archiveDateTitle');
   }
+  const downloadBtn = panel.querySelector('[data-role="template-download-btn"]');
+  if (downloadBtn) {
+    downloadBtn.textContent = t('joystick.download');
+    downloadBtn.title = t('joystick.downloadTitle');
+  }
 };
 
 const syncOverlayBrandLanguage = () => {
@@ -5880,9 +6088,13 @@ async function buildOverlayMain() {
         details.open = true;
       })
         // Color sorting
-        .addP({'id': 'bm-color-sort-label', 'textContent': t('colors.sortBy'), 'style': 'font-size: small; margin-top: 3px; margin-left: 5px;'})
+        .addP({
+          'id': 'bm-color-sort-label',
+          'textContent': t('colors.sortBy'),
+          'style': 'font-size: small; margin-top: 3px; margin-left: 5px; display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; white-space: nowrap;'
+        })
           // Sorting UI
-          .addSelect({'id': 'bm-color-sort'}, (instance, select) => {
+          .addSelect({'id': 'bm-color-sort', 'style': 'flex: 1 1 auto; min-width: 0; width: auto;'}, (instance, select) => {
             const order = [
               "Asc", "Desc"
             ]
@@ -6665,6 +6877,22 @@ async function buildOverlayMain() {
     down.addEventListener('click', (event) => shiftCoordsFromJoystick(event, 0, 1));
     panel.appendChild(down);
 
+    const downloadButton = document.createElement('button');
+    downloadButton.type = 'button';
+    downloadButton.textContent = 'Download Image';
+    downloadButton.title = 'Download this template as an image.';
+    downloadButton.style.gridColumn = '1 / 4';
+    downloadButton.style.border = '1px solid var(--bm-border-strong)';
+    downloadButton.style.borderRadius = '6px';
+    downloadButton.style.background = 'var(--bm-subtle-bg)';
+    downloadButton.style.color = 'var(--bm-fg)';
+    downloadButton.style.fontSize = '10px';
+    downloadButton.style.lineHeight = '1.2';
+    downloadButton.style.padding = '3px 5px';
+    downloadButton.style.cursor = 'pointer';
+    downloadButton.dataset.role = 'template-download-btn';
+    panel.appendChild(downloadButton);
+
     const archiveTools = document.createElement('div');
     archiveTools.style.gridColumn = '1 / 4';
     archiveTools.style.display = 'none';
@@ -6729,6 +6957,22 @@ async function buildOverlayMain() {
         }
         syncTemplatePositionJoystickWindow();
         buildTemplateFilterList();
+      }
+    });
+    downloadButton.addEventListener('click', async () => {
+      if (!templatePositionEditStorageKey) return;
+      const activeTemplate = (templateManager.templatesArray ?? [])
+        .find((template) => template.storageKey === templatePositionEditStorageKey);
+      if (!activeTemplate) {
+        overlayMain.handleDisplayError('No active template selected for download.');
+        return;
+      }
+      try {
+        const result = await downloadTemplateImage(activeTemplate);
+        overlayMain.handleDisplayStatus(`Downloaded "${activeTemplate.displayName}" as ${result.fileName}.`);
+      } catch (error) {
+        consoleWarn('Failed to download template image.', error);
+        overlayMain.handleDisplayError(`Could not download template: ${error?.message || error}`);
       }
     });
 
@@ -6858,7 +7102,7 @@ async function buildOverlayMain() {
       label.style.fontSize = '12px';
 
       if (sortByParts[0] === "remaining" || (hideCompleted && sortByParts[0] !== "painted")) {
-        const remainingLabelText = (totalCount - paintedCount).toLocaleString();
+        const remainingLabelText = Math.max(0, totalCount - paintedCount).toLocaleString();
         label.textContent = `${colorName} • ${remainingLabelText} ${t('colors.leftSuffix')}`;
       } else {
         const labelText = totalCount.toLocaleString();

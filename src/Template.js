@@ -1,4 +1,4 @@
-import { uint8ToBase64, cleanUpCanvas, rgbToMeta, colorpalette, testCanvasSize } from "./utils";
+import { uint8ToBase64, cleanUpCanvas, rgbToMeta, colorpalette, testCanvasSize, createBitmapPreservingPixels, normalizeTemplateColorKey } from "./utils";
 
 const clampByte = (value) => Math.max(0, Math.min(255, Math.round(Number(value) || 0)));
 const clampUnit = (value) => Math.max(0, Math.min(1, Number(value) || 0));
@@ -343,6 +343,7 @@ export default class Template {
     imageHeight = null,
     forcePaletteConversion = false,
     paletteConversionOptions = null,
+    nearPaletteSnapDelta = 0,
   } = {}) {
     this.displayName = displayName;
     this.sortID = sortID;
@@ -357,6 +358,7 @@ export default class Template {
     this.imageHeight = Number.isFinite(Number(imageHeight)) ? Math.max(1, Math.trunc(Number(imageHeight))) : null;
     this.forcePaletteConversion = Boolean(forcePaletteConversion);
     this.paletteConversionOptions = normalizeTemplatePaletteConversionOptions(paletteConversionOptions || templatePaletteConversionDefaults);
+    this.nearPaletteSnapDelta = Math.max(0, Math.trunc(Number(nearPaletteSnapDelta) || 0));
     this.enabled = true;
     this.pixelCount = 0; // Total pixel count in template
     this.requiredPixelCount = 0; // Total number of non-transparent, non-#deface pixels
@@ -434,6 +436,98 @@ export default class Template {
     return convertedBitmap;
   }
 
+  async normalizeBitmapNearPalette(bitmap, fallbackToNearest = false) {
+    if (!(bitmap instanceof ImageBitmap) || this.nearPaletteSnapDelta < 1) {
+      return bitmap;
+    }
+    let normalizationCanvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const normalizationCtx = normalizationCanvas.getContext('2d', { willReadFrequently: true });
+    if (!normalizationCtx) {
+      cleanUpCanvas(normalizationCanvas);
+      normalizationCanvas = null;
+      return bitmap;
+    }
+    normalizationCtx.imageSmoothingEnabled = false;
+    normalizationCtx.clearRect(0, 0, bitmap.width, bitmap.height);
+    normalizationCtx.drawImage(bitmap, 0, 0);
+    const normalizedImage = normalizationCtx.getImageData(0, 0, bitmap.width, bitmap.height);
+    const data = normalizedImage.data;
+    let changed = false;
+
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] < 64) continue;
+      const normalizedKey = normalizeTemplateColorKey(
+        data[i],
+        data[i + 1],
+        data[i + 2],
+        this.nearPaletteSnapDelta,
+        fallbackToNearest,
+      );
+      if (!normalizedKey || normalizedKey === `${data[i]},${data[i + 1]},${data[i + 2]}`) continue;
+      const [nextR, nextG, nextB] = normalizedKey.split(',').map(Number);
+      data[i] = nextR;
+      data[i + 1] = nextG;
+      data[i + 2] = nextB;
+      changed = true;
+    }
+
+    if (!changed) {
+      cleanUpCanvas(normalizationCanvas);
+      normalizationCanvas = null;
+      return bitmap;
+    }
+
+    normalizationCtx.putImageData(normalizedImage, 0, 0);
+    const normalizedBitmap = await createBitmapPreservingPixels(normalizationCanvas);
+    bitmap.close?.();
+    cleanUpCanvas(normalizationCanvas);
+    normalizationCanvas = null;
+    return normalizedBitmap;
+  }
+
+  inspectBitmapPalette(bitmap) {
+    if (!(bitmap instanceof ImageBitmap)) {
+      return null;
+    }
+
+    let inspectCanvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const inspectCtx = inspectCanvas.getContext('2d', { willReadFrequently: true });
+    if (!inspectCtx) {
+      cleanUpCanvas(inspectCanvas);
+      inspectCanvas = null;
+      return null;
+    }
+    inspectCtx.imageSmoothingEnabled = false;
+    inspectCtx.clearRect(0, 0, bitmap.width, bitmap.height);
+    inspectCtx.drawImage(bitmap, 0, 0);
+    const inspectData = inspectCtx.getImageData(0, 0, bitmap.width, bitmap.height).data;
+    cleanUpCanvas(inspectCanvas);
+    inspectCanvas = null;
+
+    let required = 0;
+    let deface = 0;
+    const paletteMap = new Map();
+    for (let y = 0; y < bitmap.height; y++) {
+      for (let x = 0; x < bitmap.width; x++) {
+        const idx = (y * bitmap.width + x) * 4;
+        const r = inspectData[idx];
+        const g = inspectData[idx + 1];
+        const b = inspectData[idx + 2];
+        const a = inspectData[idx + 3];
+        if (a < 64) { continue; }
+        if (r === 222 && g === 250 && b === 206) {
+          deface++;
+          continue;
+        }
+        const key = rgbToMeta.has(`${r},${g},${b}`) ? `${r},${g},${b}` : 'other';
+        required++;
+        paletteMap.set(key, (paletteMap.get(key) || 0) + 1);
+      }
+    }
+
+    return { required, deface, paletteMap };
+  }
+
   /** Creates chunks of the template for each tile.
    * 
    * @returns {Object} Collection of template bitmaps & buffers organized by tile coordinates
@@ -447,9 +541,12 @@ export default class Template {
       this.shreadSize = testCanvasSize(5000, 5000) ? 5 : 4; // Scale image factor for pixel art enhancement (must be odd)
     }
     const shreadSize = this.shreadSize;
-    let bitmap = this.file instanceof ImageBitmap ? this.file : await createImageBitmap(this.file, { "colorSpaceConversion": "none" }); // Create efficient bitmap from uploaded file
+    let bitmap = this.file instanceof ImageBitmap ? this.file : await createBitmapPreservingPixels(this.file); // Create efficient bitmap from uploaded file
     if (this.forcePaletteConversion) {
       bitmap = await this.convertBitmapToWplacePalette(bitmap);
+    }
+    if (this.nearPaletteSnapDelta > 0) {
+      bitmap = await this.normalizeBitmapNearPalette(bitmap);
     }
     const imageWidth = bitmap.width;
     const imageHeight = bitmap.height;
@@ -490,45 +587,19 @@ export default class Template {
     this.pixelCount = totalPixels;
 
     // ==================== REQUIRED/DEFACE PIXEL COUNTING ====================
-    // Build a 1× scale canvas to inspect original pixels and count required vs deface
+    // Build a 1x scale canvas to inspect original pixels and count required vs deface.
     try {
-      let inspectCanvas = new OffscreenCanvas(imageWidth, imageHeight);
-      const inspectCtx = inspectCanvas.getContext('2d', { willReadFrequently: true });
-      inspectCtx.imageSmoothingEnabled = false;
-      inspectCtx.clearRect(0, 0, imageWidth, imageHeight);
-      inspectCtx.drawImage(bitmap, 0, 0);
-      const inspectData = inspectCtx.getImageData(0, 0, imageWidth, imageHeight).data;
-      cleanUpCanvas(inspectCanvas);
-      inspectCanvas = null;
-
-      let required = 0;
-      let deface = 0;
-      const paletteMap = new Map();
-      for (let y = 0; y < imageHeight; y++) {
-        for (let x = 0; x < imageWidth; x++) {
-          const idx = (y * imageWidth + x) * 4;
-          const r = inspectData[idx];
-          const g = inspectData[idx + 1];
-          const b = inspectData[idx + 2];
-          const a = inspectData[idx + 3];
-          // Match the runtime progress logic: only solid center pixels count as required.
-          if (a < 64) { continue; }
-          if (r === 222 && g === 250 && b === 206) {
-            deface++;
-            continue;
-          }
-          const key = rgbToMeta.has(`${r},${g},${b}`) ? `${r},${g},${b}` : 'other';
-          required++;
-          paletteMap.set(key, (paletteMap.get(key) || 0) + 1);
-        }
+      let paletteStats = this.inspectBitmapPalette(bitmap);
+      if (this.nearPaletteSnapDelta > 0 && paletteStats?.paletteMap?.has('other')) {
+        bitmap = await this.normalizeBitmapNearPalette(bitmap, true);
+        paletteStats = this.inspectBitmapPalette(bitmap);
       }
 
-      this.requiredPixelCount = required;
-      this.defacePixelCount = deface;
+      this.requiredPixelCount = paletteStats?.required ?? 0;
+      this.defacePixelCount = paletteStats?.deface ?? 0;
 
-      // Persist palette with all colors enabled by default
       const paletteObj = {};
-      for (const [key, count] of paletteMap.entries()) {
+      for (const [key, count] of (paletteStats?.paletteMap ?? new Map()).entries()) {
         paletteObj[key] = { count, enabled: true };
       }
       this.colorPalette = paletteObj;
@@ -667,7 +738,7 @@ export default class Template {
           .padStart(3, '0')
         }`;
           
-        templateTiles[templateTileName] = await createImageBitmap(canvas); // Creates the bitmap
+        templateTiles[templateTileName] = await createBitmapPreservingPixels(canvas); // Creates the bitmap
         // Record tile prefix for fast lookup later
         this.tilePrefixes.add(templateTileName.split(',').slice(0,2).join(','));
         
@@ -711,7 +782,7 @@ export default class Template {
       return result;
     }
     const templateBlob = new Blob([this.chunkedBuffer[tileKey]], { type: "image/png" }); // Uint8Array -> Blob
-    const templateBitmap = await createImageBitmap(templateBlob); // Blob -> Bitmap
+    const templateBitmap = await createBitmapPreservingPixels(templateBlob); // Blob -> Bitmap
     if (memorySaving === false) {
       this.chunked[tileKey] = templateBitmap;
     };

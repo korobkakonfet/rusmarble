@@ -17,6 +17,7 @@
  */
 export const createArchiveTemplateUi = (deps = {}) => {
   const {
+    t: translate = null,
     overlayMain,
     templateManager,
     applyOverlayVarsToFloatingElement,
@@ -37,6 +38,7 @@ export const createArchiveTemplateUi = (deps = {}) => {
     testCanvasSize,
     cleanUpCanvas,
     consoleWarn,
+    downloadTemplateImageBlob,
   } = deps;
 
   const archiveTemplateVersionCache = new Map();
@@ -52,6 +54,14 @@ export const createArchiveTemplateUi = (deps = {}) => {
   };
   let archiveTemplateWindowSession = null;
   const ARCHIVE_TEMPLATE_CAPTURE_HINT_ID = 'bm-archive-template-capture-hint';
+  const interpolateText = (text, params = {}) => String(text).replace(/\{(\w+)\}/g, (_, key) => String(params?.[key] ?? ''));
+  const tt = (key, fallback, params = {}) => {
+    const translated = typeof translate === 'function' ? translate(key, params) : '';
+    if (translated && translated !== key) {
+      return translated;
+    }
+    return interpolateText(fallback, params);
+  };
 
   const parseJsonResponse = (response, fallback = {}) => {
     const emptyFallback = fallback ?? {};
@@ -148,7 +158,7 @@ export const createArchiveTemplateUi = (deps = {}) => {
     const html = String(response?.responseText || response?.response || '');
     const listMatch = html.match(/const\s+WPLACE_VERSIONS\s*=\s*\[([\s\S]*?)\];/);
     if (!listMatch) {
-      throw new Error('Archive version list was not found.');
+      throw new Error(tt('dialog.archive.error.versionListMissing', 'Archive version list was not found.'));
     }
     const versions = [];
     const entryRegex = /\{[^{}]*version:\s*['"]([^'"]+)['"][^{}]*date:\s*['"]([^'"]*)['"][^{}]*\}/g;
@@ -160,7 +170,7 @@ export const createArchiveTemplateUi = (deps = {}) => {
       versions.push({ version, date });
     }
     if (!versions.length) {
-      throw new Error('Archive version list is empty.');
+      throw new Error(tt('dialog.archive.error.versionListEmpty', 'Archive version list is empty.'));
     }
     archiveTemplateVersionCache.set(baseUrl, versions);
     return versions;
@@ -212,10 +222,10 @@ export const createArchiveTemplateUi = (deps = {}) => {
     const requestedConcurrency = Math.trunc(Number(options?.concurrency) || 1);
     const concurrency = Math.max(1, Math.min(16, requestedConcurrency));
     if (!archiveVersion) {
-      throw new Error('Archive version is required.');
+      throw new Error(tt('dialog.archive.error.versionRequired', 'Archive version is required.'));
     }
     if (!rect || !Number.isFinite(rect.tx1) || !Number.isFinite(rect.ty1) || !Number.isFinite(rect.tx2) || !Number.isFinite(rect.ty2)) {
-      throw new Error('Archive selection is invalid.');
+      throw new Error(tt('dialog.archive.error.selectionInvalid', 'Archive selection is invalid.'));
     }
     const onTile = typeof options?.onTile === 'function' ? options.onTile : null;
     const onProgress = typeof options?.onProgress === 'function' ? options.onProgress : null;
@@ -261,7 +271,7 @@ export const createArchiveTemplateUi = (deps = {}) => {
     const activeOverlay = overlayInstance || overlayMain;
     const rect = buildArchiveTemplateRectFromPoints(firstPoint, secondPoint);
     if (!rect) {
-      activeOverlay?.handleDisplayError('Could not read the selected archive range.');
+      activeOverlay?.handleDisplayError(tt('dialog.archive.range.invalid', 'Could not read the selected archive range.'));
       return Promise.resolve(null);
     }
     const targetTemplateMeta = getTemplateTimeArchiveMeta(targetTemplate);
@@ -310,7 +320,7 @@ export const createArchiveTemplateUi = (deps = {}) => {
       panel.style.pointerEvents = 'auto';
       panel.setAttribute('role', 'dialog');
       panel.setAttribute('aria-modal', 'true');
-      panel.setAttribute('aria-label', 'Time archive template builder');
+      panel.setAttribute('aria-label', tt('dialog.archive.ariaLabel', 'Time archive template builder'));
       applyOverlayVarsToFloatingElement(panel);
 
       const headingRow = document.createElement('div');
@@ -319,7 +329,9 @@ export const createArchiveTemplateUi = (deps = {}) => {
       headingRow.style.gap = '8px';
       const title = document.createElement('strong');
       title.style.fontSize = '13px';
-      title.textContent = isUpdateMode ? 'Time-Archive Template Update' : 'Time-Archive Template';
+      title.textContent = isUpdateMode
+        ? tt('dialog.archive.title.update', 'Time-Archive Template Update')
+        : tt('dialog.archive.title.create', 'Time-Archive Template');
       const closeBtn = document.createElement('button');
       closeBtn.type = 'button';
       closeBtn.textContent = '✖';
@@ -334,11 +346,28 @@ export const createArchiveTemplateUi = (deps = {}) => {
       rangeInfo.style.lineHeight = '1.35';
       const [brTx, brTy, brPx, brPy] = rect.displayBottomRight;
       rangeInfo.textContent = [
-        `Top Left: Tl X ${rect.tx1}, Tl Y ${rect.ty1}, Px X ${rect.px1}, Px Y ${rect.py1}`,
-        `Bottom Right: Tl X ${brTx}, Tl Y ${brTy}, Px X ${brPx}, Px Y ${brPy}`,
-        `Size: ${numberFmt.format(rect.width)} x ${numberFmt.format(rect.height)} px`,
-        `Tiles: ${numberFmt.format(rect.tileCount)} (${numberFmt.format(rect.tileWidth)} x ${numberFmt.format(rect.tileHeight)})`,
-        `Provider: ${archiveBaseUrl}`,
+        tt('dialog.archive.range.topLeft', 'Top Left: Tl X {tx}, Tl Y {ty}, Px X {px}, Px Y {py}', {
+          tx: rect.tx1,
+          ty: rect.ty1,
+          px: rect.px1,
+          py: rect.py1,
+        }),
+        tt('dialog.archive.range.bottomRight', 'Bottom Right: Tl X {tx}, Tl Y {ty}, Px X {px}, Px Y {py}', {
+          tx: brTx,
+          ty: brTy,
+          px: brPx,
+          py: brPy,
+        }),
+        tt('dialog.archive.range.size', 'Size: {width} x {height} px', {
+          width: numberFmt.format(rect.width),
+          height: numberFmt.format(rect.height),
+        }),
+        tt('dialog.archive.range.tiles', 'Tiles: {count} ({tileWidth} x {tileHeight})', {
+          count: numberFmt.format(rect.tileCount),
+          tileWidth: numberFmt.format(rect.tileWidth),
+          tileHeight: numberFmt.format(rect.tileHeight),
+        }),
+        tt('dialog.archive.range.provider', 'Provider: {provider}', { provider: archiveBaseUrl }),
       ].join('\n');
       panel.appendChild(rangeInfo);
 
@@ -348,7 +377,7 @@ export const createArchiveTemplateUi = (deps = {}) => {
       controls.style.gap = '8px';
       controls.style.alignItems = 'center';
       const versionLabel = document.createElement('label');
-      versionLabel.textContent = 'Date';
+      versionLabel.textContent = tt('dialog.archive.date', 'Date');
       const versionRange = document.createElement('input');
       versionRange.type = 'range';
       versionRange.min = '0';
@@ -362,10 +391,10 @@ export const createArchiveTemplateUi = (deps = {}) => {
       versionValue.style.fontSize = '12px';
       versionValue.style.fontVariantNumeric = 'tabular-nums';
       versionValue.style.whiteSpace = 'nowrap';
-      versionValue.textContent = 'Loading...';
+      versionValue.textContent = tt('dialog.common.loading', 'Loading...');
       const refreshBtn = document.createElement('button');
       refreshBtn.type = 'button';
-      refreshBtn.textContent = 'Refresh';
+      refreshBtn.textContent = tt('dialog.archive.refresh', 'Refresh');
       controls.appendChild(versionLabel);
       controls.appendChild(versionRange);
       controls.appendChild(versionValue);
@@ -411,7 +440,7 @@ export const createArchiveTemplateUi = (deps = {}) => {
       const previewHint = document.createElement('div');
       previewHint.style.fontSize = '11px';
       previewHint.style.color = 'var(--bm-muted)';
-      previewHint.textContent = 'Wheel to zoom. Drag to pan.';
+      previewHint.textContent = tt('dialog.archive.previewHint', 'Wheel to zoom. Drag to pan.');
       const previewZoomControls = document.createElement('div');
       previewZoomControls.style.display = 'inline-flex';
       previewZoomControls.style.alignItems = 'center';
@@ -419,7 +448,7 @@ export const createArchiveTemplateUi = (deps = {}) => {
       const zoomOutBtn = document.createElement('button');
       zoomOutBtn.type = 'button';
       zoomOutBtn.textContent = '-';
-      zoomOutBtn.title = 'Zoom out';
+      zoomOutBtn.title = tt('dialog.archive.zoomOut', 'Zoom out');
       const zoomValue = document.createElement('span');
       zoomValue.style.minWidth = '52px';
       zoomValue.style.fontSize = '11px';
@@ -428,12 +457,12 @@ export const createArchiveTemplateUi = (deps = {}) => {
       zoomValue.textContent = '100%';
       const zoomResetBtn = document.createElement('button');
       zoomResetBtn.type = 'button';
-      zoomResetBtn.textContent = 'Reset';
-      zoomResetBtn.title = 'Reset zoom and pan';
+      zoomResetBtn.textContent = tt('dialog.archive.reset', 'Reset');
+      zoomResetBtn.title = tt('dialog.archive.resetTitle', 'Reset zoom and pan');
       const zoomInBtn = document.createElement('button');
       zoomInBtn.type = 'button';
       zoomInBtn.textContent = '+';
-      zoomInBtn.title = 'Zoom in';
+      zoomInBtn.title = tt('dialog.archive.zoomIn', 'Zoom in');
       previewZoomControls.appendChild(zoomOutBtn);
       previewZoomControls.appendChild(zoomValue);
       previewZoomControls.appendChild(zoomResetBtn);
@@ -460,11 +489,19 @@ export const createArchiveTemplateUi = (deps = {}) => {
       actions.style.gap = '8px';
       const cancelBtn = document.createElement('button');
       cancelBtn.type = 'button';
-      cancelBtn.textContent = 'Cancel';
+      cancelBtn.textContent = tt('dialog.common.cancel', 'Cancel');
+      const createDownloadBtn = document.createElement('button');
+      createDownloadBtn.type = 'button';
+      createDownloadBtn.textContent = isUpdateMode
+        ? tt('dialog.archive.button.updateDownload', 'Update & Download Image')
+        : tt('dialog.archive.button.createDownload', 'Create & Download Image');
       const createBtn = document.createElement('button');
       createBtn.type = 'button';
-      createBtn.textContent = isUpdateMode ? 'Update Template' : 'Create Template';
+      createBtn.textContent = isUpdateMode
+        ? tt('dialog.archive.button.update', 'Update Template')
+        : tt('dialog.common.createTemplate', 'Create Template');
       actions.appendChild(cancelBtn);
+      actions.appendChild(createDownloadBtn);
       actions.appendChild(createBtn);
       panel.appendChild(actions);
       backdrop.appendChild(panel);
@@ -485,10 +522,11 @@ export const createArchiveTemplateUi = (deps = {}) => {
       let previewPanX = 0;
       let previewPanY = 0;
       let previewHasImage = false;
-      let previewPlaceholderMessage = 'Loading preview...';
+      let previewPlaceholderMessage = tt('dialog.common.loadingPreview', 'Loading preview...');
       let previewPrefetchGeneration = 0;
       let previewPrefetchSuspended = false;
       let previewPrefetchWaiters = [];
+      let statusCategory = 'idle';
       const previewImageCanvas = document.createElement('canvas');
       const previewEntries = new Map();
       const previewTileCoords = [];
@@ -511,9 +549,10 @@ export const createArchiveTemplateUi = (deps = {}) => {
         };
       })();
 
-      const setStatus = (message, isError = false) => {
+      const setStatus = (message, isError = false, category = 'general') => {
         statusOutput.textContent = message;
         statusOutput.style.color = isError ? 'var(--bm-danger)' : 'var(--bm-muted)';
+        statusCategory = category;
       };
       const setProgress = (done = 0, total = 0, label = '') => {
         const safeTotal = Math.max(1, Number(total) || 1);
@@ -531,14 +570,10 @@ export const createArchiveTemplateUi = (deps = {}) => {
         progress.value = 0;
         progressText.textContent = '';
       };
-      const canOverwriteStatusWithPreview = () => {
-        const currentStatus = String(statusOutput.textContent || '').trim();
-        if (!currentStatus) return true;
-        return /^Loading archive versions|^Loaded \d+ archive versions|^Loading preview|^Preview ready|^Preview failed|^Preview skipped/.test(currentStatus);
-      };
+      const canOverwriteStatusWithPreview = () => statusCategory === 'idle' || statusCategory === 'preview' || statusCategory === 'versions';
       const setPreviewStatus = (message, isError = false, force = false) => {
         if (!force && (busy || !canOverwriteStatusWithPreview())) return;
-        setStatus(message, isError);
+        setStatus(message, isError, 'preview');
       };
       const clampPreviewZoom = (value) => clampNumber(
         value,
@@ -655,9 +690,9 @@ export const createArchiveTemplateUi = (deps = {}) => {
           drawPreviewViewport();
         });
       };
-      const drawPreviewPlaceholder = (message = 'Preview unavailable') => {
+      const drawPreviewPlaceholder = (message = tt('dialog.common.previewUnavailable', 'Preview unavailable')) => {
         previewHasImage = false;
-        previewPlaceholderMessage = String(message || 'Preview unavailable');
+        previewPlaceholderMessage = String(message || tt('dialog.common.previewUnavailable', 'Preview unavailable'));
         previewImageCanvas.width = 0;
         previewImageCanvas.height = 0;
         queuePreviewViewportDraw();
@@ -741,13 +776,16 @@ export const createArchiveTemplateUi = (deps = {}) => {
       const syncVersionMetaText = () => {
         const parts = [];
         if (selectedVersionValue) {
-          parts.push(`Version: ${selectedVersionValue}`);
+          parts.push(tt('dialog.archive.meta.version', 'Version: {version}', { version: selectedVersionValue }));
         }
         if (previewSupported && archiveVersions.length) {
           const stats = getPreviewStats();
-          parts.push(`Prefetched: ${stats.ready}/${stats.total}`);
+          parts.push(tt('dialog.archive.meta.prefetched', 'Prefetched: {ready}/{total}', {
+            ready: stats.ready,
+            total: stats.total,
+          }));
           if (stats.failed > 0) {
-            parts.push(`Errors: ${stats.failed}`);
+            parts.push(tt('dialog.archive.meta.errors', 'Errors: {count}', { count: stats.failed }));
           }
         }
         versionMeta.textContent = parts.join(' | ');
@@ -758,7 +796,7 @@ export const createArchiveTemplateUi = (deps = {}) => {
           selectedVersionValue = '';
           selectedVersionDate = '';
           selectedVersionLabel = '';
-          versionValue.textContent = 'No date';
+          versionValue.textContent = tt('dialog.archive.noDate', 'No date');
           syncVersionMetaText();
           return null;
         }
@@ -828,7 +866,7 @@ export const createArchiveTemplateUi = (deps = {}) => {
           canvas = new OffscreenCanvas(previewDimensions.width, previewDimensions.height);
           context = canvas.getContext('2d');
           if (!context) {
-            throw new Error('Could not initialize preview canvas.');
+            throw new Error(tt('dialog.archive.error.previewCanvas', 'Could not initialize preview canvas.'));
           }
           context.imageSmoothingEnabled = false;
           context.clearRect(0, 0, previewDimensions.width, previewDimensions.height);
@@ -906,28 +944,35 @@ export const createArchiveTemplateUi = (deps = {}) => {
         previewImageCanvas.height = entry.height;
         const context = previewImageCanvas.getContext('2d');
         if (!context) {
-          drawPreviewPlaceholder('Preview unavailable');
+          drawPreviewPlaceholder(tt('dialog.common.previewUnavailable', 'Preview unavailable'));
           return false;
         }
         context.imageSmoothingEnabled = false;
         context.clearRect(0, 0, entry.width, entry.height);
         context.drawImage(entry.canvas, 0, 0);
         previewHasImage = true;
-        previewPlaceholderMessage = 'Loading preview...';
+        previewPlaceholderMessage = tt('dialog.common.loadingPreview', 'Loading preview...');
         queuePreviewViewportDraw();
         return true;
       };
       const updateSelectedPreviewFromCache = (forceStatus = false) => {
         syncVersionMetaText();
         if (!selectedVersionValue) {
-          drawPreviewPlaceholder('No archive date available');
+          drawPreviewPlaceholder(tt('dialog.archive.noDateAvailable', 'No archive date available'));
           updateActionState();
           return;
         }
         if (!previewSupported) {
-          drawPreviewPlaceholder('Preview skipped for large range');
+          drawPreviewPlaceholder(tt('dialog.archive.preview.skippedLarge', 'Preview skipped for large range'));
           setPreviewStatus(
-            `Preview skipped (${numberFmt.format(rect.tileCount)} tiles > ${numberFmt.format(TEMPLATE_ARCHIVE_PREVIEW_MAX_TILE_REQUESTS)} limit). You can still create the template.`,
+            tt(
+              'dialog.archive.preview.skippedStatus',
+              'Preview skipped ({tiles} tiles > {limit} limit). You can still create the template.',
+              {
+                tiles: numberFmt.format(rect.tileCount),
+                limit: numberFmt.format(TEMPLATE_ARCHIVE_PREVIEW_MAX_TILE_REQUESTS),
+              }
+            ),
             false,
             forceStatus
           );
@@ -936,15 +981,24 @@ export const createArchiveTemplateUi = (deps = {}) => {
         }
         const entry = previewEntries.get(selectedVersionValue) || null;
         if (!entry) {
-          drawPreviewPlaceholder('Loading preview...');
-          setPreviewStatus(`Loading preview for ${selectedVersionLabel || selectedVersionValue}...`, false, forceStatus);
+          drawPreviewPlaceholder(tt('dialog.common.loadingPreview', 'Loading preview...'));
+          setPreviewStatus(
+            tt('dialog.archive.preview.loadingFor', 'Loading preview for {label}...', {
+              label: selectedVersionLabel || selectedVersionValue,
+            }),
+            false,
+            forceStatus
+          );
           updateActionState();
           return;
         }
         if (entry.status === 'error') {
-          drawPreviewPlaceholder('Preview failed');
+          drawPreviewPlaceholder(tt('dialog.archive.preview.failed', 'Preview failed'));
           setPreviewStatus(
-            `Preview failed for ${selectedVersionLabel || selectedVersionValue}: ${entry.error?.message || entry.error}`,
+            tt('dialog.archive.preview.failedStatus', 'Preview failed for {label}: {error}', {
+              label: selectedVersionLabel || selectedVersionValue,
+              error: entry.error?.message || entry.error,
+            }),
             true,
             forceStatus
           );
@@ -952,17 +1006,24 @@ export const createArchiveTemplateUi = (deps = {}) => {
           return;
         }
         if (!copyPreviewEntryToCanvas(entry)) {
-          drawPreviewPlaceholder('Loading preview...');
+          drawPreviewPlaceholder(tt('dialog.common.loadingPreview', 'Loading preview...'));
         }
         if (entry.status === 'ready') {
           setPreviewStatus(
-            `Preview ready: ${numberFmt.format(entry.width)} x ${numberFmt.format(entry.height)} px`,
+            tt('dialog.archive.preview.ready', 'Preview ready: {width} x {height} px', {
+              width: numberFmt.format(entry.width),
+              height: numberFmt.format(entry.height),
+            }),
             false,
             forceStatus
           );
         } else {
           setPreviewStatus(
-            `Loading preview for ${selectedVersionLabel || selectedVersionValue}... ${numberFmt.format(entry.completedTiles)} / ${numberFmt.format(entry.totalTiles)} tiles`,
+            tt('dialog.archive.preview.loadingProgress', 'Loading preview for {label}... {done} / {total} tiles', {
+              label: selectedVersionLabel || selectedVersionValue,
+              done: numberFmt.format(entry.completedTiles),
+              total: numberFmt.format(entry.totalTiles),
+            }),
             false,
             forceStatus
           );
@@ -1088,6 +1149,7 @@ export const createArchiveTemplateUi = (deps = {}) => {
         versionRange.disabled = busy || loadingVersions || !archiveVersions.length;
         refreshBtn.disabled = busy || loadingVersions;
         createBtn.disabled = busy || !hasVersion || !supportsCreate;
+        createDownloadBtn.disabled = busy || !hasVersion || !supportsCreate;
       };
       const close = (result = null) => {
         if (closed) return;
@@ -1115,12 +1177,18 @@ export const createArchiveTemplateUi = (deps = {}) => {
       const loadVersions = async (force = false) => {
         loadingVersions = true;
         updateActionState();
-        setStatus('Loading archive versions...');
+        setStatus(tt('dialog.archive.status.loadingVersions', 'Loading archive versions...'), false, 'versions');
         try {
           const versions = await fetchArchiveTemplateVersions(archiveBaseUrl, force);
           const preferred = String(selectedVersionValue || '').trim();
           populateVersionTimeline(versions, preferred);
-          setStatus(`Loaded ${numberFmt.format(versions.length)} archive versions.`);
+          setStatus(
+            tt('dialog.archive.status.loadedVersions', 'Loaded {count} archive versions.', {
+              count: numberFmt.format(versions.length),
+            }),
+            false,
+            'versions'
+          );
           startPreviewPrefetch();
         } catch (error) {
           resetPreviewEntries();
@@ -1133,33 +1201,45 @@ export const createArchiveTemplateUi = (deps = {}) => {
           versionRange.step = '1';
           versionRange.value = '0';
           versionRange.disabled = true;
-          versionValue.textContent = 'Unavailable';
+          versionValue.textContent = tt('dialog.archive.unavailable', 'Unavailable');
           syncVersionMetaText();
-          drawPreviewPlaceholder('No versions loaded');
-          setStatus(`Failed to load archive versions: ${error?.message || error}`, true);
+          drawPreviewPlaceholder(tt('dialog.archive.noVersionsLoaded', 'No versions loaded'));
+          setStatus(
+            tt('dialog.archive.status.failedVersions', 'Failed to load archive versions: {error}', {
+              error: error?.message || error,
+            }),
+            true,
+            'versions'
+          );
         } finally {
           loadingVersions = false;
           updateActionState();
         }
       };
 
-      const createArchiveTemplate = async () => {
+      const createArchiveTemplate = async (downloadAfterCreate = false) => {
         const selectedEntry = syncSelectedVersionFromTimeline();
         const archiveVersion = String(selectedEntry?.version || '').trim();
         if (!archiveVersion) {
-          setStatus('Select an archive date first.', true);
+          setStatus(tt('dialog.archive.status.selectDateFirst', 'Select an archive date first.'), true, 'general');
           return;
         }
         if (!supportsCreate) {
-          setStatus('Selection is too large for this browser to build a template image.', true);
+          setStatus(tt('dialog.archive.status.tooLarge', 'Selection is too large for this browser to build a template image.'), true, 'general');
           return;
         }
         previewPrefetchSuspended = true;
         wakePreviewWorkers();
         busy = true;
         updateActionState();
-        setStatus(`Building archive snapshot (${numberFmt.format(rect.tileCount)} tiles)...`);
-        setProgress(0, rect.tileCount, 'Create: ');
+        setStatus(
+          tt('dialog.archive.status.building', 'Building archive snapshot ({tiles} tiles)...', {
+            tiles: numberFmt.format(rect.tileCount),
+          }),
+          false,
+          'general'
+        );
+        setProgress(0, rect.tileCount, `${tt('dialog.archive.createProgress', 'Create')}: `);
         const centerCoords = getArchiveRectCenterCoords(rect);
         const regionNamePromise = fetchArchiveRegionName(centerCoords).catch((error) => {
           consoleWarn('Failed to resolve archive region name for template.', error);
@@ -1169,14 +1249,14 @@ export const createArchiveTemplateUi = (deps = {}) => {
         try {
           const context = resultCanvas.getContext('2d');
           if (!context) {
-            throw new Error('Failed to initialize template canvas.');
+            throw new Error(tt('dialog.archive.error.templateCanvas', 'Failed to initialize template canvas.'));
           }
           context.imageSmoothingEnabled = false;
           context.clearRect(0, 0, rect.width, rect.height);
           await iterateArchiveTemplateTiles(rect, {
             archiveVersion,
             archiveBaseUrl,
-            onProgress: (done, total) => setProgress(done, total, 'Create: '),
+            onProgress: (done, total) => setProgress(done, total, `${tt('dialog.archive.createProgress', 'Create')}: `),
             onTile: ({ image, tx, ty }) => {
               context.drawImage(
                 image,
@@ -1233,21 +1313,68 @@ export const createArchiveTemplateUi = (deps = {}) => {
               await templateManager.deleteTemplate(targetTemplateStorageKey);
             } catch (_) {}
           }
-          activeOverlay?.handleDisplayStatus(
-            isUpdateMode
-              ? `Updated "${templateName}" to archive ${selectedVersionDate || archiveVersion}.`
-              : `Archive template created from ${templateName}.`
-          );
+          const shouldDownloadAfterCreate = downloadAfterCreate && typeof downloadTemplateImageBlob === 'function';
+          let downloadResult = null;
+          let downloadError = null;
+          if (downloadAfterCreate && !shouldDownloadAfterCreate) {
+            downloadError = new Error(tt('dialog.archive.downloadHelperUnavailable', 'Template image download helper is unavailable.'));
+          } else if (shouldDownloadAfterCreate) {
+            try {
+              downloadResult = await downloadTemplateImageBlob(blob, templateName);
+            } catch (error) {
+              downloadError = error;
+              consoleWarn('Failed to download archive template image after creation.', error);
+            }
+          }
+          if (downloadError) {
+            activeOverlay?.handleDisplayError(
+              tt('dialog.archive.overlay.downloadFailed', 'Template created, but download failed: {error}', {
+                error: downloadError?.message || downloadError,
+              })
+            );
+          } else {
+            activeOverlay?.handleDisplayStatus(
+              shouldDownloadAfterCreate
+                ? (
+                  isUpdateMode
+                    ? tt('dialog.archive.overlay.updatedDownloaded', 'Updated "{name}" and downloaded {file}.', {
+                        name: templateName,
+                        file: downloadResult?.fileName || tt('dialog.archive.image', 'image'),
+                      })
+                    : tt('dialog.archive.overlay.createdDownloaded', 'Archive template created from {name} and image downloaded.', {
+                        name: templateName,
+                      })
+                )
+                : (
+                  isUpdateMode
+                    ? tt('dialog.archive.overlay.updated', 'Updated "{name}" to archive {archive}.', {
+                        name: templateName,
+                        archive: selectedVersionDate || archiveVersion,
+                      })
+                    : tt('dialog.archive.overlay.created', 'Archive template created from {name}.', {
+                        name: templateName,
+                      })
+                )
+            );
+          }
           close({
             created: true,
             updated: isUpdateMode,
             storageKey: createdTemplate?.storageKey || '',
             archiveVersion,
             archiveDate: selectedVersionDate,
+            downloaded: Boolean(downloadResult),
+            downloadFileName: downloadResult?.fileName || '',
           });
         } catch (error) {
           consoleWarn('Failed to create archive template from selected range.', error);
-          setStatus(`Template creation failed: ${error?.message || error}`, true);
+          setStatus(
+            tt('dialog.archive.status.createFailed', 'Template creation failed: {error}', {
+              error: error?.message || error,
+            }),
+            true,
+            'general'
+          );
         } finally {
           cleanUpCanvas(resultCanvas);
           resultCanvas = null;
@@ -1287,7 +1414,10 @@ export const createArchiveTemplateUi = (deps = {}) => {
         handleSelectedVersionChange(true);
       });
       createBtn.addEventListener('click', () => {
-        void createArchiveTemplate();
+        void createArchiveTemplate(false);
+      });
+      createDownloadBtn.addEventListener('click', () => {
+        void createArchiveTemplate(true);
       });
       backdrop.addEventListener('click', (event) => {
         if (event.target === backdrop && !busy) {
@@ -1341,13 +1471,21 @@ export const createArchiveTemplateUi = (deps = {}) => {
 
       if (!supportsCreate) {
         setStatus(
-          `Selection ${numberFmt.format(rect.width)} x ${numberFmt.format(rect.height)} is too large for template creation in this browser.`,
-          true
+          tt(
+            'dialog.archive.status.selectionTooLarge',
+            'Selection {width} x {height} is too large for template creation in this browser.',
+            {
+              width: numberFmt.format(rect.width),
+              height: numberFmt.format(rect.height),
+            }
+          ),
+          true,
+          'general'
         );
-        drawPreviewPlaceholder('Selection too large for create');
+        drawPreviewPlaceholder(tt('dialog.archive.preview.tooLarge', 'Selection too large for create'));
       } else {
-        setStatus('Loading archive versions...');
-        drawPreviewPlaceholder('Loading preview...');
+        setStatus(tt('dialog.archive.status.loadingVersions', 'Loading archive versions...'), false, 'versions');
+        drawPreviewPlaceholder(tt('dialog.common.loadingPreview', 'Loading preview...'));
       }
       updateActionState();
       syncPreviewControls();
@@ -1394,11 +1532,11 @@ export const createArchiveTemplateUi = (deps = {}) => {
     headingRow.style.gap = '8px';
     const title = document.createElement('strong');
     title.dataset.role = 'title';
-    title.textContent = 'Time-archive capture';
+    title.textContent = tt('dialog.archive.capture.title', 'Time-archive capture');
     title.style.fontSize = '12px';
     const closeBtn = document.createElement('button');
     closeBtn.type = 'button';
-    closeBtn.textContent = 'Cancel';
+    closeBtn.textContent = tt('dialog.common.cancel', 'Cancel');
     closeBtn.style.marginLeft = 'auto';
     closeBtn.style.border = '1px solid var(--bm-border, rgba(255, 255, 255, 0.22))';
     closeBtn.style.borderRadius = '6px';
@@ -1406,7 +1544,7 @@ export const createArchiveTemplateUi = (deps = {}) => {
     closeBtn.style.color = 'var(--bm-btn-text, #fff)';
     closeBtn.style.padding = '1px 8px';
     closeBtn.addEventListener('click', () => {
-      cancelArchiveTemplatePointCapture('Time-archive point capture cancelled.');
+      cancelArchiveTemplatePointCapture(tt('dialog.archive.capture.cancelled', 'Time-archive point capture cancelled.'));
     });
     headingRow.appendChild(title);
     headingRow.appendChild(closeBtn);
@@ -1415,13 +1553,13 @@ export const createArchiveTemplateUi = (deps = {}) => {
     const body = document.createElement('div');
     body.dataset.role = 'body';
     body.style.whiteSpace = 'pre-line';
-    body.textContent = 'Click two points on the map.';
+    body.textContent = tt('dialog.archive.capture.clickTwoPoints', 'Click two points on the map.');
     hint.appendChild(body);
 
     const tip = document.createElement('div');
     tip.style.fontSize = '11px';
     tip.style.color = 'var(--bm-muted)';
-    tip.textContent = 'Tip: press Esc to cancel capture.';
+    tip.textContent = tt('dialog.archive.capture.tip', 'Tip: press Esc to cancel capture.');
     hint.appendChild(tip);
 
     document.body.appendChild(hint);
@@ -1439,14 +1577,23 @@ export const createArchiveTemplateUi = (deps = {}) => {
     const body = hint.querySelector('[data-role="body"]');
     const pointCount = archiveTemplatePointCaptureState.points.length;
     if (title) {
-      title.textContent = pointCount > 0 ? 'Time-archive capture (2/2)' : 'Time-archive capture (1/2)';
+      title.textContent = pointCount > 0
+        ? tt('dialog.archive.capture.titleStep2', 'Time-archive capture (2/2)')
+        : tt('dialog.archive.capture.titleStep1', 'Time-archive capture (1/2)');
     }
     if (body) {
       if (pointCount > 0) {
         const firstText = formatTilePixelCoords(archiveTemplatePointCaptureState.points[0]);
-        body.textContent = `First point saved:\n${firstText}\nNow click the second point on the map (opposite corner).`;
+        body.textContent = tt(
+          'dialog.archive.capture.firstSaved',
+          'First point saved:\n{coords}\nNow click the second point on the map (opposite corner).',
+          { coords: firstText }
+        );
       } else {
-        body.textContent = 'Click the first point on the map.\nUsually start with the top-left corner.';
+        body.textContent = tt(
+          'dialog.archive.capture.firstPrompt',
+          'Click the first point on the map.\nUsually start with the top-left corner.'
+        );
       }
     }
   };
@@ -1480,7 +1627,12 @@ export const createArchiveTemplateUi = (deps = {}) => {
     archiveTemplatePointCaptureState.lastCoordsKey = '';
     archiveTemplatePointCaptureState.lastCoordsAt = 0;
     updateArchiveTemplatePointCaptureHint();
-    activeOverlay?.handleDisplayStatus('Time-archive template mode: click first point on the map, then click second point.');
+    activeOverlay?.handleDisplayStatus(
+      tt(
+        'dialog.archive.capture.mode',
+        'Time-archive template mode: click first point on the map, then click second point.'
+      )
+    );
   };
 
   /**
@@ -1507,15 +1659,23 @@ export const createArchiveTemplateUi = (deps = {}) => {
     archiveTemplatePointCaptureState.points.push(coords);
     updateArchiveTemplatePointCaptureHint();
     if (archiveTemplatePointCaptureState.points.length === 1) {
-      activeOverlay?.handleDisplayStatus(`First point captured: ${formatTilePixelCoords(coords)}. Click the second point.`);
+      activeOverlay?.handleDisplayStatus(
+        tt('dialog.archive.capture.firstCaptured', 'First point captured: {coords}. Click the second point.', {
+          coords: formatTilePixelCoords(coords),
+        })
+      );
       return;
     }
     const [firstPoint, secondPoint] = archiveTemplatePointCaptureState.points;
     cancelArchiveTemplatePointCapture('');
-    activeOverlay?.handleDisplayStatus(`Second point captured: ${formatTilePixelCoords(secondPoint)}. Opening archive template window...`);
+    activeOverlay?.handleDisplayStatus(
+      tt('dialog.archive.capture.secondCaptured', 'Second point captured: {coords}. Opening archive template window...', {
+        coords: formatTilePixelCoords(secondPoint),
+      })
+    );
     void openArchiveTemplateBuilder({ firstPoint, secondPoint, overlayInstance: activeOverlay }).catch((error) => {
       consoleWarn('Failed to open archive template builder window.', error);
-      activeOverlay?.handleDisplayError('Could not open archive template window.');
+      activeOverlay?.handleDisplayError(tt('dialog.archive.capture.openFailed', 'Could not open archive template window.'));
     });
   };
 
@@ -1523,7 +1683,7 @@ export const createArchiveTemplateUi = (deps = {}) => {
     if (event.key !== 'Escape') return;
     if (!archiveTemplatePointCaptureState.active) return;
     event.preventDefault();
-    cancelArchiveTemplatePointCapture('Time-archive point capture cancelled.');
+    cancelArchiveTemplatePointCapture(tt('dialog.archive.capture.cancelled', 'Time-archive point capture cancelled.'));
   });
 
   return {
