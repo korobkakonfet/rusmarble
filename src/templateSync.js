@@ -82,7 +82,6 @@ export function createTemplateSync({
   autoSyncSyncToggleList,
   autoSyncBuildTemplateFilterList,
   autoSyncBuildColorFilterList,
-  requestProgressRefresh,
 } = {}) {
   const logSync = (message, options = {}) => {
     const { level = 'log', statusHandler = autoSyncOnStatus, err = null } = options;
@@ -233,7 +232,15 @@ export function createTemplateSync({
         '',
         templateName
       );
-      await templateManager.deleteTemplate(template.storageKey);
+      await templateManager.deleteTemplate(template.storageKey, {
+        deferPersist: true,
+        deferListRebuild: true,
+        suppressStatus: true,
+      });
+    }
+    if (missing.length) {
+      await templateManager.storeTemplates();
+      templateManager.requestListRebuild?.();
     }
   };
 
@@ -720,13 +727,6 @@ export function createTemplateSync({
         entryMeta,
         statusHandler,
       });
-
-      for (const template of matchingRemoteTemplates) {
-        if (template?.storageKey) {
-          await templateManager.deleteTemplate(template.storageKey);
-        }
-      }
-
       const created = await templateManager.createTemplate(
         payload.file,
         trimmedName,
@@ -746,22 +746,41 @@ export function createTemplateSync({
           remoteHighlightedAt: payload.highlightedAt,
           remoteOrder: payload.order,
           enabled: preferredTemplate ? existingEnabled : defaultEnabled,
-          normalizeRemotePalette: true,
+          deferPersist: true,
+          deferListRebuild: true,
+          deferOverlayRefresh: true,
+          suppressStatus: true,
         }
       );
+      const createdStore = created?.storageKey
+        ? templateManager.templatesJSON?.templates?.[created.storageKey]
+        : null;
       if (created && existingPalette) {
         Object.entries(existingPalette).forEach(([rgb, metaValue]) => {
           if (created.colorPalette?.[rgb]) {
             created.colorPalette[rgb].enabled = !!metaValue?.enabled;
           }
         });
+        if (createdStore) {
+          createdStore.palette = created.colorPalette;
+        }
+      }
+
+      for (const template of matchingRemoteTemplates) {
+        if (template?.storageKey) {
+          await templateManager.deleteTemplate(template.storageKey, {
+            deferPersist: true,
+            deferListRebuild: true,
+            suppressStatus: true,
+          });
+        }
       }
       if (refreshUi) {
+        await templateManager.storeTemplates();
         safeCall(syncToggleList);
-        templateManager.createOverlayOnMap();
+        templateManager.createOverlayOnMapVisibleOnly(created?.sortID ?? null);
         safeCall(buildTemplateFilterListOverride ?? buildTemplateFilterList);
         safeCall(buildColorFilterListOverride ?? autoSyncBuildColorFilterList);
-        safeCall(requestProgressRefresh);
         resetTemplateUpdateBadge();
         checkTemplateUpdates();
       }
@@ -826,15 +845,12 @@ export function createTemplateSync({
         templateManager.getAnchor(),
         {
           enabled: defaultEnabled,
-          normalizeRemotePalette: true,
         }
       );
       if (refreshUi) {
         safeCall(syncToggleList);
-        templateManager.createOverlayOnMap();
         safeCall(buildTemplateFilterListOverride ?? buildTemplateFilterList);
         safeCall(buildColorFilterListOverride ?? autoSyncBuildColorFilterList);
-        safeCall(requestProgressRefresh);
       }
       if (typeof statusHandler === 'function') {
         statusHandler(`Imported "${trimmedName}" from stream "${payload.normalizedStream}" as a local template.`);
@@ -898,11 +914,13 @@ export function createTemplateSync({
         logSync('No server templates found.', { statusHandler });
         return 0;
       }
-      safeCall(syncToggleList);
-      templateManager.createOverlayOnMap();
-      safeCall(buildTemplateFilterListOverride ?? buildTemplateFilterList);
-      safeCall(buildColorFilterListOverride);
-      safeCall(requestProgressRefresh);
+      if (importedCount > 0) {
+        await templateManager.storeTemplates();
+        safeCall(syncToggleList);
+        templateManager.createOverlayOnMapVisibleOnly();
+        safeCall(buildTemplateFilterListOverride ?? buildTemplateFilterList);
+        safeCall(buildColorFilterListOverride ?? autoSyncBuildColorFilterList);
+      }
       if (typeof statusHandler === 'function') {
         statusHandler(`Synced ${importedCount} template${importedCount === 1 ? '' : 's'}.`);
       }

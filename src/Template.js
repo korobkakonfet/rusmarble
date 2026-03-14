@@ -1,4 +1,15 @@
-import { uint8ToBase64, cleanUpCanvas, rgbToMeta, colorpalette, testCanvasSize, createBitmapPreservingPixels, normalizeTemplateColorKey } from "./utils";
+import { uint8ToBase64, base64ToUint8, cleanUpCanvas, rgbToMeta, colorpalette, testCanvasSize, createBitmapPreservingPixels } from "./utils";
+import {
+  buildMaskRowSpans,
+  createChunkSampleData,
+  encodeChunkSampleData,
+  decodeChunkSampleBuffer,
+  inspectSourceImagePalette,
+  createPaletteStatsAccumulator,
+  finalizePaletteStatsAccumulator,
+  buildChunkSampleDataFromSource,
+  renderSampleDataToImage,
+} from "./templateChunkUtils.js";
 
 const clampByte = (value) => Math.max(0, Math.min(255, Math.round(Number(value) || 0)));
 const clampUnit = (value) => Math.max(0, Math.min(1, Number(value) || 0));
@@ -338,12 +349,13 @@ export default class Template {
     coords = null,
     chunked = null,
     chunkedBuffer = null,
+    chunkedSamples = null,
+    chunkedSamplesBuffer = null,
     tileSize = 1000,
     imageWidth = null,
     imageHeight = null,
     forcePaletteConversion = false,
     paletteConversionOptions = null,
-    nearPaletteSnapDelta = 0,
   } = {}) {
     this.displayName = displayName;
     this.sortID = sortID;
@@ -353,12 +365,13 @@ export default class Template {
     this.coords = coords;
     this.chunked = chunked; // tileKey => ImageBitmap, null if memory saving
     this.chunkedBuffer = chunkedBuffer;
+    this.chunkedSamples = chunkedSamples || {};
+    this.chunkedSamplesBuffer = chunkedSamplesBuffer || {};
     this.tileSize = tileSize;
     this.imageWidth = Number.isFinite(Number(imageWidth)) ? Math.max(1, Math.trunc(Number(imageWidth))) : null;
     this.imageHeight = Number.isFinite(Number(imageHeight)) ? Math.max(1, Math.trunc(Number(imageHeight))) : null;
     this.forcePaletteConversion = Boolean(forcePaletteConversion);
     this.paletteConversionOptions = normalizeTemplatePaletteConversionOptions(paletteConversionOptions || templatePaletteConversionDefaults);
-    this.nearPaletteSnapDelta = Math.max(0, Math.trunc(Number(nearPaletteSnapDelta) || 0));
     this.enabled = true;
     this.pixelCount = 0; // Total pixel count in template
     this.requiredPixelCount = 0; // Total number of non-transparent, non-#deface pixels
@@ -375,8 +388,6 @@ export default class Template {
 
     // Map rgb-> {id, premium}
     // this.rgbToMeta = rgbToMeta;
-
-    console.log('Allowed colors for template:', new Set(rgbToMeta.keys()));
 
     this.shreadSize = null; // Scale image factor, same as TemplateManager's drawMult
   }
@@ -436,55 +447,6 @@ export default class Template {
     return convertedBitmap;
   }
 
-  async normalizeBitmapNearPalette(bitmap, fallbackToNearest = false) {
-    if (!(bitmap instanceof ImageBitmap) || this.nearPaletteSnapDelta < 1) {
-      return bitmap;
-    }
-    let normalizationCanvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-    const normalizationCtx = normalizationCanvas.getContext('2d', { willReadFrequently: true });
-    if (!normalizationCtx) {
-      cleanUpCanvas(normalizationCanvas);
-      normalizationCanvas = null;
-      return bitmap;
-    }
-    normalizationCtx.imageSmoothingEnabled = false;
-    normalizationCtx.clearRect(0, 0, bitmap.width, bitmap.height);
-    normalizationCtx.drawImage(bitmap, 0, 0);
-    const normalizedImage = normalizationCtx.getImageData(0, 0, bitmap.width, bitmap.height);
-    const data = normalizedImage.data;
-    let changed = false;
-
-    for (let i = 0; i < data.length; i += 4) {
-      if (data[i + 3] < 64) continue;
-      const normalizedKey = normalizeTemplateColorKey(
-        data[i],
-        data[i + 1],
-        data[i + 2],
-        this.nearPaletteSnapDelta,
-        fallbackToNearest,
-      );
-      if (!normalizedKey || normalizedKey === `${data[i]},${data[i + 1]},${data[i + 2]}`) continue;
-      const [nextR, nextG, nextB] = normalizedKey.split(',').map(Number);
-      data[i] = nextR;
-      data[i + 1] = nextG;
-      data[i + 2] = nextB;
-      changed = true;
-    }
-
-    if (!changed) {
-      cleanUpCanvas(normalizationCanvas);
-      normalizationCanvas = null;
-      return bitmap;
-    }
-
-    normalizationCtx.putImageData(normalizedImage, 0, 0);
-    const normalizedBitmap = await createBitmapPreservingPixels(normalizationCanvas);
-    bitmap.close?.();
-    cleanUpCanvas(normalizationCanvas);
-    normalizationCanvas = null;
-    return normalizedBitmap;
-  }
-
   inspectBitmapPalette(bitmap) {
     if (!(bitmap instanceof ImageBitmap)) {
       return null;
@@ -504,28 +466,139 @@ export default class Template {
     cleanUpCanvas(inspectCanvas);
     inspectCanvas = null;
 
-    let required = 0;
-    let deface = 0;
-    const paletteMap = new Map();
-    for (let y = 0; y < bitmap.height; y++) {
-      for (let x = 0; x < bitmap.width; x++) {
-        const idx = (y * bitmap.width + x) * 4;
-        const r = inspectData[idx];
-        const g = inspectData[idx + 1];
-        const b = inspectData[idx + 2];
-        const a = inspectData[idx + 3];
-        if (a < 64) { continue; }
-        if (r === 222 && g === 250 && b === 206) {
-          deface++;
-          continue;
+    return inspectSourceImagePalette(inspectData, bitmap.width, bitmap.height);
+  }
+
+  getChunkKeys() {
+    const keys = new Set();
+    const sources = [
+      this.chunked,
+      this.chunkedBuffer,
+      this.chunkedSamples,
+      this.chunkedSamplesBuffer,
+    ];
+    for (const source of sources) {
+      if (!source || typeof source !== 'object') continue;
+      Object.keys(source).forEach((key) => keys.add(key));
+    }
+    return [...keys];
+  }
+
+  hasNativeChunkSamples(tileKey) {
+    if (this.chunkedSamples?.[tileKey]?.native === true) {
+      return true;
+    }
+    return !!(this.chunkedSamplesBuffer && Object.prototype.hasOwnProperty.call(this.chunkedSamplesBuffer, tileKey));
+  }
+
+  getChunkBufferBytes(tileKey) {
+    if (!this.chunkedBuffer || !Object.prototype.hasOwnProperty.call(this.chunkedBuffer, tileKey)) {
+      return null;
+    }
+    const value = this.chunkedBuffer[tileKey];
+    if (value instanceof Uint8Array) {
+      return value;
+    }
+    if (typeof value === 'string') {
+      const bytes = base64ToUint8(value);
+      this.chunkedBuffer[tileKey] = bytes;
+      return bytes;
+    }
+    return null;
+  }
+
+  decodeStoredChunkSamples(tileKey) {
+    if (this.chunkedSamples?.[tileKey]) {
+      return this.chunkedSamples[tileKey];
+    }
+    if (!this.chunkedSamplesBuffer || !Object.prototype.hasOwnProperty.call(this.chunkedSamplesBuffer, tileKey)) {
+      return null;
+    }
+    const decoded = decodeChunkSampleBuffer(this.chunkedSamplesBuffer[tileKey]);
+    if (!decoded) {
+      return null;
+    }
+    decoded.native = true;
+    this.chunkedSamples[tileKey] = decoded;
+    return decoded;
+  }
+
+  extractChunkSamplesFromBitmap(bitmap) {
+    if (!(bitmap instanceof ImageBitmap)) {
+      return null;
+    }
+    const shreadSize = Math.max(1, Math.trunc(Number(this.shreadSize) || 1));
+    const logicalWidth = Math.max(1, Math.round(bitmap.width / shreadSize));
+    const logicalHeight = Math.max(1, Math.round(bitmap.height / shreadSize));
+
+    let sampleCanvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const sampleContext = sampleCanvas.getContext('2d', { willReadFrequently: true });
+    if (!sampleContext) {
+      cleanUpCanvas(sampleCanvas);
+      sampleCanvas = null;
+      return null;
+    }
+    sampleContext.imageSmoothingEnabled = false;
+    sampleContext.clearRect(0, 0, bitmap.width, bitmap.height);
+    sampleContext.drawImage(bitmap, 0, 0);
+    const imageData = sampleContext.getImageData(0, 0, bitmap.width, bitmap.height).data;
+    cleanUpCanvas(sampleCanvas);
+    sampleCanvas = null;
+
+    const center = (shreadSize - 1) >> 1;
+    let count = 0;
+    for (let y = 0, sampleY = center; y < logicalHeight; y++, sampleY += shreadSize) {
+      for (let x = 0, sampleX = center; x < logicalWidth; x++, sampleX += shreadSize) {
+        const idx = (sampleY * bitmap.width + sampleX) * 4;
+        if ((imageData[idx + 3] || 0) > 0) {
+          count++;
         }
-        const key = rgbToMeta.has(`${r},${g},${b}`) ? `${r},${g},${b}` : 'other';
-        required++;
-        paletteMap.set(key, (paletteMap.get(key) || 0) + 1);
       }
     }
+    const sampleData = createChunkSampleData(logicalWidth, logicalHeight, count, false);
+    let writeIndex = 0;
+    for (let y = 0, sampleY = center; y < logicalHeight; y++, sampleY += shreadSize) {
+      for (let x = 0, sampleX = center; x < logicalWidth; x++, sampleX += shreadSize) {
+        const idx = (sampleY * bitmap.width + sampleX) * 4;
+        const alpha = imageData[idx + 3] || 0;
+        if (alpha <= 0) continue;
+        sampleData.x[writeIndex] = x;
+        sampleData.y[writeIndex] = y;
+        sampleData.r[writeIndex] = imageData[idx];
+        sampleData.g[writeIndex] = imageData[idx + 1];
+        sampleData.b[writeIndex] = imageData[idx + 2];
+        sampleData.a[writeIndex] = alpha;
+        sampleData.flags[writeIndex] = 0;
+        writeIndex++;
+      }
+    }
+    return sampleData;
+  }
 
-    return { required, deface, paletteMap };
+  async getChunkSamples(tileKey, options = {}) {
+    const stored = this.decodeStoredChunkSamples(tileKey);
+    if (stored) {
+      return stored;
+    }
+    if (this.chunkedSamples?.[tileKey]) {
+      return this.chunkedSamples[tileKey];
+    }
+    if (options?.allowBitmapFallback === false) {
+      return null;
+    }
+    const memorySaving = options?.memorySaving === true;
+    const bitmap = await this.getChunked(tileKey, memorySaving);
+    if (!(bitmap instanceof ImageBitmap)) {
+      return null;
+    }
+    const sampleData = this.extractChunkSamplesFromBitmap(bitmap);
+    if (sampleData) {
+      this.chunkedSamples[tileKey] = sampleData;
+    }
+    if (memorySaving) {
+      bitmap.close?.();
+    }
+    return sampleData;
   }
 
   /** Creates chunks of the template for each tile.
@@ -533,20 +606,19 @@ export default class Template {
    * @returns {Object} Collection of template bitmaps & buffers organized by tile coordinates
    * @since 0.65.4
    */
-  async createTemplateTiles(anchor) {
-    console.log('Template coordinates:', this.coords);
-
+  async createTemplateTiles(anchor, options = {}) {
     if (this.shreadSize === null) {
       // initialize shreadSize (usually already assigned by the template manager)
       this.shreadSize = testCanvasSize(5000, 5000) ? 5 : 4; // Scale image factor for pixel art enhancement (must be odd)
     }
     const shreadSize = this.shreadSize;
+    const persistBitmapTiles = options?.persistBitmapTiles === true;
+    const keepBitmapTilesInMemory = options?.keepBitmapTilesInMemory !== false;
+    const persistChunkSamples = options?.persistChunkSamples !== false;
+    const keepChunkSamplesInMemory = options?.keepChunkSamplesInMemory !== false;
     let bitmap = this.file instanceof ImageBitmap ? this.file : await createBitmapPreservingPixels(this.file); // Create efficient bitmap from uploaded file
     if (this.forcePaletteConversion) {
       bitmap = await this.convertBitmapToWplacePalette(bitmap);
-    }
-    if (this.nearPaletteSnapDelta > 0) {
-      bitmap = await this.normalizeBitmapNearPalette(bitmap);
     }
     const imageWidth = bitmap.width;
     const imageHeight = bitmap.height;
@@ -576,45 +648,41 @@ export default class Template {
       mapX % this.tileSize,
       mapY % this.tileSize
     ];
-    console.log('Top left template coordinates:', this.coords);
-    
     // Calculate total pixel count using standard width × height formula
     // TODO: Use non-transparent pixels instead of basic width times height
     const totalPixels = imageWidth * imageHeight;
-    console.log(`Template pixel analysis - Dimensions: ${imageWidth}×${imageHeight} = ${totalPixels.toLocaleString()} pixels`);
-    
     // Store pixel count in instance property for access by template manager and UI components
     this.pixelCount = totalPixels;
-
-    // ==================== REQUIRED/DEFACE PIXEL COUNTING ====================
-    // Build a 1x scale canvas to inspect original pixels and count required vs deface.
+    let sourceCanvas = null;
+    let sourceContext = null;
+    let sourceData = null;
+    let paletteStatsAccumulator = null;
     try {
-      let paletteStats = this.inspectBitmapPalette(bitmap);
-      if (this.nearPaletteSnapDelta > 0 && paletteStats?.paletteMap?.has('other')) {
-        bitmap = await this.normalizeBitmapNearPalette(bitmap, true);
-        paletteStats = this.inspectBitmapPalette(bitmap);
+      sourceCanvas = new OffscreenCanvas(imageWidth, imageHeight);
+      sourceContext = sourceCanvas.getContext('2d', { willReadFrequently: true });
+      if (!sourceContext) {
+        throw new Error('Failed to initialize template source canvas.');
       }
-
-      this.requiredPixelCount = paletteStats?.required ?? 0;
-      this.defacePixelCount = paletteStats?.deface ?? 0;
-
-      const paletteObj = {};
-      for (const [key, count] of (paletteStats?.paletteMap ?? new Map()).entries()) {
-        paletteObj[key] = { count, enabled: true };
-      }
-      this.colorPalette = paletteObj;
+      sourceContext.imageSmoothingEnabled = false;
+      sourceContext.clearRect(0, 0, imageWidth, imageHeight);
+      sourceContext.drawImage(bitmap, 0, 0);
+      sourceData = sourceContext.getImageData(0, 0, imageWidth, imageHeight).data;
+      paletteStatsAccumulator = createPaletteStatsAccumulator();
     } catch (err) {
-      // Fail-safe: if OffscreenCanvas not available or any error, fall back to width×height
       this.requiredPixelCount = Math.max(0, this.pixelCount);
       this.defacePixelCount = 0;
       console.warn('Failed to compute required/deface counts. Falling back to total pixels.', err);
     }
 
-    const templateTiles = {}; // Holds the template tiles
-    const templateTilesBuffers = {}; // Holds the buffers of the template tiles
-
-    let canvas = new OffscreenCanvas(this.tileSize, this.tileSize);
-    const context = canvas.getContext('2d', { willReadFrequently: true });
+    const templateTiles = {};
+    const templateTilesBuffers = {};
+    const templateChunkSamples = {};
+    const templateChunkSampleBuffers = {};
+    const templateTileKeys = [];
+    const templateMaskPoints = this.customMaskPoints(shreadSize);
+    const templateMaskRowSpans = buildMaskRowSpans(templateMaskPoints, shreadSize);
+    let canvas = null;
+    let context = null;
 
     // For every tile...
     for (let pixelY = this.coords[3]; pixelY < imageHeight + this.coords[3]; ) {
@@ -628,12 +696,7 @@ export default class Template {
         imageHeight + this.coords[3] - pixelY // bottom y
       );
 
-      console.log(`Math.min(${this.tileSize} - (${pixelY} % ${this.tileSize}), ${imageHeight} - (${pixelY - this.coords[3]}))`);
-
       for (let pixelX = this.coords[2]; pixelX < imageWidth + this.coords[2];) {
-
-        console.log(`Pixel X: ${pixelX}\nPixel Y: ${pixelY}`);
-
         // Draws the partial tile first, if any
         // This calculates the size based on which is smaller:
         // A. The top left corner of the current tile to the bottom right corner of the current tile
@@ -642,82 +705,6 @@ export default class Template {
           this.tileSize - (pixelX % this.tileSize), // remaining x in this tile
           imageWidth + this.coords[2] - pixelX　// right x
         );
-
-        console.log(`Math.min(${this.tileSize} - (${pixelX} % ${this.tileSize}), ${imageWidth} - (${pixelX - this.coords[2]}))`);
-
-        console.log(`Draw Size X: ${drawSizeX}\nDraw Size Y: ${drawSizeY}`);
-
-        // Change the canvas size and wipe the canvas
-        const canvasWidth = drawSizeX * shreadSize;// + (pixelX % this.tileSize) * shreadSize;
-        const canvasHeight = drawSizeY * shreadSize;// + (pixelY % this.tileSize) * shreadSize;
-        canvas.width = canvasWidth;
-        canvas.height = canvasHeight;
-
-        console.log(`Draw X: ${drawSizeX}\nDraw Y: ${drawSizeY}\nCanvas Width: ${canvasWidth}\nCanvas Height: ${canvasHeight}`);
-
-        context.imageSmoothingEnabled = false; // Nearest neighbor
-
-        console.log(`Getting X ${pixelX}-${pixelX + drawSizeX}\nGetting Y ${pixelY}-${pixelY + drawSizeY}`);
-
-        // Draws the template segment on this tile segment
-        context.clearRect(0, 0, canvasWidth, canvasHeight); // Clear any previous drawing (only runs when canvas size does not change)
-        context.drawImage(
-          bitmap, // Bitmap image to draw
-          pixelX - this.coords[2], // Coordinate X to draw from
-          pixelY - this.coords[3], // Coordinate Y to draw from
-          drawSizeX, // X width to draw from
-          drawSizeY, // Y height to draw from
-          0, // Coordinate X to draw at
-          0, // Coordinate Y to draw at
-          drawSizeX * shreadSize, // X width to draw at
-          drawSizeY * shreadSize // Y height to draw at
-        ); // Coordinates and size of draw area of source image, then canvas
-
-        // const final = await canvas.convertToBlob({ type: 'image/png' });
-        // const url = URL.createObjectURL(final); // Creates a blob URL
-        // window.open(url, '_blank'); // Opens a new tab with blob
-        // setTimeout(() => URL.revokeObjectURL(url), 60000); // Destroys the blob 1 minute later
-
-        const imageData = context.getImageData(0, 0, canvasWidth, canvasHeight); // Data of the image on the canvas
-
-        for (let y = 0; y < canvasHeight; y++) {
-          for (let x = 0; x < canvasWidth; x++) {
-            // For every pixel...
-            const pixelIndex = (y * canvasWidth + x) * 4; // Find the pixel index in an array where every 4 indexes are 1 pixel
-            // If the pixel is the color #deface, draw a translucent gray checkerboard pattern
-            if (
-              imageData.data[pixelIndex] === 222 &&
-              imageData.data[pixelIndex + 1] === 250 &&
-              imageData.data[pixelIndex + 2] === 206
-            ) {
-              if ((x + y) % 2 === 0) { // Formula for checkerboard pattern
-                imageData.data[pixelIndex] = 0;
-                imageData.data[pixelIndex + 1] = 0;
-                imageData.data[pixelIndex + 2] = 0;
-              } else {
-                imageData.data[pixelIndex] = 255;
-                imageData.data[pixelIndex + 1] = 255;
-                imageData.data[pixelIndex + 2] = 255;
-              }
-              imageData.data[pixelIndex + 3] = 32; // Make it translucent
-            } else if (!this.customMask(x, y, shreadSize)) { // Otherwise only draw the middle pixel
-              imageData.data[pixelIndex + 3] = 0; // Make the pixel transparent on the alpha channel
-            /* } else {
-              // Center pixel: keep only if in allowed site palette
-              const r = imageData.data[pixelIndex];
-              const g = imageData.data[pixelIndex + 1];
-              const b = imageData.data[pixelIndex + 2];
-              if (!rgbToMeta.has(`${r},${g},${b}`)) {
-                //imageData.data[pixelIndex + 3] = 0; // hide non-palette colors
-              }
-            */
-            }
-          }
-        }
-
-        console.log(`Shreaded pixels for ${pixelX}, ${pixelY}`, imageData);
-
-        context.putImageData(imageData, 0, 0);
 
         // Creates the "0000,0000,000,000" key name
         const templateTileName = `${
@@ -737,30 +724,136 @@ export default class Template {
           .toString()
           .padStart(3, '0')
         }`;
-          
-        templateTiles[templateTileName] = await createBitmapPreservingPixels(canvas); // Creates the bitmap
+        templateTileKeys.push(templateTileName);
+
+        const sourceX = pixelX - this.coords[2];
+        const sourceY = pixelY - this.coords[3];
+        const sampleData = sourceData
+          ? buildChunkSampleDataFromSource(
+            sourceData,
+            imageWidth,
+            sourceX,
+            sourceY,
+            drawSizeX,
+            drawSizeY,
+            paletteStatsAccumulator,
+          )
+          : createChunkSampleData(drawSizeX, drawSizeY, 0, true);
+
+        if (sourceData ? (persistBitmapTiles || keepBitmapTilesInMemory) : true) {
+          if (!canvas) {
+            canvas = new OffscreenCanvas(this.tileSize, this.tileSize);
+            context = canvas.getContext('2d', { willReadFrequently: true });
+            if (!context) {
+              throw new Error('Failed to initialize template chunk canvas.');
+            }
+            context.imageSmoothingEnabled = false;
+          }
+          const canvasWidth = drawSizeX * shreadSize;
+          const canvasHeight = drawSizeY * shreadSize;
+          canvas.width = canvasWidth;
+          canvas.height = canvasHeight;
+          context.imageSmoothingEnabled = false;
+          context.clearRect(0, 0, canvasWidth, canvasHeight);
+          if (sourceData) {
+            const chunkImage = context.createImageData(canvasWidth, canvasHeight);
+            renderSampleDataToImage({
+              sampleData,
+              imageData: chunkImage,
+              resultWidth: canvasWidth,
+              drawSize: shreadSize,
+              maskPoints: templateMaskPoints,
+              maskRowSpans: templateMaskRowSpans,
+              includeDefaceCheckerboard: true,
+            });
+            context.putImageData(chunkImage, 0, 0);
+          } else {
+            context.drawImage(
+              bitmap,
+              pixelX - this.coords[2],
+              pixelY - this.coords[3],
+              drawSizeX,
+              drawSizeY,
+              0,
+              0,
+              drawSizeX * shreadSize,
+              drawSizeY * shreadSize
+            );
+
+            const imageData = context.getImageData(0, 0, canvasWidth, canvasHeight);
+            for (let y = 0; y < canvasHeight; y++) {
+              for (let x = 0; x < canvasWidth; x++) {
+                const pixelIndex = (y * canvasWidth + x) * 4;
+                if (
+                  imageData.data[pixelIndex] === 222 &&
+                  imageData.data[pixelIndex + 1] === 250 &&
+                  imageData.data[pixelIndex + 2] === 206
+                ) {
+                  if ((x + y) % 2 === 0) {
+                    imageData.data[pixelIndex] = 0;
+                    imageData.data[pixelIndex + 1] = 0;
+                    imageData.data[pixelIndex + 2] = 0;
+                  } else {
+                    imageData.data[pixelIndex] = 255;
+                    imageData.data[pixelIndex + 1] = 255;
+                    imageData.data[pixelIndex + 2] = 255;
+                  }
+                  imageData.data[pixelIndex + 3] = 32;
+                } else if (!this.customMask(x, y, shreadSize)) {
+                  imageData.data[pixelIndex + 3] = 0;
+                }
+              }
+            }
+            context.putImageData(imageData, 0, 0);
+          }
+          if (keepBitmapTilesInMemory) {
+            templateTiles[templateTileName] = await createBitmapPreservingPixels(canvas);
+          }
+          if (persistBitmapTiles) {
+            const canvasBlob = await canvas.convertToBlob();
+            const canvasBuffer = await canvasBlob.arrayBuffer();
+            templateTilesBuffers[templateTileName] = uint8ToBase64(new Uint8Array(canvasBuffer));
+          }
+        }
+        if (keepChunkSamplesInMemory) {
+          templateChunkSamples[templateTileName] = sampleData;
+        }
+        if (persistChunkSamples) {
+          templateChunkSampleBuffers[templateTileName] = encodeChunkSampleData(sampleData);
+        }
         // Record tile prefix for fast lookup later
         this.tilePrefixes.add(templateTileName.split(',').slice(0,2).join(','));
-        
-        const canvasBlob = await canvas.convertToBlob();
-        const canvasBuffer = await canvasBlob.arrayBuffer();
-        const canvasBufferBytes = Array.from(new Uint8Array(canvasBuffer));
-        templateTilesBuffers[templateTileName] = uint8ToBase64(canvasBufferBytes); // Stores the buffer
-
-        console.log(templateTiles);
 
         pixelX += drawSizeX;
       }
 
       pixelY += drawSizeY;
     }
+    if (paletteStatsAccumulator) {
+      const paletteStats = finalizePaletteStatsAccumulator(paletteStatsAccumulator);
+      this.requiredPixelCount = paletteStats.required;
+      this.defacePixelCount = paletteStats.deface;
+      const paletteObj = {};
+      for (const [key, count] of (paletteStats.paletteMap ?? new Map()).entries()) {
+        paletteObj[key] = { count, enabled: true };
+      }
+      this.colorPalette = paletteObj;
+    }
     bitmap.close();
-    cleanUpCanvas(canvas);
-    canvas = null;
+    cleanUpCanvas(sourceCanvas);
+    sourceCanvas = null;
+    if (canvas) {
+      cleanUpCanvas(canvas);
+      canvas = null;
+    }
 
-    console.log('Template Tiles: ', templateTiles);
-    console.log('Template Tiles Buffers: ', templateTilesBuffers);
-    return { templateTiles, templateTilesBuffers };
+    return {
+      templateTiles,
+      templateTilesBuffers,
+      templateChunkSamples,
+      templateChunkSampleBuffers,
+      templateTileKeys,
+    };
   }
 
   /** Get the bitmap for a tile key. Supporting memory-saving mode
@@ -769,10 +862,12 @@ export default class Template {
    * @since 0.85.33
    */
   async getChunked(tileKey, memorySaving = false) {
-    if (this.chunked[tileKey] === undefined) {
+    const hasChunk = this.chunked && Object.prototype.hasOwnProperty.call(this.chunked, tileKey);
+    const hasBuffer = this.chunkedBuffer && Object.prototype.hasOwnProperty.call(this.chunkedBuffer, tileKey);
+    if (!hasChunk && !hasBuffer) {
       return undefined;
     }
-    if (this.chunked[tileKey] !== null) {
+    if (hasChunk && this.chunked[tileKey] !== null) {
       const result = this.chunked[tileKey];
       if (memorySaving) {
         // boundary case: setMemorySavingMode should have cleared this
@@ -781,9 +876,16 @@ export default class Template {
       }
       return result;
     }
-    const templateBlob = new Blob([this.chunkedBuffer[tileKey]], { type: "image/png" }); // Uint8Array -> Blob
+    const bufferBytes = this.getChunkBufferBytes(tileKey);
+    if (!(bufferBytes instanceof Uint8Array)) {
+      return undefined;
+    }
+    const templateBlob = new Blob([bufferBytes], { type: "image/png" });
     const templateBitmap = await createBitmapPreservingPixels(templateBlob); // Blob -> Bitmap
     if (memorySaving === false) {
+      if (!this.chunked || typeof this.chunked !== 'object') {
+        this.chunked = {};
+      }
       this.chunked[tileKey] = templateBitmap;
     };
     return templateBitmap;

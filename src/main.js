@@ -13,6 +13,7 @@ import { createMapCommentManager } from './mapComments.js';
 import { createTemplateCreationUi } from './templateCreationUi.js';
 import { createArchiveTemplateUi } from './archiveTemplateUi.js';
 import { layoutLanguageOptions, normalizeLayoutLanguage, translateLayout, getLayoutThemeLabel as getLocalizedLayoutThemeLabel, getTemplateDisplayLabel as getLocalizedTemplateDisplayLabel, getTemplateCreateModeLabel, getChatBanTypeLabel, getColorSortLabel } from './layoutI18n.js';
+import { findNearestUnpaintedSamplePixel } from './templateChunkUtils.js';
 import { consoleLog, consoleWarn, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels } from './utils.js';
 import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getCurrentTileSize} from './utilsMaptiler.js';
 // import { getCenterGeoCoords, addTemplate } from './utilsMaptiler.js';
@@ -43,7 +44,6 @@ const MAP_WORLD_HEIGHT_PX = 2048 * 1000;
 const NEXT_TEMPLATE_PIXEL_ZOOM_LEVEL = 10;
 const TEMPLATE_FOCUS_VIEWPORT_RATIO = 0.72;
 const TEMPLATE_FOCUS_SCALE_PADDING = 1.5;
-const LIVE_TILE_COLOR_MATCH_DELTA = 3;
 const TEMPLATE_FOCUS_SCALE_MIN = 0.0001;
 const TEMPLATE_FOCUS_ZOOM_MIN = 0;
 const TEMPLATE_FOCUS_ZOOM_MAX = 22;
@@ -180,7 +180,7 @@ const detectTemplateImageOtherColors = async (sourceFile) => {
     };
   }
 
-  const bitmap = await createImageBitmap(sourceFile, { colorSpaceConversion: 'none' });
+  const bitmap = await createImageBitmap(sourceFile);
   const pixelCount = Math.max(0, (bitmap.width || 0) * (bitmap.height || 0));
   if (pixelCount > TEMPLATE_PRE_SCAN_MAX_PIXELS) {
     bitmap.close?.();
@@ -228,7 +228,7 @@ const convertTemplateImageFileToPaletteBlob = async (sourceFile, options = {}) =
     throw new Error('No source image provided for palette conversion.');
   }
   const normalizedOptions = normalizeTemplatePaletteConversionOptions(options || templatePaletteConversionDefaults);
-  const bitmap = await createImageBitmap(sourceFile, { colorSpaceConversion: 'none' });
+  const bitmap = await createImageBitmap(sourceFile);
   let canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
   const context = canvas.getContext('2d', { willReadFrequently: true });
   if (!context) {
@@ -1159,7 +1159,6 @@ const createTemplateImageBlob = async (templateOrStorageKey) => {
     && template.file instanceof Blob
     && String(template.file.type || '').toLowerCase() === 'image/png'
     && template.forcePaletteConversion !== true
-    && Math.max(0, Math.trunc(Number(template.nearPaletteSnapDelta) || 0)) < 1
   ) {
     return {
       blob: template.file,
@@ -1180,7 +1179,7 @@ const createTemplateImageBlob = async (templateOrStorageKey) => {
   const topLeftWorldX = topLeft[0] * TEMPLATE_TILE_SIZE + topLeft[2];
   const topLeftWorldY = topLeft[1] * TEMPLATE_TILE_SIZE + topLeft[3];
   const templateWorldWidth = 2048 * TEMPLATE_TILE_SIZE;
-  const tileKeys = Object.keys(template.chunkedBuffer ?? template.chunked ?? {});
+  const tileKeys = template.getChunkKeys?.() ?? Object.keys(template.chunkedBuffer ?? template.chunked ?? {});
   let resultCanvas = new OffscreenCanvas(width, height);
   const resultContext = resultCanvas.getContext('2d', { willReadFrequently: true });
   if (!resultContext) {
@@ -1204,11 +1203,31 @@ const createTemplateImageBlob = async (templateOrStorageKey) => {
         if (canReuseBitmap) {
           chunkBitmap = chunkBitmapSource;
         } else if (template.chunkedBuffer?.[tileKey]) {
-          const chunkBlob = new Blob([template.chunkedBuffer[tileKey]], { type: 'image/png' });
+          const chunkBytes = template.getChunkBufferBytes?.(tileKey) ?? template.chunkedBuffer[tileKey];
+          const chunkBlob = new Blob([chunkBytes], { type: 'image/png' });
           chunkBitmap = await createBitmapPreservingPixels(chunkBlob);
           shouldCloseBitmap = true;
         }
-        if (!chunkBitmap) continue;
+        if (!chunkBitmap) {
+          const sampleData = await template.getChunkSamples?.(tileKey, { allowBitmapFallback: false });
+          if (!sampleData) continue;
+          const chunkImageData = resultContext.createImageData(sampleData.width, sampleData.height);
+          for (let index = 0; index < sampleData.count; index++) {
+            if ((sampleData.flags[index] & 1) === 1) continue;
+            const targetIndex = (sampleData.y[index] * sampleData.width + sampleData.x[index]) * 4;
+            chunkImageData.data[targetIndex] = sampleData.r[index];
+            chunkImageData.data[targetIndex + 1] = sampleData.g[index];
+            chunkImageData.data[targetIndex + 2] = sampleData.b[index];
+            chunkImageData.data[targetIndex + 3] = sampleData.a[index];
+          }
+
+          const chunkWorldX = coords[0] * TEMPLATE_TILE_SIZE + coords[2];
+          const chunkWorldY = coords[1] * TEMPLATE_TILE_SIZE + coords[3];
+          const offsetX = ((chunkWorldX - topLeftWorldX) % templateWorldWidth + templateWorldWidth) % templateWorldWidth;
+          const offsetY = chunkWorldY - topLeftWorldY;
+          resultContext.putImageData(chunkImageData, offsetX, offsetY);
+          continue;
+        }
 
         const chunkWidth = Math.max(1, Math.round(chunkBitmap.width / shreadSize));
         const chunkHeight = Math.max(1, Math.round(chunkBitmap.height / shreadSize));
@@ -3769,31 +3788,33 @@ const overlayMain = new Overlay(name, version); // Constructs a new Overlay obje
 const templateManager = new TemplateManager(name, version, overlayMain); // Constructs a new TemplateManager object
 templateManagerRef = templateManager;
 const apiManager = new ApiManager(templateManager); // Constructs a new ApiManager object
-let templateProgressRefreshTimer = null;
+let templateViewportOverlayRefreshBound = false;
 
-function scheduleTemplateProgressRefresh(delayMs = 150) {
-  if (templateProgressRefreshTimer !== null) {
-    clearTimeout(templateProgressRefreshTimer);
-  }
-  templateProgressRefreshTimer = setTimeout(() => {
-    templateProgressRefreshTimer = null;
-    if (!templateManager?.templatesArray?.length) {
-      return;
-    }
-    try {
-      apiManager.tileCache = {};
-    } catch (_) {}
-    doAfterMapFound(() => {
-      try {
-        templateManager.createOverlayOnMapVisibleFirst();
-      } catch (_) {}
-      setTimeout(() => {
-        try {
-          forceRefreshTiles();
-        } catch (_) {}
-      }, 0);
+function resolveTemplateOverlayMapInstance() {
+  const direct = document.head?.['__bmmap'];
+  if (direct && typeof direct['on'] === 'function') return direct;
+  const fallback = document.querySelector('.right-3>button')?.['__click']?.[3]?.['v'];
+  if (fallback && typeof fallback['on'] === 'function') return fallback;
+  return null;
+}
+
+function bindTemplateViewportOverlayRefresh() {
+  if (templateViewportOverlayRefreshBound) return;
+  doAfterMapFound(() => {
+    if (templateViewportOverlayRefreshBound) return;
+    const map = resolveTemplateOverlayMapInstance();
+    if (!map || typeof map['on'] !== 'function') return;
+    const refreshVisibleOverlay = () => {
+      if (!(templateManager?.templatesArray ?? []).some((template) => template?.enabled)) {
+        return;
+      }
+      templateManager.createOverlayOnMapVisibleOnly();
+    };
+    ['moveend', 'zoomend', 'resize'].forEach((eventName) => {
+      map['on'](eventName, refreshVisibleOverlay);
     });
-  }, Math.max(0, Math.trunc(Number(delayMs) || 0)));
+    templateViewportOverlayRefreshBound = true;
+  });
 }
 
 const {
@@ -3925,8 +3946,8 @@ const templateSync = createTemplateSync({
   autoSyncSyncToggleList: () => window.syncToggleList?.(),
   autoSyncBuildTemplateFilterList: () => window.buildTemplateFilterList?.(),
   autoSyncBuildColorFilterList: () => window.buildColorFilterList?.(),
-  requestProgressRefresh: () => scheduleTemplateProgressRefresh(),
 });
+bindTemplateViewportOverlayRefresh();
 
 document.addEventListener('click', (event) => {
   if (isReportCancelControl(event.target)) {
@@ -4018,13 +4039,6 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
 
   console.log(storageTemplates);
   templateManager.importJSON(storageTemplates); // Loads the templates
-  try {
-    templateManager.importPromise?.then(() => {
-      if ((templateManager.templatesArray?.length ?? 0) > 0) {
-        scheduleTemplateProgressRefresh(250);
-      }
-    }).catch(() => {});
-  } catch (_) {}
 
   await waitForBody();
   observeWplaceTheme();
@@ -4740,86 +4754,24 @@ async function getLiveTilePixels(tileX, tileY) {
 async function findNearestTemplatePixelInTile(tileCandidate, liveTilePixels, originPoint, displayedColorSet, excludedCoordsKey, memorySavingMode) {
   let bestCandidate = null;
   for (const entry of tileCandidate.entries) {
-    const templateBitmap = await entry.template.getChunked(entry.tileKey, memorySavingMode);
-    if (!templateBitmap) continue;
-
-    let templateCanvas = new OffscreenCanvas(templateBitmap.width, templateBitmap.height);
-    const templateContext = templateCanvas.getContext('2d', { willReadFrequently: true });
-    if (!templateContext) {
-      cleanUpCanvas(templateCanvas);
-      templateCanvas = null;
-      if (memorySavingMode) {
-        templateBitmap.close();
-      }
-      continue;
-    }
-
-    templateContext.imageSmoothingEnabled = false;
-    templateContext.clearRect(0, 0, templateBitmap.width, templateBitmap.height);
-    templateContext.drawImage(templateBitmap, 0, 0);
-    const templateData = templateContext.getImageData(0, 0, templateBitmap.width, templateBitmap.height).data;
-    const drawMult = Math.max(1, Number(entry.template.shreadSize) || templateManager.drawMult);
-    const drawMultCenter = (drawMult - 1) >> 1;
-
-    for (
-      let yt = drawMultCenter, pixelY = entry.offsetY;
-      yt < templateBitmap.height;
-      yt += drawMult, pixelY++
-    ) {
-      if (pixelY < 0 || pixelY >= TEMPLATE_TILE_SIZE) continue;
-      for (
-        let xt = drawMultCenter, pixelX = entry.offsetX;
-        xt < templateBitmap.width;
-        xt += drawMult, pixelX++
-      ) {
-        if (pixelX < 0 || pixelX >= TEMPLATE_TILE_SIZE) continue;
-
-        const templateIndex = (yt * templateBitmap.width + xt) * 4;
-        const templateRed = templateData[templateIndex];
-        const templateGreen = templateData[templateIndex + 1];
-        const templateBlue = templateData[templateIndex + 2];
-        const templateAlpha = templateData[templateIndex + 3];
-        if (templateAlpha < 64) continue;
-
-        const colorKey = `${templateRed},${templateGreen},${templateBlue}`;
-        const colorMeta = rgbToMeta.get(colorKey);
-        if (!colorMeta || colorMeta.id === 0 || !displayedColorSet.has(colorKey)) continue;
-
-        const tileIndex = (pixelY * TEMPLATE_TILE_SIZE + pixelX) * 4;
-        const liveAlpha = liveTilePixels[tileIndex + 3];
-        const liveRed = liveTilePixels[tileIndex];
-        const liveGreen = liveTilePixels[tileIndex + 1];
-        const liveBlue = liveTilePixels[tileIndex + 2];
-        const isPainted = liveAlpha >= 64 && (
-          (liveRed === templateRed && liveGreen === templateGreen && liveBlue === templateBlue)
-          || (
-            Math.abs(liveRed - templateRed) <= LIVE_TILE_COLOR_MATCH_DELTA
-            && Math.abs(liveGreen - templateGreen) <= LIVE_TILE_COLOR_MATCH_DELTA
-            && Math.abs(liveBlue - templateBlue) <= LIVE_TILE_COLOR_MATCH_DELTA
-          )
-        );
-        if (isPainted) continue;
-
-        const coords = [tileCandidate.tileX, tileCandidate.tileY, pixelX, pixelY];
-        const coordsKey = coords.join(',');
-        if (coordsKey === excludedCoordsKey) continue;
-        const distanceSq = getTilePixelDistanceSq(originPoint, coords);
-        if (!Number.isFinite(distanceSq)) continue;
-        if (!bestCandidate || distanceSq < bestCandidate.distanceSq) {
-          bestCandidate = {
-            coords,
-            coordsKey,
-            distanceSq,
-            templateName: entry.template.displayName,
-          };
-        }
-      }
-    }
-
-    cleanUpCanvas(templateCanvas);
-    templateCanvas = null;
-    if (memorySavingMode) {
-      templateBitmap.close();
+    const sampleData = await entry.template.getChunkSamples(entry.tileKey, { memorySaving: memorySavingMode });
+    if (!sampleData) continue;
+    const entryBest = findNearestUnpaintedSamplePixel({
+      sampleData,
+      liveTilePixels,
+      tileSize: TEMPLATE_TILE_SIZE,
+      offsetX: entry.offsetX,
+      offsetY: entry.offsetY,
+      tileX: tileCandidate.tileX,
+      tileY: tileCandidate.tileY,
+      originPoint,
+      displayedColorSet,
+      excludedCoordsKey,
+      templateName: entry.template.displayName,
+      distanceSqFn: getTilePixelDistanceSq,
+    });
+    if (entryBest && (!bestCandidate || entryBest.distanceSq < bestCandidate.distanceSq)) {
+      bestCandidate = entryBest;
     }
   }
   return bestCandidate;
@@ -4859,7 +4811,7 @@ async function jumpToNextUnpaintedTemplatePixel() {
     let bestCandidate = findNearestCachedTemplatePixel(originPoint, displayedColorSet, excludedCoordsKey);
     const tileCandidatesMap = new Map();
     for (const template of activeTemplates) {
-      const tileKeys = Object.keys(template.chunkedBuffer ?? template.chunked ?? {});
+      const tileKeys = template.getChunkKeys?.() ?? Object.keys(template.chunkedBuffer ?? template.chunked ?? {});
       for (const tileKey of tileKeys) {
         const parsedTileKey = parseTemplateChunkKey(tileKey);
         if (!parsedTileKey) continue;
@@ -6829,8 +6781,16 @@ async function buildOverlayMain() {
 
     const shiftedChunked = rekeyTemplateChunkMap(template.chunked, deltaX, deltaY);
     const shiftedChunkedBuffer = rekeyTemplateChunkMap(template.chunkedBuffer, deltaX, deltaY);
+    const shiftedChunkedSamples = rekeyTemplateChunkMap(template.chunkedSamples, deltaX, deltaY);
+    const shiftedChunkedSamplesBuffer = rekeyTemplateChunkMap(template.chunkedSamplesBuffer, deltaX, deltaY);
+    const shiftedKeys = [...new Set([
+      ...Object.keys(shiftedChunked),
+      ...Object.keys(shiftedChunkedBuffer),
+      ...Object.keys(shiftedChunkedSamples),
+      ...Object.keys(shiftedChunkedSamplesBuffer),
+    ])];
     const nextTilePrefixes = new Set(
-      Object.keys(shiftedChunked).map((key) => key.split(',').slice(0, 2).join(','))
+      shiftedKeys.map((key) => key.split(',').slice(0, 2).join(','))
     );
     if (!nextTilePrefixes.size) {
       return { ok: false, moved: false, message: 'Unable to move template: no chunks were shifted.' };
@@ -6841,6 +6801,8 @@ async function buildOverlayMain() {
 
     template.chunked = shiftedChunked;
     template.chunkedBuffer = shiftedChunkedBuffer;
+    template.chunkedSamples = shiftedChunkedSamples;
+    template.chunkedSamplesBuffer = shiftedChunkedSamplesBuffer;
     template.tilePrefixes = nextTilePrefixes;
     template.coords = nextCoords;
     template.storageTimeString = Date.now().toString();
@@ -6851,6 +6813,8 @@ async function buildOverlayMain() {
     if (templateJSON) {
       templateJSON.coords = nextCoords.join(', ');
       templateJSON.tiles = rekeyTemplateChunkMap(templateJSON.tiles, deltaX, deltaY);
+      templateJSON.samples = rekeyTemplateChunkMap(templateJSON.samples, deltaX, deltaY);
+      templateJSON.tileKeys = shiftedKeys;
     }
 
     await templateManager.storeTemplates();
@@ -7209,6 +7173,7 @@ async function buildOverlayMain() {
       row.style.display = 'flex';
       row.style.alignItems = 'center';
       row.style.gap = '6px';
+      row.classList.toggle('bm-template-inactive', !template.enabled);
 
       let swatch = document.createElement('div');
       swatch.style.width = '14px';
@@ -7428,21 +7393,24 @@ async function buildOverlayMain() {
           .sort((a, b) => a.localeCompare(b))
           .flatMap((stream) => streamEntryGroups.get(stream) ?? []),
       ];
-
-    const templateEnabledState = Object.fromEntries(
-      (templateManager.templatesArray ?? []).map(t => [t.storageKey, t.enabled ?? true])
-    );
-    const combinedTemplate = {};
-    for (const stats of templateManager.tileProgress.values()) {
-      Object.entries(stats.template).forEach(([storageKey, content]) => {
-        if (templateEnabledState[storageKey] === false) return; // skip only when explicitly disabled
-        if (combinedTemplate[storageKey] === undefined) {
-          combinedTemplate[storageKey] = Object.fromEntries(Object.entries(content));
-        } else {
-          combinedTemplate[storageKey].painted += content.painted;
-        }
-      })
-    };
+      const templateEnabledState = Object.fromEntries(
+        (templateManager.templatesArray ?? []).map(t => [t.storageKey, t.enabled ?? true])
+      );
+      const combinedTemplate = {};
+      for (const stats of templateManager.tileProgress.values()) {
+        Object.entries(stats.template).forEach(([storageKey, content]) => {
+          if (templateEnabledState[storageKey] === false) return;
+          if (combinedTemplate[storageKey] === undefined) {
+            combinedTemplate[storageKey] = {
+              painted: Number(content?.painted) || 0,
+              required: Number(content?.required) || 0,
+            };
+          } else {
+            combinedTemplate[storageKey].painted += Number(content?.painted) || 0;
+            combinedTemplate[storageKey].required += Number(content?.required) || 0;
+          }
+        });
+      }
 
       for (const entry of entriesToRender) {
         const template = entry.t;
@@ -7562,10 +7530,15 @@ async function buildOverlayMain() {
 
         const isHighlighted = normalizeFlag(template.remoteHighlighted) || normalizeFlag(templateStore.remoteHighlighted);
         const filledCount = combinedTemplate[template.storageKey]?.painted ?? 0;
+        const countedRequired = combinedTemplate[template.storageKey]?.required ?? 0;
         const filledLabelText = `${filledCount.toLocaleString()}`;
         const remainingCount = Math.max(0, totalCount - filledCount);
         const remainingLabelText = `${remainingCount.toLocaleString()}`;
         const showRemaining = templateManager.isTemplateListRemainingEnabled();
+        const shouldShowReliableRemaining = showRemaining
+          && template.enabled
+          && totalCount > 0
+          && countedRequired >= totalCount;
         const renameElement = document.createElement('span');
         renameElement.textContent = templateName;
         renameElement.className = "bm-templatename";
@@ -7650,18 +7623,21 @@ async function buildOverlayMain() {
         row.classList.add('bm-template-position-editing');
       }
       label.appendChild(renameElement);
-      const countSpan = document.createElement('span');
-      countSpan.className = 'bm-template-count';
-      countSpan.textContent = showRemaining
-        ? t('templates.count.left', { count: remainingLabelText })
-        : ` • ${filledLabelText} / ${totalLabelText}`;
-      label.appendChild(countSpan);
+      if (!showRemaining || shouldShowReliableRemaining) {
+        const countSpan = document.createElement('span');
+        countSpan.className = 'bm-template-count';
+        countSpan.textContent = showRemaining
+          ? t('templates.count.left', { count: remainingLabelText })
+          : ` • ${filledLabelText} / ${totalLabelText}`;
+        label.appendChild(countSpan);
+      }
 
       const toggle = document.createElement('input');
       toggle.type = 'checkbox';
       toggle.checked = template.enabled;
       toggle.addEventListener('change', () => {
         template.enabled = toggle.checked;
+        row.classList.toggle('bm-template-inactive', !toggle.checked);
         overlayMain.handleDisplayStatus(`${toggle.checked ? 'Enabled' : 'Disabled'} ${templateName}`);
         if (toggle.checked) {
           templateManager.createOverlayOnMap(template.sortID);
@@ -7672,6 +7648,7 @@ async function buildOverlayMain() {
           removeLayer(null, template.sortID);
         }
         syncToggleList();
+        buildTemplateFilterList();
         // The total count has changed from clearTileProgress, and that may be a template outside the current view, so we need to refresh
         buildColorFilterList();
         forceRefreshTiles();

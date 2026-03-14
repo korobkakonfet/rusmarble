@@ -232,22 +232,6 @@ export const rgbToMeta = new Map(
 
 // Ensure template #deface marker is treated as allowed (maps to Transparent color)
 const defaceKey = '222,250,206';
-const clampPaletteChannel = (value) => Math.max(0, Math.min(255, Math.round(Number(value) || 0)));
-const paletteRgbEntries = (() => {
-  const entries = [];
-  const seen = new Set();
-  for (const color of colorpalette) {
-    const name = String(color?.name || '').trim().toLowerCase();
-    if (!Array.isArray(color?.rgb) || color.rgb.length < 3 || name === 'transparent') continue;
-    const rgb = color.rgb.slice(0, 3).map(clampPaletteChannel);
-    const key = rgb.join(',');
-    if (seen.has(key)) continue;
-    seen.add(key);
-    entries.push({ key, rgb });
-  }
-  return entries;
-})();
-const nearPaletteColorCache = new Map();
 // allowedColorsSet.add(defaceKey);
 // Map #deface to Transparent meta for UI naming and ID continuity
 try {
@@ -264,80 +248,12 @@ try {
   rgbToMeta.set(keyOther, { id: 'other', premium: false, name: 'Other' });
 } catch (ignored) {}
 
-/** Create an ImageBitmap while asking the browser not to color-convert the source if supported.
- * Falls back to the default decode path on browsers that do not support the option.
+/** Create an ImageBitmap from a canvas, blob, or ImageData source.
  * @param {CanvasImageSource|Blob|ImageData} source
  * @returns {Promise<ImageBitmap>}
  */
 export async function createBitmapPreservingPixels(source) {
-  try {
-    return await createImageBitmap(source, { colorSpaceConversion: 'none' });
-  } catch (_) {
-    return createImageBitmap(source);
-  }
-}
-
-/** Normalize a template RGB triple back to an exact palette key.
- * Intended for template creation/import paths where browser decoding can slightly
- * shift palette-safe PNG colors. When requested, it can also fall back to the
- * nearest palette color for any remaining non-palette pixels.
- * @param {number} r
- * @param {number} g
- * @param {number} b
- * @param {number} [maxChannelDelta=0]
- * @param {boolean} [fallbackToNearest=false]
- * @returns {string} Exact palette or #deface key, or empty string when no safe match exists
- */
-export function normalizeTemplateColorKey(r, g, b, maxChannelDelta = 0, fallbackToNearest = false) {
-  const safeR = clampPaletteChannel(r);
-  const safeG = clampPaletteChannel(g);
-  const safeB = clampPaletteChannel(b);
-  const defaceRgb = [222, 250, 206];
-  const exactKey = `${safeR},${safeG},${safeB}`;
-  if (safeR === defaceRgb[0] && safeG === defaceRgb[1] && safeB === defaceRgb[2]) return defaceKey;
-  if (rgbToMeta.has(exactKey)) return exactKey;
-
-  const maxDelta = Math.max(0, Math.trunc(Number(maxChannelDelta) || 0));
-  const allowNearest = fallbackToNearest === true;
-  if (maxDelta < 1 && !allowNearest) return '';
-
-  const cacheKey = `${exactKey}|${maxDelta}|${allowNearest ? 1 : 0}`;
-  if (nearPaletteColorCache.has(cacheKey)) {
-    return nearPaletteColorCache.get(cacheKey);
-  }
-
-  let nearestKey = '';
-  let nearestDistance = Infinity;
-
-  const defaceWithinDelta = (
-    Math.abs(safeR - defaceRgb[0]) <= maxDelta
-    && Math.abs(safeG - defaceRgb[1]) <= maxDelta
-    && Math.abs(safeB - defaceRgb[2]) <= maxDelta
-  );
-  if (allowNearest || defaceWithinDelta) {
-    nearestKey = defaceKey;
-    nearestDistance = (
-      (safeR - defaceRgb[0]) * (safeR - defaceRgb[0]) +
-      (safeG - defaceRgb[1]) * (safeG - defaceRgb[1]) +
-      (safeB - defaceRgb[2]) * (safeB - defaceRgb[2])
-    );
-  }
-
-  for (const entry of paletteRgbEntries) {
-    const dr = safeR - entry.rgb[0];
-    const dg = safeG - entry.rgb[1];
-    const db = safeB - entry.rgb[2];
-    if (!allowNearest && (Math.abs(dr) > maxDelta || Math.abs(dg) > maxDelta || Math.abs(db) > maxDelta)) continue;
-    const distance = dr * dr + dg * dg + db * db;
-    if (distance < nearestDistance) {
-      nearestDistance = distance;
-      nearestKey = entry.key;
-      if (distance === 0) break;
-    }
-  }
-
-  nearPaletteColorCache.set(cacheKey, nearestKey);
-  return nearestKey;
+  return createImageBitmap(source);
 }
 
 /** Releases the canvas content to free up memory.

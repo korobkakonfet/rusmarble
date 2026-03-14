@@ -300,5 +300,6 @@
   "bm-help": "bm-4G",
   "bm-link": "bm-4H",
   "bm-fg": "bm-4I",
-  "bm-bg": "bm-4J"
+  "bm-bg": "bm-4J",
+  "bm-template-inactive": "bm-77"
 }
