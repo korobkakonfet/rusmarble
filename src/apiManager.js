@@ -301,6 +301,19 @@ export default class ApiManager {
    * 
    * @since 0.87.4
   */
+  #isVisibleElement(element) {
+    if (!(element instanceof HTMLElement)) return false;
+    if (element.getClientRects().length === 0) return false;
+    const style = window.getComputedStyle(element);
+    return style.display !== 'none' && style.visibility !== 'hidden';
+  }
+
+  #hasPixelInfoContent(element) {
+    if (!(element instanceof HTMLElement)) return false;
+    const text = element.textContent || '';
+    return /\bpaint\b/i.test(text) || /\bshare\b/i.test(text) || /\b#\s*\d+\b/.test(text);
+  }
+
   getCloseButton() {
     /*
     Old .gap-2 UI:
@@ -320,11 +333,15 @@ export default class ApiManager {
     */
 
     const selectors = [
-      '.rounded-t-box .flex.items-center.justify-end.gap-1 > button.btn-circle',
-      '.flex.items-center.justify-between.px-3.pb-1\\.5 button.btn-circle',
-      '.flex.h-10.items-center.justify-between.px-3.pb-1\\.5 button.btn-circle',
-      '.flex.gap-1\\.5.px-3 > button.btn-circle',
-      '.flex.gap-2.px-3 > button.btn-circle'
+      '.rounded-t-box button[aria-label="Close"]',
+      'dialog.modal button[aria-label="Close"]',
+      'dialog button[aria-label="Close"]',
+      '.modal button[aria-label="Close"]',
+      '.rounded-t-box .flex.items-center.justify-end.gap-1 > button.btn-circle[aria-label="Close"]',
+      '.flex.items-center.justify-between.px-3.pb-1\\.5 button.btn-circle[aria-label="Close"]',
+      '.flex.h-10.items-center.justify-between.px-3.pb-1\\.5 button.btn-circle[aria-label="Close"]',
+      '.flex.gap-1\\.5.px-3 > button.btn-circle[aria-label="Close"]',
+      '.flex.gap-2.px-3 > button.btn-circle[aria-label="Close"]'
     ];
     for (const selector of selectors) {
       const closeButton = document.querySelector(selector);
@@ -332,18 +349,25 @@ export default class ApiManager {
     }
 
     const candidates = Array.from(
-      document.querySelectorAll('.rounded-t-box button.btn-circle, dialog.modal button.btn-circle, .modal button.btn-circle')
+      document.querySelectorAll('.rounded-t-box button.btn-circle, dialog.modal button.btn-circle, dialog button.btn-circle, .modal button.btn-circle')
     );
-    return (
-      candidates.find(button => {
+    const scoredCandidates = candidates
+      .map(button => {
+        const label = [
+          button.getAttribute('aria-label') || '',
+          button.title || '',
+          button.textContent || ''
+        ].join(' ');
         const root = this.getPixelInfoRoot(button);
-        if (!root) return false;
-        const text = root.textContent || '';
-        return /\bpaint\b/i.test(text) || /\b#\s*\d+\b/.test(text);
-      }) ||
-      candidates[0] ||
-      null
-    );
+        let score = 0;
+        if (/close/i.test(label)) score += 12;
+        if (this.#isVisibleElement(button)) score += 4;
+        if (root && this.#hasPixelInfoContent(root)) score += 3;
+        if (button.parentElement?.lastElementChild === button) score += 1;
+        return { button, score };
+      })
+      .sort((left, right) => right.score - left.score);
+    return scoredCandidates.find(candidate => candidate.score > 0)?.button || candidates[0] || null;
   }
 
   /** Get the root element of the current pixel info panel.
@@ -372,19 +396,21 @@ export default class ApiManager {
    */
   getDisplayCoordsAnchor(closeButton = this.getCloseButton(), infoRoot = this.getPixelInfoRoot(closeButton)) {
     if (!closeButton || !infoRoot) return closeButton?.parentElement || null;
-    const compactCoordPattern = /\b\d{1,4}\s*,\s*\d{1,4}\b/;
-    const rows = Array.from(infoRoot.querySelectorAll('div'));
-    const locationRowByText = rows.find(row =>
-      compactCoordPattern.test(row.textContent || '')
-      && row.querySelector('button')
-      && !row.querySelector('#bm-display-coords-container')
-    );
-    if (locationRowByText) return locationRowByText;
+    const compactCoordPattern = /\b\d{1,7}\s*,\s*\d{1,7}\b/;
     const locationButton = Array.from(infoRoot.querySelectorAll('button'))
-      .find(button => compactCoordPattern.test(button.textContent || ''));
-    const locationRow =
-      locationButton?.closest('.mt-2.flex.w-full.justify-between') ||
-      locationButton?.closest('.flex.items-center.gap-1\\.5')?.parentElement;
+      .find(button =>
+        compactCoordPattern.test(button.textContent || '')
+        && !button.closest('#bm-display-coords-container')
+      );
+    const locationRowCandidates = [
+      locationButton?.closest('.mt-auto.flex.w-full.justify-between'),
+      locationButton?.closest('.mt-2.flex.w-full.justify-between'),
+      locationButton?.closest('div.flex.w-full.justify-between'),
+      locationButton?.closest('.flex.items-center.gap-1\\.5')?.parentElement,
+      locationButton?.closest('.flex.items-center.gap-1\\.5'),
+      locationButton?.parentElement
+    ];
+    const locationRow = locationRowCandidates.find(row => row instanceof HTMLElement && infoRoot.contains(row));
     if (locationRow && infoRoot.contains(locationRow)) return locationRow;
     return closeButton.parentElement?.nextElementSibling || closeButton.parentElement;
   }
@@ -407,7 +433,15 @@ export default class ApiManager {
     const infoRoot = this.getPixelInfoRoot(anchorElement);
     if (infoRoot) {
       const actionRows = Array.from(infoRoot.querySelectorAll('div'))
-        .filter(row => !!row.querySelector(':scope > button.btn-sm.btn-primary'));
+        .filter(row => {
+          const directButtons = Array.from(row.querySelectorAll(':scope > button'));
+          if (!directButtons.length) return false;
+          const hasPaintButton = directButtons.some(button => /\bpaint\b/i.test(button.textContent || button.getAttribute('aria-label') || ''));
+          const hasPrimaryAction = directButtons.some(button =>
+            button.classList.contains('btn-primary') && button.classList.contains('btn-sm')
+          );
+          return hasPaintButton || hasPrimaryAction;
+        });
       const visibleActionRow = actionRows.find(row => row.offsetParent !== null);
       if (visibleActionRow) return visibleActionRow;
       if (actionRows.length) return actionRows[0];
@@ -448,6 +482,8 @@ export default class ApiManager {
     const geoCoords = coordsTileCoordsToGeoCoords(coordsTile, coordsPixel);
     const text1 = `(Tl X: ${coordsTile[0]}, Tl Y: ${coordsTile[1]}, Px X: ${coordsPixel[0]}, Px Y: ${coordsPixel[1]})`;
     const text2 = `(${geoCoords[0].toFixed(5)}, ${geoCoords[1].toFixed(5)})`;
+    const text1Display = `Tl ${coordsTile[0]}, ${coordsTile[1]} | Px ${coordsPixel[0]}, ${coordsPixel[1]}`;
+    const text2Display = `${geoCoords[0].toFixed(5)}, ${geoCoords[1].toFixed(5)}`;
 
     const showCopiedToast = (anchor, message = 'Copied!') => {
       const parent = anchor.parentElement;
@@ -483,16 +519,11 @@ export default class ApiManager {
     };
   
     const coordRow = this.getDisplayCoordsAnchor(closeButton, infoRoot);
-    const paintButtonContainer = this.getPaintButtonContainer();
-    const canAnchorAbovePaint =
-      !!paintButtonContainer &&
-      infoRoot.contains(paintButtonContainer) &&
-      paintButtonContainer.parentElement;
     if (!coordRow) {
       this.#scheduleDisplayCoordsRetry(retryCount);
       return;
     }
-    const coordPattern = /\b\d{1,4}\s*,\s*\d{1,4}\b/;
+    const coordPattern = /\b\d{1,7}\s*,\s*\d{1,7}\b/;
     const isLikelyHeaderFallback =
       coordRow === closeButton.parentElement &&
       !coordPattern.test(coordRow.textContent || '');
@@ -505,34 +536,26 @@ export default class ApiManager {
     if (!displayCoordsContainer) {
       displayCoordsContainer = document.createElement('div');
       displayCoordsContainer.id = 'bm-display-coords-container';
-      displayCoordsContainer.style = 'margin-left: calc(var(--spacing)*3); margin-top: 4px; margin-bottom: 2px; line-height: 1.2; display: inline-flex; gap: 12px; align-items: baseline; white-space: nowrap;';
-      if (canAnchorAbovePaint) {
-        paintButtonContainer.insertAdjacentElement('beforebegin', displayCoordsContainer);
-      } else {
-        coordRow.insertAdjacentElement('afterend', displayCoordsContainer);
-      }
-    } else if (canAnchorAbovePaint) {
-      if (displayCoordsContainer.nextElementSibling !== paintButtonContainer) {
-        paintButtonContainer.insertAdjacentElement('beforebegin', displayCoordsContainer);
-      }
-    } else if (displayCoordsContainer.previousElementSibling !== coordRow) {
-      coordRow.insertAdjacentElement('afterend', displayCoordsContainer);
+      displayCoordsContainer.style = 'width: 100%; margin: 4px 0 2px; padding: 0 12px; box-sizing: border-box; line-height: 1.15; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; text-align: left;';
+      coordRow.insertAdjacentElement('beforebegin', displayCoordsContainer);
+    } else if (displayCoordsContainer.nextElementSibling !== coordRow) {
+      coordRow.insertAdjacentElement('beforebegin', displayCoordsContainer);
     }
 
     displayCoordsContainer.textContent = '';
 
     const displayCoords1 = document.createElement('span');
     displayCoords1.id = 'bm-display-coords1';
-    displayCoords1.style = 'display: inline-block;';
+    displayCoords1.style = 'display: block; max-width: 100%; white-space: nowrap;';
     displayCoords1.className = 'bm-display-coords-clickable text-base-content/70 text-xs';
-    displayCoords1.textContent = text1;
+    displayCoords1.textContent = text1Display;
     displayCoords1.dataset.text = text1;
 
     const displayCoords2 = document.createElement('span');
     displayCoords2.id = 'bm-display-coords2';
-    displayCoords2.style = 'display: inline-block;';
+    displayCoords2.style = 'display: block; max-width: 100%; white-space: nowrap;';
     displayCoords2.className = 'bm-display-coords-clickable text-base-content/70 text-xs';
-    displayCoords2.textContent = text2;
+    displayCoords2.textContent = text2Display;
     displayCoords2.dataset.text = text2;
 
     displayCoordsContainer.append(displayCoords1, displayCoords2);
