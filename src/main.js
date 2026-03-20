@@ -4125,7 +4125,7 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
 
     const key = event.key.toLowerCase();
     if (
-      key === 'j'
+      (key === 'j' || key === 'о')
       && templateManager.isNextTemplatePixelShortcutEnabled()
       && !event.repeat
       && !event.ctrlKey
