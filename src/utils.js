@@ -45,6 +45,15 @@ export function negativeSafeModulo(a, b) {
   return (a % b + b) % b;
 }
 
+let debugLoggingEnabled = false;
+export function setDebugLoggingEnabled(value) {
+  debugLoggingEnabled = value === true;
+}
+
+export function isDebugLoggingEnabled() {
+  return debugLoggingEnabled === true;
+}
+
 /** Bypasses terser's stripping of console function calls.
  * This is so the non-obfuscated code will contain debugging console calls, but the distributed version won't.
  * However, the distributed version needs to call the console somehow, so this wrapper function is how.
@@ -52,7 +61,10 @@ export function negativeSafeModulo(a, b) {
  * @param {...any} args - Arguments to be passed into the `log()` function of the Console
  * @since 0.58.9
  */
-export function consoleLog(...args) {((consoleLog) => consoleLog(...args))(console.log);}
+export function consoleLog(...args) {
+  if (!debugLoggingEnabled) return;
+  ((consoleLog) => consoleLog(...args))(console.log);
+}
 
 /** Bypasses terser's stripping of console function calls.
  * This is so the non-obfuscated code will contain debugging console calls, but the distributed version won't.
@@ -253,7 +265,17 @@ try {
  * @returns {Promise<ImageBitmap>}
  */
 export async function createBitmapPreservingPixels(source) {
-  return createImageBitmap(source);
+  // Prefer raw pixel decode path to avoid browser-specific color-space conversion differences
+  // (notably between Chromium variants on wide-gamut / color-managed systems).
+  try {
+    return await createImageBitmap(source, {
+      colorSpaceConversion: 'none',
+      premultiplyAlpha: 'none',
+      imageOrientation: 'none',
+    });
+  } catch (_) {
+    return createImageBitmap(source);
+  }
 }
 
 /** Releases the canvas content to free up memory.

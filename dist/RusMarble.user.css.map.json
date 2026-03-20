@@ -301,5 +301,8 @@
   "bm-help": "bm-4H",
   "bm-link": "bm-4I",
   "bm-fg": "bm-4J",
-  "bm-bg": "bm-4K"
+  "bm-bg": "bm-4K",
+  "bm-debug-logs-enabled": "bm-6W",
+  "bm-debug-logging": "bm-84",
+  "bm-debug": "bm-9s"
 }

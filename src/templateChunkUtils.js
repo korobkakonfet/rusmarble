@@ -12,6 +12,7 @@ const IMAGE_DATA_LITTLE_ENDIAN = (() => {
 })();
 
 const packRgb = (r, g, b) => ((r << 16) | (g << 8) | b);
+const PACKED_DEFACE_RGB = packRgb(TEMPLATE_DEFACE_RGB[0], TEMPLATE_DEFACE_RGB[1], TEMPLATE_DEFACE_RGB[2]);
 const packRgbaUint32 = (r, g, b, a) => (
   IMAGE_DATA_LITTLE_ENDIAN
     ? (((a << 24) | (b << 16) | (g << 8) | r) >>> 0)
@@ -27,6 +28,122 @@ const paletteKeyByPackedRgb = (() => {
   }
   return map;
 })();
+const paletteKeyByIndex = [];
+const paletteIndexByPackedRgb = (() => {
+  const map = new Map();
+  const indexByKey = new Map();
+  for (const [packed, key] of paletteKeyByPackedRgb.entries()) {
+    let index = indexByKey.get(key);
+    if (index === undefined) {
+      index = paletteKeyByIndex.length;
+      indexByKey.set(key, index);
+      paletteKeyByIndex.push(key);
+    }
+    map.set(packed, index);
+  }
+  return map;
+})();
+const PALETTE_INDEX_OTHER = (() => {
+  let index = paletteKeyByIndex.indexOf(TEMPLATE_OTHER_COLOR_KEY);
+  if (index === -1) {
+    index = paletteKeyByIndex.length;
+    paletteKeyByIndex.push(TEMPLATE_OTHER_COLOR_KEY);
+  }
+  return index;
+})();
+// Some browsers can slightly shift decoded tile RGB values (color management / canvas path differences).
+// Keep a tolerant per-channel delta so painted pixels are still recognized reliably.
+const LIVE_COLOR_MATCH_DELTA = 8;
+const getPaletteIndexForPackedRgb = (packedColor) => (
+  paletteIndexByPackedRgb.get(packedColor) ?? PALETTE_INDEX_OTHER
+);
+const parseRgbKey = (key) => {
+  if (typeof key !== 'string') return null;
+  const firstComma = key.indexOf(',');
+  if (firstComma < 1) return null;
+  const secondComma = key.indexOf(',', firstComma + 1);
+  if (secondComma < firstComma + 2 || secondComma >= key.length - 1) return null;
+  const red = Number(key.slice(0, firstComma));
+  const green = Number(key.slice(firstComma + 1, secondComma));
+  const blue = Number(key.slice(secondComma + 1));
+  if (
+    !Number.isInteger(red) || red < 0 || red > 255
+    || !Number.isInteger(green) || green < 0 || green > 255
+    || !Number.isInteger(blue) || blue < 0 || blue > 255
+  ) {
+    return null;
+  }
+  return packRgb(red, green, blue);
+};
+const paintablePackedRgbSet = (() => {
+  const set = new Set();
+  for (const [key, meta] of rgbToMeta.entries()) {
+    if (typeof meta?.id !== 'number' || meta.id <= 0) continue;
+    const packed = parseRgbKey(key);
+    if (packed !== null) {
+      set.add(packed);
+    }
+  }
+  return set;
+})();
+const paintablePaletteColors = [...paintablePackedRgbSet].map((packed) => ({
+  packed,
+  r: (packed >> 16) & 255,
+  g: (packed >> 8) & 255,
+  b: packed & 255,
+}));
+const nearestPaintablePackedCache = new Map();
+const getNearestPaintablePacked = (r, g, b) => {
+  const packed = packRgb(r, g, b);
+  const cached = nearestPaintablePackedCache.get(packed);
+  if (cached !== undefined) {
+    return cached;
+  }
+  let bestPacked = packed;
+  let bestDistanceSq = Number.POSITIVE_INFINITY;
+  for (let index = 0; index < paintablePaletteColors.length; index++) {
+    const color = paintablePaletteColors[index];
+    const dr = color.r - r;
+    const dg = color.g - g;
+    const db = color.b - b;
+    const distanceSq = dr * dr + dg * dg + db * db;
+    if (distanceSq < bestDistanceSq) {
+      bestDistanceSq = distanceSq;
+      bestPacked = color.packed;
+      if (distanceSq === 0) {
+        break;
+      }
+    }
+  }
+  nearestPaintablePackedCache.set(packed, bestPacked);
+  return bestPacked;
+};
+const displayedColorPackedSetCache = new WeakMap();
+const getDisplayedColorPackedSet = (displayedColorSet) => {
+  if (!(displayedColorSet instanceof Set)) return null;
+  const cached = displayedColorPackedSetCache.get(displayedColorSet);
+  if (cached) return cached;
+  const packedSet = new Set();
+  for (const key of displayedColorSet) {
+    const packed = parseRgbKey(key);
+    if (packed !== null) {
+      packedSet.add(packed);
+    }
+  }
+  displayedColorPackedSetCache.set(displayedColorSet, packedSet);
+  return packedSet;
+};
+const parseCoordsKey = (coordsKey) => {
+  if (typeof coordsKey !== 'string') return null;
+  const parts = coordsKey.split(',');
+  if (parts.length < 4) return null;
+  const tx = Number(parts[0]);
+  const ty = Number(parts[1]);
+  const px = Number(parts[2]);
+  const py = Number(parts[3]);
+  if (![tx, ty, px, py].every(Number.isFinite)) return null;
+  return [tx, ty, px, py];
+};
 
 export const isDefaceRgb = (r, g, b) => (
   r === TEMPLATE_DEFACE_RGB[0]
@@ -192,10 +309,14 @@ export const decodeChunkSampleBuffer = (bufferValue) => {
   if (!(bytes instanceof Uint8Array) || bytes.length < TEMPLATE_CHUNK_SAMPLE_HEADER_BYTES) {
     return null;
   }
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const width = view.getUint16(0, true);
-  const height = view.getUint16(2, true);
-  const count = view.getUint32(4, true);
+  const width = bytes[0] | (bytes[1] << 8);
+  const height = bytes[2] | (bytes[3] << 8);
+  const count = (
+    bytes[4]
+    | (bytes[5] << 8)
+    | (bytes[6] << 16)
+    | (bytes[7] << 24)
+  ) >>> 0;
   const expectedLength = TEMPLATE_CHUNK_SAMPLE_HEADER_BYTES + count * TEMPLATE_CHUNK_SAMPLE_RECORD_BYTES;
   if (bytes.length < expectedLength) {
     return null;
@@ -203,13 +324,13 @@ export const decodeChunkSampleBuffer = (bufferValue) => {
   const sampleData = createChunkSampleData(width, height, count, true);
   let offset = TEMPLATE_CHUNK_SAMPLE_HEADER_BYTES;
   for (let index = 0; index < count; index++) {
-    sampleData.x[index] = view.getUint16(offset, true);
-    sampleData.y[index] = view.getUint16(offset + 2, true);
-    sampleData.flags[index] = view.getUint8(offset + 4);
-    sampleData.r[index] = view.getUint8(offset + 5);
-    sampleData.g[index] = view.getUint8(offset + 6);
-    sampleData.b[index] = view.getUint8(offset + 7);
-    sampleData.a[index] = view.getUint8(offset + 8);
+    sampleData.x[index] = bytes[offset] | (bytes[offset + 1] << 8);
+    sampleData.y[index] = bytes[offset + 2] | (bytes[offset + 3] << 8);
+    sampleData.flags[index] = bytes[offset + 4];
+    sampleData.r[index] = bytes[offset + 5];
+    sampleData.g[index] = bytes[offset + 6];
+    sampleData.b[index] = bytes[offset + 7];
+    sampleData.a[index] = bytes[offset + 8];
     offset += TEMPLATE_CHUNK_SAMPLE_RECORD_BYTES;
   }
   return sampleData;
@@ -221,7 +342,8 @@ export const inspectSourceImagePalette = (sourceData, width, height) => {
   }
   let required = 0;
   let deface = 0;
-  const paletteCounts = Object.create(null);
+  const paletteCountsByIndex = new Uint32Array(paletteKeyByIndex.length);
+  const seenPaletteOrder = [];
   const pixelBytes = Math.min(sourceData.length, Math.max(0, Math.trunc(width * height * 4)));
   for (let idx = 0; idx < pixelBytes; idx += 4) {
     const a = sourceData[idx + 3];
@@ -229,15 +351,23 @@ export const inspectSourceImagePalette = (sourceData, width, height) => {
     const r = sourceData[idx];
     const g = sourceData[idx + 1];
     const b = sourceData[idx + 2];
-    if (isDefaceRgb(r, g, b)) {
+    const packedColor = packRgb(r, g, b);
+    if (packedColor === PACKED_DEFACE_RGB) {
       deface++;
       continue;
     }
-    const key = getPaletteKeyForRgb(r, g, b);
+    const paletteIndex = getPaletteIndexForPackedRgb(packedColor);
     required++;
-    paletteCounts[key] = (paletteCounts[key] || 0) + 1;
+    if (paletteCountsByIndex[paletteIndex] === 0) {
+      seenPaletteOrder.push(paletteIndex);
+    }
+    paletteCountsByIndex[paletteIndex]++;
   }
-  const paletteMap = new Map(Object.entries(paletteCounts));
+  const paletteMap = new Map();
+  for (let index = 0; index < seenPaletteOrder.length; index++) {
+    const paletteIndex = seenPaletteOrder[index];
+    paletteMap.set(paletteKeyByIndex[paletteIndex], paletteCountsByIndex[paletteIndex]);
+  }
   return { required, deface, paletteMap };
 };
 
@@ -246,17 +376,34 @@ export const createPaletteStatsAccumulator = () => ({
   deface: 0,
   hasOther: false,
   paletteCounts: Object.create(null),
+  paletteCountsByIndex: new Uint32Array(paletteKeyByIndex.length),
+  seenPaletteOrder: [],
 });
 
 export const finalizePaletteStatsAccumulator = (accumulator) => {
   if (!accumulator || typeof accumulator !== 'object') {
     return { required: 0, deface: 0, hasOther: false, paletteMap: new Map() };
   }
+  const paletteMap = new Map();
+  if (accumulator.paletteCountsByIndex instanceof Uint32Array && Array.isArray(accumulator.seenPaletteOrder)) {
+    for (let index = 0; index < accumulator.seenPaletteOrder.length; index++) {
+      const paletteIndex = accumulator.seenPaletteOrder[index];
+      const count = accumulator.paletteCountsByIndex[paletteIndex] || 0;
+      if (count <= 0) continue;
+      paletteMap.set(paletteKeyByIndex[paletteIndex] || TEMPLATE_OTHER_COLOR_KEY, count);
+    }
+  } else {
+    for (const [key, count] of Object.entries(accumulator.paletteCounts || {})) {
+      if ((Number(count) || 0) > 0) {
+        paletteMap.set(key, Number(count) || 0);
+      }
+    }
+  }
   return {
     required: Math.max(0, Math.trunc(Number(accumulator.required) || 0)),
     deface: Math.max(0, Math.trunc(Number(accumulator.deface) || 0)),
     hasOther: accumulator.hasOther === true,
-    paletteMap: new Map(Object.entries(accumulator.paletteCounts || {})),
+    paletteMap,
   };
 };
 
@@ -270,6 +417,15 @@ export const buildChunkSampleDataFromSource = (
   paletteStatsAccumulator = null,
   sampleNormalizer = null,
 ) => {
+  const paletteCountsByIndex = (paletteStatsAccumulator?.paletteCountsByIndex instanceof Uint32Array)
+    ? paletteStatsAccumulator.paletteCountsByIndex
+    : null;
+  const seenPaletteOrder = Array.isArray(paletteStatsAccumulator?.seenPaletteOrder)
+    ? paletteStatsAccumulator.seenPaletteOrder
+    : null;
+  const paletteCountsObject = (paletteStatsAccumulator && typeof paletteStatsAccumulator === 'object')
+    ? (paletteStatsAccumulator.paletteCounts || (paletteStatsAccumulator.paletteCounts = Object.create(null)))
+    : null;
   let count = 0;
   for (let y = 0; y < chunkHeight; y++) {
     for (let x = 0; x < chunkWidth; x++) {
@@ -309,18 +465,27 @@ export const buildChunkSampleDataFromSource = (
       sampleData.g[writeIndex] = green;
       sampleData.b[writeIndex] = blue;
       sampleData.a[writeIndex] = alphaOut;
-      const isDefacePixel = forcedDeface || isDefaceRgb(red, green, blue);
+      const packedColor = packRgb(red, green, blue);
+      const isDefacePixel = forcedDeface || packedColor === PACKED_DEFACE_RGB;
       sampleData.flags[writeIndex] = isDefacePixel ? TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE : 0;
       if (paletteStatsAccumulator && alphaOut >= 64) {
         if (isDefacePixel) {
           paletteStatsAccumulator.deface++;
         } else {
-          const paletteKey = getPaletteKeyForRgb(red, green, blue);
+          const paletteIndex = getPaletteIndexForPackedRgb(packedColor);
           paletteStatsAccumulator.required++;
-          if (paletteKey === TEMPLATE_OTHER_COLOR_KEY) {
+          if (paletteIndex === PALETTE_INDEX_OTHER) {
             paletteStatsAccumulator.hasOther = true;
           }
-          paletteStatsAccumulator.paletteCounts[paletteKey] = (paletteStatsAccumulator.paletteCounts[paletteKey] || 0) + 1;
+          if (paletteCountsByIndex && seenPaletteOrder && paletteIndex < paletteCountsByIndex.length) {
+            if (paletteCountsByIndex[paletteIndex] === 0) {
+              seenPaletteOrder.push(paletteIndex);
+            }
+            paletteCountsByIndex[paletteIndex]++;
+          } else if (paletteCountsObject) {
+            const paletteKey = paletteKeyByIndex[paletteIndex] || TEMPLATE_OTHER_COLOR_KEY;
+            paletteCountsObject[paletteKey] = (paletteCountsObject[paletteKey] || 0) + 1;
+          }
         }
       }
       writeIndex++;
@@ -372,7 +537,7 @@ export const collectTemplateProgressFromSamples = ({
   paletteStats,
   templateStats,
   exampleMax,
-  colorMatchDelta = 3,
+  colorMatchDelta = LIVE_COLOR_MATCH_DELTA,
   errorMapOnlyEnabledColors = false,
   displayedColors = null,
   errorData = null,
@@ -387,13 +552,12 @@ export const collectTemplateProgressFromSamples = ({
   let wrongCount = 0;
   let requiredCount = 0;
   const safeTileSize = Math.max(1, Math.trunc(Number(tileSize) || 0));
-  const ensureTemplateProgress = () => {
-    if (!templateKey) return null;
-    if (templateStats[templateKey] === undefined) {
-      templateStats[templateKey] = { painted: 0 };
-    }
-    return templateStats[templateKey];
-  };
+  const templateProgress = templateKey
+    ? (templateStats[templateKey] ?? (templateStats[templateKey] = { painted: 0, palette: {} }))
+    : null;
+  const canWriteErrorMap = !!(errorData && templateEnabled);
+  const displayedColorPackedSet = errorMapOnlyEnabledColors ? getDisplayedColorPackedSet(displayedColors) : null;
+  const displayOther = errorMapOnlyEnabledColors ? displayedColors?.has(TEMPLATE_OTHER_COLOR_KEY) === true : true;
 
   for (let index = 0; index < sampleData.count; index++) {
     const localX = sampleData.x[index];
@@ -412,89 +576,97 @@ export const collectTemplateProgressFromSamples = ({
     }
 
     requiredCount++;
-    const templateProgress = ensureTemplateProgress();
-    const colorKey = rgbToMeta.has(`${templateRed},${templateGreen},${templateBlue}`)
-      ? `${templateRed},${templateGreen},${templateBlue}`
-      : 'other';
+    const packedTemplateColor = packRgb(templateRed, templateGreen, templateBlue);
+    const paletteIndex = getPaletteIndexForPackedRgb(packedTemplateColor);
+    const colorKey = paletteKeyByIndex[paletteIndex] || TEMPLATE_OTHER_COLOR_KEY;
     const tileIndex = (pixelY * safeTileSize + pixelX) * 4;
     const liveRed = tilePixels[tileIndex];
     const liveGreen = tilePixels[tileIndex + 1];
     const liveBlue = tilePixels[tileIndex + 2];
     const liveAlpha = tilePixels[tileIndex + 3];
-    const shouldColorAppearInErrorMap = !errorMapOnlyEnabledColors || displayedColors?.has(colorKey);
-    const errorIndex = errorData ? (localY * errorWidth + localX) * 4 : -1;
+    const shouldColorAppearInErrorMap = !errorMapOnlyEnabledColors || (
+      paletteIndex === PALETTE_INDEX_OTHER
+        ? displayOther
+        : displayedColorPackedSet?.has(packedTemplateColor)
+    );
+    const shouldWriteError = canWriteErrorMap && shouldColorAppearInErrorMap;
+    const errorIndex = shouldWriteError ? (localY * errorWidth + localX) * 4 : -1;
 
     let isPainted = false;
     if (liveAlpha < 64) {
-      if (errorData && templateEnabled && shouldColorAppearInErrorMap) {
+      if (shouldWriteError) {
         errorData[errorIndex] = 128;
         errorData[errorIndex + 1] = 128;
         errorData[errorIndex + 2] = 128;
         errorData[errorIndex + 3] = 200;
       }
-    } else if (
-      (liveRed === templateRed && liveGreen === templateGreen && liveBlue === templateBlue)
-      || (
-        colorKey !== 'other'
-        && Math.abs(liveRed - templateRed) <= colorMatchDelta
-        && Math.abs(liveGreen - templateGreen) <= colorMatchDelta
-        && Math.abs(liveBlue - templateBlue) <= colorMatchDelta
-      )
-    ) {
+    } else {
+      const exactMatch = liveRed === templateRed && liveGreen === templateGreen && liveBlue === templateBlue;
+      const packedLiveColor = packRgb(liveRed, liveGreen, liveBlue);
+      const normalizedLivePacked = paintablePackedRgbSet.has(packedLiveColor)
+        ? packedLiveColor
+        : getNearestPaintablePacked(liveRed, liveGreen, liveBlue);
+      const paletteMatch = paletteIndex !== PALETTE_INDEX_OTHER && normalizedLivePacked === packedTemplateColor;
+      if (!(exactMatch || paletteMatch)) {
+        wrongCount++;
+        if (shouldWriteError) {
+          errorData[errorIndex] = 255;
+          errorData[errorIndex + 1] = 0;
+          errorData[errorIndex + 2] = 0;
+          errorData[errorIndex + 3] = 224;
+        }
+      } else {
       paintedCount++;
       isPainted = true;
-      if (paletteStats[colorKey] === undefined) {
-        paletteStats[colorKey] = {
-          painted: 1,
-          paintedAndEnabled: +templateEnabled,
+      let paletteEntry = paletteStats[colorKey];
+      if (paletteEntry === undefined) {
+        paletteEntry = {
+          painted: 0,
+          paintedAndEnabled: 0,
           missing: 0,
           examplesEnabled: [],
         };
-      } else {
-        paletteStats[colorKey].painted++;
-        if (templateEnabled) {
-          paletteStats[colorKey].paintedAndEnabled++;
-        }
+        paletteStats[colorKey] = paletteEntry;
+      }
+      paletteEntry.painted++;
+      if (templateEnabled) {
+        paletteEntry.paintedAndEnabled++;
       }
       if (templateProgress) {
         templateProgress.painted++;
+        if (!templateProgress.palette || typeof templateProgress.palette !== 'object') {
+          templateProgress.palette = {};
+        }
+        templateProgress.palette[colorKey] = (Number(templateProgress.palette[colorKey]) || 0) + 1;
       }
-      if (errorData && templateEnabled && shouldColorAppearInErrorMap) {
+      if (shouldWriteError) {
         errorData[errorIndex] = 0;
         errorData[errorIndex + 1] = 128;
         errorData[errorIndex + 2] = 0;
         errorData[errorIndex + 3] = 160;
       }
-    } else {
-      wrongCount++;
-      if (errorData && templateEnabled && shouldColorAppearInErrorMap) {
-        errorData[errorIndex] = 255;
-        errorData[errorIndex + 1] = 0;
-        errorData[errorIndex + 2] = 0;
-        errorData[errorIndex + 3] = 224;
       }
     }
 
     if (!isPainted) {
-      const example = [
-        tileCoords,
-        [pixelX, pixelY],
-      ];
-      if (paletteStats[colorKey] === undefined) {
-        paletteStats[colorKey] = {
+      let paletteEntry = paletteStats[colorKey];
+      if (paletteEntry === undefined) {
+        paletteEntry = {
           painted: 0,
           paintedAndEnabled: 0,
-          missing: 1,
+          missing: 0,
           examplesEnabled: [],
         };
-        if (templateEnabled) {
-          addTemplateExampleToReservoir(paletteStats[colorKey], example, exampleMax, randomFn);
-        }
-      } else {
-        paletteStats[colorKey].missing++;
-        if (templateEnabled) {
-          addTemplateExampleToReservoir(paletteStats[colorKey], example, exampleMax, randomFn);
-        }
+        paletteStats[colorKey] = paletteEntry;
+      }
+      paletteEntry.missing++;
+      if (templateEnabled) {
+        addTemplateExampleToReservoir(
+          paletteEntry,
+          [tileCoords, [pixelX, pixelY]],
+          exampleMax,
+          randomFn
+        );
       }
     }
   }
@@ -515,14 +687,23 @@ export const findNearestUnpaintedSamplePixel = ({
   excludedCoordsKey,
   templateName,
   distanceSqFn,
-  colorMatchDelta = 3,
+  colorMatchDelta = LIVE_COLOR_MATCH_DELTA,
 }) => {
   if (!sampleData || !liveTilePixels || !Number.isFinite(tileSize) || typeof distanceSqFn !== 'function') {
     return null;
   }
 
-  let bestCandidate = null;
+  const displayedColorPackedSet = getDisplayedColorPackedSet(displayedColorSet);
+  if (!displayedColorPackedSet || displayedColorPackedSet.size === 0) {
+    return null;
+  }
+
+  const excludedCoords = parseCoordsKey(excludedCoordsKey);
   const safeTileSize = Math.max(1, Math.trunc(Number(tileSize) || 0));
+  const coordsScratch = [tileX, tileY, 0, 0];
+  let bestDistanceSq = Infinity;
+  let bestPixelX = null;
+  let bestPixelY = null;
   for (let index = 0; index < sampleData.count; index++) {
     if (sampleData.a[index] < 64 || (sampleData.flags[index] & TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) === TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) {
       continue;
@@ -535,38 +716,49 @@ export const findNearestUnpaintedSamplePixel = ({
     const templateRed = sampleData.r[index];
     const templateGreen = sampleData.g[index];
     const templateBlue = sampleData.b[index];
-    const colorKey = `${templateRed},${templateGreen},${templateBlue}`;
-    const colorMeta = rgbToMeta.get(colorKey);
-    if (!colorMeta || colorMeta.id === 0 || !displayedColorSet.has(colorKey)) continue;
+    const packedTemplateColor = packRgb(templateRed, templateGreen, templateBlue);
+    if (!paintablePackedRgbSet.has(packedTemplateColor) || !displayedColorPackedSet.has(packedTemplateColor)) continue;
 
     const tileIndex = (pixelY * safeTileSize + pixelX) * 4;
     const liveAlpha = liveTilePixels[tileIndex + 3];
     const liveRed = liveTilePixels[tileIndex];
     const liveGreen = liveTilePixels[tileIndex + 1];
     const liveBlue = liveTilePixels[tileIndex + 2];
-    const isPainted = liveAlpha >= 64 && (
-      (liveRed === templateRed && liveGreen === templateGreen && liveBlue === templateBlue)
-      || (
-        Math.abs(liveRed - templateRed) <= colorMatchDelta
-        && Math.abs(liveGreen - templateGreen) <= colorMatchDelta
-        && Math.abs(liveBlue - templateBlue) <= colorMatchDelta
-      )
-    );
+    const packedLiveColor = packRgb(liveRed, liveGreen, liveBlue);
+    const normalizedLivePacked = paintablePackedRgbSet.has(packedLiveColor)
+      ? packedLiveColor
+      : getNearestPaintablePacked(liveRed, liveGreen, liveBlue);
+    const isPainted = liveAlpha >= 64 && normalizedLivePacked === packedTemplateColor;
     if (isPainted) continue;
 
-    const coords = [tileX, tileY, pixelX, pixelY];
-    const coordsKey = coords.join(',');
-    if (coordsKey === excludedCoordsKey) continue;
-    const distanceSq = distanceSqFn(originPoint, coords);
+    if (
+      excludedCoords
+      && tileX === excludedCoords[0]
+      && tileY === excludedCoords[1]
+      && pixelX === excludedCoords[2]
+      && pixelY === excludedCoords[3]
+    ) {
+      continue;
+    }
+
+    coordsScratch[2] = pixelX;
+    coordsScratch[3] = pixelY;
+    const distanceSq = distanceSqFn(originPoint, coordsScratch);
     if (!Number.isFinite(distanceSq)) continue;
-    if (!bestCandidate || distanceSq < bestCandidate.distanceSq) {
-      bestCandidate = {
-        coords,
-        coordsKey,
-        distanceSq,
-        templateName,
-      };
+    if (distanceSq < bestDistanceSq) {
+      bestDistanceSq = distanceSq;
+      bestPixelX = pixelX;
+      bestPixelY = pixelY;
     }
   }
-  return bestCandidate;
+  if (!Number.isFinite(bestDistanceSq) || bestPixelX === null || bestPixelY === null) {
+    return null;
+  }
+  const coords = [tileX, tileY, bestPixelX, bestPixelY];
+  return {
+    coords,
+    coordsKey: coords.join(','),
+    distanceSq: bestDistanceSq,
+    templateName,
+  };
 };

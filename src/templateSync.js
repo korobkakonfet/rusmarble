@@ -511,7 +511,7 @@ export function createTemplateSync({
             if (normalizedUpdatedAt && normalizedUpdatedAt !== normalizedExistingUpdatedAt) { updateReasons.push('updated_at-changed'); }
             if (imageChanged) { updateReasons.push('image_updated_at-changed'); }
             const reasonText = updateReasons.length ? updateReasons.join(', ') : 'unknown';
-            console.log(
+            consoleLog(
               `%c${name}%c: Template update flagged for "%s" (stream: %s, reason: %s). updated_at=%s, local_updated_at=%s, image_updated_at=%s, local_image_updated_at=%s, flags_applied_at=%s`,
               consoleStyle,
               '',
@@ -718,7 +718,15 @@ export function createTemplateSync({
       const flagsOnlyAlreadyApplied = updatedChanged
         && !!normalizedFlagsAppliedAt
         && normalizedUpdatedAt === normalizedFlagsAppliedAt;
-      if (!force && !imageChanged && (!updatedChanged || flagsOnlyAlreadyApplied)) {
+      const existingOtherCount = Number(
+        preferredTemplate?.colorPalette?.other?.count
+        ?? existingStore?.palette?.other?.count
+        ?? 0
+      );
+      // Old remote templates may contain non-palette "other" colors due browser decode variance.
+      // Rebuild once even without remote image timestamp changes to normalize them.
+      const needsPaletteRebuild = existingOtherCount > 0;
+      if (!force && !imageChanged && (!updatedChanged || flagsOnlyAlreadyApplied) && !needsPaletteRebuild) {
         return null;
       }
       const payload = await readTemplatePayloadFromStream({
@@ -733,6 +741,8 @@ export function createTemplateSync({
         payload.coords,
         templateManager.getAnchor(),
         {
+          convertToPalette: true,
+          normalizeSamplesToPalette: true,
           remote: true,
           remoteName: trimmedName,
           remoteManual: remoteManual || existingRemoteManual,
@@ -844,6 +854,8 @@ export function createTemplateSync({
         payload.coords,
         templateManager.getAnchor(),
         {
+          convertToPalette: true,
+          normalizeSamplesToPalette: true,
           enabled: defaultEnabled,
         }
       );

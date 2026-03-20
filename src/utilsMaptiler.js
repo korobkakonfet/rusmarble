@@ -1,3 +1,5 @@
+import { consoleLog } from "./utils.js";
+
 export function isMapTilerLoaded() {
   if (isMapFound) return true;
   const myLocationButton = document.querySelector(".right-3>button");
@@ -472,7 +474,7 @@ export function setTheme(themeName) {
         const thisIndex = layers.indexOf(hoverLayerName);
         const nextIndex = nextLayer === undefined ? layers.length : layers.indexOf(nextLayer);
         if (thisIndex + 1 !== nextIndex) {
-          console.log("moveLayer", hoverLayerName, nextLayer);
+          consoleLog("moveLayer", hoverLayerName, nextLayer);
           map["moveLayer"](hoverLayerName, nextLayer);
         }
       };
@@ -490,7 +492,7 @@ export function setTheme(themeName) {
       } else {
         const layers = map["getLayersOrder"]();
         if (layers && layers.length && layers[layers.length - 1] !== hoverLayerName + "-ghost") {
-          console.log("moveLayer", hoverLayerName + "-ghost");
+          consoleLog("moveLayer", hoverLayerName + "-ghost");
           map["moveLayer"](hoverLayerName + "-ghost"); // move to top
         }
       }
@@ -506,7 +508,7 @@ export function setTheme(themeName) {
               (usage === "overlay" && layer.startsWith(prefix + "-error-")) ||
               layer === hoverLayerName + "-ghost"
             ));
-            console.log("nextLayer", nextLayer);
+            consoleLog("nextLayer", nextLayer);
             Object.entries(bmCanvas[usage]).forEach(([sourceID, [geoCoords1, geoCoords2]]) => {
               if (!map["getSource"](sourceID)) {
                 map["addSource"](sourceID, {
@@ -520,7 +522,7 @@ export function setTheme(themeName) {
                   ],
                 });
               };
-              console.log("layers", layers.slice(-5));
+              consoleLog("layers", layers.slice(-5));
               if (!map["getLayer"](sourceID)) {
                 map["addLayer"]({
                   "id": sourceID,
@@ -532,14 +534,14 @@ export function setTheme(themeName) {
                   }
                 });
                 // Notice that moveLayer itself also fires pixeldata event from _layerOrderChanged
-                console.log("moveLayer", sourceID, nextLayer);
+                consoleLog("moveLayer", sourceID, nextLayer);
                 map["moveLayer"](sourceID, nextLayer);
               } else {
                 // check index order
                 const thisIndex = layers.indexOf(sourceID);
                 const nextIndex = nextLayer === undefined ? layers.length : layers.indexOf(nextLayer);
                 if (thisIndex > nextIndex) {
-                  console.log("moveLayer", sourceID, nextLayer);
+                  consoleLog("moveLayer", sourceID, nextLayer);
                   map["moveLayer"](sourceID, nextLayer);
                 }
               };

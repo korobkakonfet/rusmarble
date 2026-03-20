@@ -2,17 +2,19 @@ import { performance } from 'node:perf_hooks';
 import {
   buildMaskRowSpans,
   inspectSourceImagePalette,
+  getPaletteKeyForRgb,
   createPaletteStatsAccumulator,
   finalizePaletteStatsAccumulator,
   buildChunkSampleDataFromSource,
   encodeChunkSampleData,
   decodeChunkSampleBuffer,
   collectTemplateProgressFromSamples,
+  addTemplateExampleToReservoir,
   mergeTemplateExampleReservoir,
   findNearestUnpaintedSamplePixel,
   renderSampleDataToImage,
 } from '../src/templateChunkUtils.js';
-import { colorpalette, rgbToMeta } from '../src/utils.js';
+import { colorpalette, rgbToMeta, uint8ToBase64, base64ToUint8 } from '../src/utils.js';
 
 const TEMPLATE_TILE_SIZE = 1000;
 const MAP_WORLD_WIDTH_PX = 2048 * TEMPLATE_TILE_SIZE;
@@ -29,6 +31,343 @@ const OFFSET_Y = 183;
 const EXAMPLE_LIMIT = 32;
 const CROSS_DRAW_SIZE = 5;
 const HOT_LOG_SIM_ITERATIONS = 50000;
+const TEMPLATE_OTHER_COLOR_KEY = 'other';
+const IMAGE_DATA_LITTLE_ENDIAN = (() => {
+  const buffer = new ArrayBuffer(4);
+  new Uint32Array(buffer)[0] = 0x0a0b0c0d;
+  return new Uint8Array(buffer)[0] === 0x0d;
+})();
+const KNOWN_PALETTE_PACKED_COLORS = (() => {
+  const packed = new Set();
+  for (const colorKey of rgbToMeta.keys()) {
+    if (colorKey === TEMPLATE_OTHER_COLOR_KEY) continue;
+    const colorPacked = parseRgbKeyToPackedInt(colorKey);
+    if (colorPacked !== null) {
+      packed.add(colorPacked);
+    }
+  }
+  return packed;
+})();
+const WASM_NEAREST_WAT = `
+(module
+  (memory (export "memory") 256)
+  (func (export "find_nearest")
+    (param $sampleCount i32)
+    (param $xPtr i32)
+    (param $yPtr i32)
+    (param $rPtr i32)
+    (param $gPtr i32)
+    (param $bPtr i32)
+    (param $aPtr i32)
+    (param $flagsPtr i32)
+    (param $liveTilePtr i32)
+    (param $tileSize i32)
+    (param $offsetX i32)
+    (param $offsetY i32)
+    (param $originWorldX i32)
+    (param $originWorldY i32)
+    (param $tileX i32)
+    (param $tileY i32)
+    (param $worldWidth i32)
+    (param $colorMatchDelta i32)
+    (param $excludedPixelX i32)
+    (param $excludedPixelY i32)
+    (param $allowedColorPtr i32)
+    (param $allowedColorCount i32)
+    (param $resultPtr i32)
+    (local $index i32)
+    (local $pixelX i32)
+    (local $pixelY i32)
+    (local $templateR i32)
+    (local $templateG i32)
+    (local $templateB i32)
+    (local $liveR i32)
+    (local $liveG i32)
+    (local $liveB i32)
+    (local $liveA i32)
+    (local $tileIndex i32)
+    (local $packedTemplateColor i32)
+    (local $allowedIndex i32)
+    (local $isAllowedColor i32)
+    (local $tempDiff i32)
+    (local $deltaR i32)
+    (local $deltaG i32)
+    (local $deltaB i32)
+    (local $targetWorldX i32)
+    (local $targetWorldY i32)
+    (local $wrappedDx i32)
+    (local $dy i32)
+    (local $distance f64)
+    (local $bestDistance f64)
+    (local $bestPixelX i32)
+    (local $bestPixelY i32)
+    (local $found i32)
+
+    (local.set $index (i32.const 0))
+    (local.set $bestDistance (f64.const 1e300))
+    (local.set $bestPixelX (i32.const 0))
+    (local.set $bestPixelY (i32.const 0))
+    (local.set $found (i32.const 0))
+
+    (block $scanEnd
+      (loop $scanLoop
+        (br_if $scanEnd (i32.ge_u (local.get $index) (local.get $sampleCount)))
+        (block $scanContinue
+
+        ;; Skip transparent/deface pixels.
+        (br_if $scanContinue
+          (i32.lt_u
+            (i32.load8_u (i32.add (local.get $aPtr) (local.get $index)))
+            (i32.const 64)
+          )
+        )
+        (br_if $scanContinue
+          (i32.ne
+            (i32.and
+              (i32.load8_u (i32.add (local.get $flagsPtr) (local.get $index)))
+              (i32.const 1)
+            )
+            (i32.const 0)
+          )
+        )
+
+        ;; pixelX = offsetX + x[index], pixelY = offsetY + y[index]
+        (local.set $pixelX
+          (i32.add
+            (local.get $offsetX)
+            (i32.load16_u
+              (i32.add
+                (local.get $xPtr)
+                (i32.shl (local.get $index) (i32.const 1))
+              )
+            )
+          )
+        )
+        (local.set $pixelY
+          (i32.add
+            (local.get $offsetY)
+            (i32.load16_u
+              (i32.add
+                (local.get $yPtr)
+                (i32.shl (local.get $index) (i32.const 1))
+              )
+            )
+          )
+        )
+
+        ;; Bounds check.
+        (br_if $scanContinue
+          (i32.or
+            (i32.lt_s (local.get $pixelX) (i32.const 0))
+            (i32.or
+              (i32.ge_s (local.get $pixelX) (local.get $tileSize))
+              (i32.or
+                (i32.lt_s (local.get $pixelY) (i32.const 0))
+                (i32.ge_s (local.get $pixelY) (local.get $tileSize))
+              )
+            )
+          )
+        )
+
+        ;; Load template color.
+        (local.set $templateR (i32.load8_u (i32.add (local.get $rPtr) (local.get $index))))
+        (local.set $templateG (i32.load8_u (i32.add (local.get $gPtr) (local.get $index))))
+        (local.set $templateB (i32.load8_u (i32.add (local.get $bPtr) (local.get $index))))
+
+        ;; packedTemplateColor = (r << 16) | (g << 8) | b
+        (local.set $packedTemplateColor
+          (i32.or
+            (i32.or
+              (i32.shl (local.get $templateR) (i32.const 16))
+              (i32.shl (local.get $templateG) (i32.const 8))
+            )
+            (local.get $templateB)
+          )
+        )
+
+        ;; Allowed color lookup (small linear scan).
+        (local.set $isAllowedColor (i32.const 0))
+        (local.set $allowedIndex (i32.const 0))
+        (block $allowedEnd
+          (loop $allowedLoop
+            (br_if $allowedEnd (i32.ge_u (local.get $allowedIndex) (local.get $allowedColorCount)))
+            (if
+              (i32.eq
+                (i32.load
+                  (i32.add
+                    (local.get $allowedColorPtr)
+                    (i32.shl (local.get $allowedIndex) (i32.const 2))
+                  )
+                )
+                (local.get $packedTemplateColor)
+              )
+              (then
+                (local.set $isAllowedColor (i32.const 1))
+                (br $allowedEnd)
+              )
+            )
+            (local.set $allowedIndex (i32.add (local.get $allowedIndex) (i32.const 1)))
+            (br $allowedLoop)
+          )
+        )
+        (br_if $scanContinue (i32.eqz (local.get $isAllowedColor)))
+
+        ;; Live tile pixel load.
+        (local.set $tileIndex
+          (i32.add
+            (local.get $liveTilePtr)
+            (i32.shl
+              (i32.add
+                (i32.mul (local.get $pixelY) (local.get $tileSize))
+                (local.get $pixelX)
+              )
+              (i32.const 2)
+            )
+          )
+        )
+        (local.set $liveA (i32.load8_u (i32.add (local.get $tileIndex) (i32.const 3))))
+        (local.set $liveR (i32.load8_u (local.get $tileIndex)))
+        (local.set $liveG (i32.load8_u (i32.add (local.get $tileIndex) (i32.const 1))))
+        (local.set $liveB (i32.load8_u (i32.add (local.get $tileIndex) (i32.const 2))))
+
+        ;; Skip painted pixels (exact match or close match).
+        (if
+          (i32.ge_u (local.get $liveA) (i32.const 64))
+          (then
+            (if
+              (i32.and
+                (i32.and
+                  (i32.eq (local.get $liveR) (local.get $templateR))
+                  (i32.eq (local.get $liveG) (local.get $templateG))
+                )
+                (i32.eq (local.get $liveB) (local.get $templateB))
+              )
+              (then (br $scanContinue))
+            )
+
+            (local.set $tempDiff (i32.sub (local.get $liveR) (local.get $templateR)))
+            (if
+              (i32.lt_s (local.get $tempDiff) (i32.const 0))
+              (then (local.set $tempDiff (i32.sub (i32.const 0) (local.get $tempDiff))))
+            )
+            (local.set $deltaR (local.get $tempDiff))
+
+            (local.set $tempDiff (i32.sub (local.get $liveG) (local.get $templateG)))
+            (if
+              (i32.lt_s (local.get $tempDiff) (i32.const 0))
+              (then (local.set $tempDiff (i32.sub (i32.const 0) (local.get $tempDiff))))
+            )
+            (local.set $deltaG (local.get $tempDiff))
+
+            (local.set $tempDiff (i32.sub (local.get $liveB) (local.get $templateB)))
+            (if
+              (i32.lt_s (local.get $tempDiff) (i32.const 0))
+              (then (local.set $tempDiff (i32.sub (i32.const 0) (local.get $tempDiff))))
+            )
+            (local.set $deltaB (local.get $tempDiff))
+
+            (if
+              (i32.and
+                (i32.and
+                  (i32.le_u (local.get $deltaR) (local.get $colorMatchDelta))
+                  (i32.le_u (local.get $deltaG) (local.get $colorMatchDelta))
+                )
+                (i32.le_u (local.get $deltaB) (local.get $colorMatchDelta))
+              )
+              (then (br $scanContinue))
+            )
+          )
+        )
+
+        ;; Excluded coords check (same tile implied by invocation).
+        (br_if $scanContinue
+          (i32.and
+            (i32.eq (local.get $pixelX) (local.get $excludedPixelX))
+            (i32.eq (local.get $pixelY) (local.get $excludedPixelY))
+          )
+        )
+
+        ;; targetWorldX/Y
+        (local.set $targetWorldX
+          (i32.add
+            (i32.mul (local.get $tileX) (local.get $tileSize))
+            (local.get $pixelX)
+          )
+        )
+        (local.set $targetWorldY
+          (i32.add
+            (i32.mul (local.get $tileY) (local.get $tileSize))
+            (local.get $pixelY)
+          )
+        )
+
+        ;; wrappedDx = ((dx % worldWidth) + worldWidth) % worldWidth
+        (local.set $wrappedDx
+          (i32.sub (local.get $targetWorldX) (local.get $originWorldX))
+        )
+        (local.set $wrappedDx
+          (i32.rem_s
+            (i32.add
+              (i32.rem_s (local.get $wrappedDx) (local.get $worldWidth))
+              (local.get $worldWidth)
+            )
+            (local.get $worldWidth)
+          )
+        )
+        (if
+          (i32.gt_s
+            (local.get $wrappedDx)
+            (i32.div_s (local.get $worldWidth) (i32.const 2))
+          )
+          (then
+            (local.set $wrappedDx
+              (i32.sub (local.get $wrappedDx) (local.get $worldWidth))
+            )
+          )
+        )
+        (local.set $dy (i32.sub (local.get $targetWorldY) (local.get $originWorldY)))
+
+        ;; distance = wrappedDx^2 + dy^2
+        (local.set $distance
+          (f64.add
+            (f64.mul
+              (f64.convert_i32_s (local.get $wrappedDx))
+              (f64.convert_i32_s (local.get $wrappedDx))
+            )
+            (f64.mul
+              (f64.convert_i32_s (local.get $dy))
+              (f64.convert_i32_s (local.get $dy))
+            )
+          )
+        )
+
+        (if
+          (f64.lt (local.get $distance) (local.get $bestDistance))
+          (then
+            (local.set $bestDistance (local.get $distance))
+            (local.set $bestPixelX (local.get $pixelX))
+            (local.set $bestPixelY (local.get $pixelY))
+            (local.set $found (i32.const 1))
+          )
+        )
+        )
+        (local.set $index (i32.add (local.get $index) (i32.const 1)))
+        (br $scanLoop)
+      )
+    )
+
+    ;; result layout:
+    ;; 0: found (i32)
+    ;; 4: bestPixelX (i32)
+    ;; 8: bestPixelY (i32)
+    ;; 16: bestDistance (f64)
+    (i32.store (local.get $resultPtr) (local.get $found))
+    (i32.store (i32.add (local.get $resultPtr) (i32.const 4)) (local.get $bestPixelX))
+    (i32.store (i32.add (local.get $resultPtr) (i32.const 8)) (local.get $bestPixelY))
+    (f64.store (i32.add (local.get $resultPtr) (i32.const 16)) (local.get $bestDistance))
+  )
+)
+`;
 
 function createRng(seed = 0x1badf00d) {
   let state = seed >>> 0;
@@ -132,6 +471,217 @@ function buildDisplayedColorSet(sampleData) {
   return displayed;
 }
 
+function buildDisplayedColorPackedContext(displayedColorSet) {
+  const displayedColorPackedSet = new Set();
+  let displayOtherColor = false;
+  for (const colorKey of displayedColorSet) {
+    if (colorKey === TEMPLATE_OTHER_COLOR_KEY) {
+      displayOtherColor = true;
+      continue;
+    }
+    const packedColor = parseRgbKeyToPackedInt(colorKey);
+    if (packedColor !== null) {
+      displayedColorPackedSet.add(packedColor);
+    }
+  }
+  return { displayedColorPackedSet, displayOtherColor };
+}
+
+function buildFullMaskPoints(size) {
+  const points = [];
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      points.push([x, y]);
+    }
+  }
+  return points;
+}
+
+function pickUnknownRgbColor() {
+  for (let red = 0; red < 256; red += 17) {
+    for (let green = 0; green < 256; green += 23) {
+      for (let blue = 0; blue < 256; blue += 31) {
+        const colorKey = `${red},${green},${blue}`;
+        if (!rgbToMeta.has(colorKey)) {
+          return [red, green, blue];
+        }
+      }
+    }
+  }
+  return [1, 2, 3];
+}
+
+function buildTemplateColorFilterFixture(sampleData, {
+  drawMultTemplate = 3,
+  drawMultResult = 7,
+} = {}) {
+  const templateWidth = Math.max(1, sampleData.width * drawMultTemplate);
+  const templateHeight = Math.max(1, sampleData.height * drawMultTemplate);
+  const templateData = new Uint8ClampedArray(templateWidth * templateHeight * 4);
+  const drawMultCenterTemplate = (drawMultTemplate - 1) >> 1;
+  const unknownRgb = pickUnknownRgbColor();
+  for (let index = 0; index < sampleData.count; index++) {
+    const xt = sampleData.x[index] * drawMultTemplate + drawMultCenterTemplate;
+    const yt = sampleData.y[index] * drawMultTemplate + drawMultCenterTemplate;
+    if (xt < 0 || yt < 0 || xt >= templateWidth || yt >= templateHeight) continue;
+    const pixelIndex = (yt * templateWidth + xt) * 4;
+    if ((index % 21) === 0) {
+      templateData[pixelIndex + 3] = 0;
+      continue;
+    }
+    if ((index % 11) === 0) {
+      templateData[pixelIndex] = unknownRgb[0];
+      templateData[pixelIndex + 1] = unknownRgb[1];
+      templateData[pixelIndex + 2] = unknownRgb[2];
+      templateData[pixelIndex + 3] = 255;
+      continue;
+    }
+    templateData[pixelIndex] = sampleData.r[index];
+    templateData[pixelIndex + 1] = sampleData.g[index];
+    templateData[pixelIndex + 2] = sampleData.b[index];
+    templateData[pixelIndex + 3] = sampleData.a[index] >= 1 ? sampleData.a[index] : 255;
+  }
+  const resultWidth = Math.max(1, sampleData.width * drawMultResult);
+  const resultHeight = Math.max(1, sampleData.height * drawMultResult);
+  const maskPoints = buildFullMaskPoints(drawMultResult);
+  return {
+    templateData,
+    templateWidth,
+    templateHeight,
+    drawMultTemplate,
+    drawMultResult,
+    drawMultCenterTemplate,
+    resultWidth,
+    resultHeight,
+    maskPoints,
+  };
+}
+
+function templateColorFilterLegacyLoop({
+  templateData,
+  templateWidth,
+  templateHeight,
+  drawMultTemplate,
+  drawMultResult,
+  drawMultCenterTemplate,
+  resultWidth,
+  resultHeight,
+  maskPoints,
+  displayedColorSet,
+}) {
+  const imageData = new Uint8ClampedArray(resultWidth * resultHeight * 4);
+  for (const [offsetX, offsetY] of maskPoints) {
+    for (
+      let yt = drawMultCenterTemplate, yr = offsetY;
+      yt < templateHeight;
+      yt += drawMultTemplate, yr += drawMultResult
+    ) {
+      for (
+        let xt = drawMultCenterTemplate, xr = offsetX;
+        xt < templateWidth;
+        xt += drawMultTemplate, xr += drawMultResult
+      ) {
+        const templatePixelCenter = (yt * templateWidth + xt) * 4;
+        const red = templateData[templatePixelCenter];
+        const green = templateData[templatePixelCenter + 1];
+        const blue = templateData[templatePixelCenter + 2];
+        const alpha = templateData[templatePixelCenter + 3];
+        if (alpha < 1) continue;
+        const colorKey = `${red},${green},${blue}`;
+        const normalizedKey = rgbToMeta.has(colorKey) ? colorKey : TEMPLATE_OTHER_COLOR_KEY;
+        if (!displayedColorSet.has(normalizedKey)) continue;
+        const realPixelCenter = (yr * resultWidth + xr) * 4;
+        imageData[realPixelCenter] = red;
+        imageData[realPixelCenter + 1] = green;
+        imageData[realPixelCenter + 2] = blue;
+        imageData[realPixelCenter + 3] = alpha;
+      }
+    }
+  }
+  return imageData[0] + imageData[1] + imageData[2] + imageData[3] + imageData[imageData.length - 1];
+}
+
+function templateColorFilterPackedLoop({
+  templateData,
+  templateWidth,
+  templateHeight,
+  drawMultTemplate,
+  drawMultResult,
+  drawMultCenterTemplate,
+  resultWidth,
+  resultHeight,
+  maskPoints,
+  displayedColorPackedSet,
+  displayOtherColor,
+}) {
+  const imageData = new Uint8ClampedArray(resultWidth * resultHeight * 4);
+  const drawMultTemplateStepBytes = drawMultTemplate << 2;
+  const drawMultResultStepBytes = drawMultResult << 2;
+  const templateRowStepBytes = templateWidth << 2;
+  const resultRowStepBytes = resultWidth << 2;
+  const shouldCheckUnknownColors = displayOtherColor === true;
+  for (const [offsetX, offsetY] of maskPoints) {
+    for (
+      let yt = drawMultCenterTemplate, yr = offsetY;
+      yt < templateHeight;
+      yt += drawMultTemplate, yr += drawMultResult
+    ) {
+      const templateRowBase = yt * templateRowStepBytes;
+      const resultRowBase = yr * resultRowStepBytes;
+      for (
+        let xt = drawMultCenterTemplate, xr = offsetX,
+          templatePixelCenter = templateRowBase + (xt << 2),
+          realPixelCenter = resultRowBase + (xr << 2);
+        xt < templateWidth;
+        xt += drawMultTemplate, xr += drawMultResult,
+          templatePixelCenter += drawMultTemplateStepBytes,
+          realPixelCenter += drawMultResultStepBytes
+      ) {
+        const red = templateData[templatePixelCenter];
+        const green = templateData[templatePixelCenter + 1];
+        const blue = templateData[templatePixelCenter + 2];
+        const alpha = templateData[templatePixelCenter + 3];
+        if (alpha < 1) continue;
+        const packedColor = ((red << 16) | (green << 8) | blue) >>> 0;
+        if (
+          !displayedColorPackedSet.has(packedColor)
+          && (!shouldCheckUnknownColors || KNOWN_PALETTE_PACKED_COLORS.has(packedColor))
+        ) {
+          continue;
+        }
+        imageData[realPixelCenter] = red;
+        imageData[realPixelCenter + 1] = green;
+        imageData[realPixelCenter + 2] = blue;
+        imageData[realPixelCenter + 3] = alpha;
+      }
+    }
+  }
+  return imageData[0] + imageData[1] + imageData[2] + imageData[3] + imageData[imageData.length - 1];
+}
+
+function parseRgbKeyToPackedInt(key) {
+  const parts = String(key).split(',');
+  if (parts.length !== 3) return null;
+  const red = Number(parts[0]);
+  const green = Number(parts[1]);
+  const blue = Number(parts[2]);
+  if (![red, green, blue].every(Number.isInteger)) return null;
+  if (red < 0 || red > 255 || green < 0 || green > 255 || blue < 0 || blue > 255) return null;
+  return ((red << 16) | (green << 8) | blue) >>> 0;
+}
+
+function collectAllowedPackedColors(displayedColorSet) {
+  const packedColors = [];
+  for (const colorKey of displayedColorSet) {
+    const meta = rgbToMeta.get(colorKey);
+    if (typeof meta?.id !== 'number' || meta.id <= 0) continue;
+    const packed = parseRgbKeyToPackedInt(colorKey);
+    if (packed === null) continue;
+    packedColors.push(packed);
+  }
+  return Uint32Array.from(new Set(packedColors));
+}
+
 function computeWrappedWorldDeltaX(currentWorldX, targetWorldX) {
   const delta = targetWorldX - currentWorldX;
   if (!Number.isFinite(delta)) return delta;
@@ -158,6 +708,331 @@ function createReservoirExamples(sampleData, count = 512) {
     ]);
   }
   return examples;
+}
+
+function encodeChunkSampleDataLegacy(sampleData) {
+  const width = Math.max(0, Math.trunc(Number(sampleData?.width) || 0));
+  const height = Math.max(0, Math.trunc(Number(sampleData?.height) || 0));
+  const count = Math.max(0, Math.trunc(Number(sampleData?.count) || 0));
+  const recordBytes = 9;
+  const headerBytes = 8;
+  const buffer = new ArrayBuffer(headerBytes + count * recordBytes);
+  const view = new DataView(buffer);
+  view.setUint16(0, width, true);
+  view.setUint16(2, height, true);
+  view.setUint32(4, count, true);
+  let offset = headerBytes;
+  for (let index = 0; index < count; index++) {
+    view.setUint16(offset, sampleData.x[index], true);
+    view.setUint16(offset + 2, sampleData.y[index], true);
+    view.setUint8(offset + 4, sampleData.flags[index] || 0);
+    view.setUint8(offset + 5, sampleData.r[index] || 0);
+    view.setUint8(offset + 6, sampleData.g[index] || 0);
+    view.setUint8(offset + 7, sampleData.b[index] || 0);
+    view.setUint8(offset + 8, sampleData.a[index] || 0);
+    offset += recordBytes;
+  }
+  return uint8ToBase64(new Uint8Array(buffer));
+}
+
+function decodeChunkSampleBufferLegacy(bufferValue) {
+  if (bufferValue === undefined || bufferValue === null) return null;
+  const bytes = typeof bufferValue === 'string' ? base64ToUint8(bufferValue) : bufferValue;
+  if (!(bytes instanceof Uint8Array) || bytes.length < 8) {
+    return null;
+  }
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const width = view.getUint16(0, true);
+  const height = view.getUint16(2, true);
+  const count = view.getUint32(4, true);
+  const expectedLength = 8 + count * 9;
+  if (bytes.length < expectedLength) {
+    return null;
+  }
+  const sampleData = {
+    width,
+    height,
+    count,
+    x: new Uint16Array(count),
+    y: new Uint16Array(count),
+    r: new Uint8Array(count),
+    g: new Uint8Array(count),
+    b: new Uint8Array(count),
+    a: new Uint8Array(count),
+    flags: new Uint8Array(count),
+    native: true,
+  };
+  let offset = 8;
+  for (let index = 0; index < count; index++) {
+    sampleData.x[index] = view.getUint16(offset, true);
+    sampleData.y[index] = view.getUint16(offset + 2, true);
+    sampleData.flags[index] = view.getUint8(offset + 4);
+    sampleData.r[index] = view.getUint8(offset + 5);
+    sampleData.g[index] = view.getUint8(offset + 6);
+    sampleData.b[index] = view.getUint8(offset + 7);
+    sampleData.a[index] = view.getUint8(offset + 8);
+    offset += 9;
+  }
+  return sampleData;
+}
+
+function inspectSourceImagePaletteLegacy(sourceData, width, height) {
+  if (!sourceData || !Number.isFinite(width) || !Number.isFinite(height)) {
+    return { required: 0, deface: 0, paletteMap: new Map() };
+  }
+  let required = 0;
+  let deface = 0;
+  const paletteCounts = Object.create(null);
+  const pixelBytes = Math.min(sourceData.length, Math.max(0, Math.trunc(width * height * 4)));
+  for (let idx = 0; idx < pixelBytes; idx += 4) {
+    const a = sourceData[idx + 3];
+    if (a < 64) continue;
+    const r = sourceData[idx];
+    const g = sourceData[idx + 1];
+    const b = sourceData[idx + 2];
+    if (r === 222 && g === 250 && b === 206) {
+      deface++;
+      continue;
+    }
+    const key = getPaletteKeyForRgb(r, g, b);
+    required++;
+    paletteCounts[key] = (paletteCounts[key] || 0) + 1;
+  }
+  const paletteMap = new Map(Object.entries(paletteCounts));
+  return { required, deface, paletteMap };
+}
+
+function createPaletteStatsAccumulatorLegacy() {
+  return {
+    required: 0,
+    deface: 0,
+    hasOther: false,
+    paletteCounts: Object.create(null),
+  };
+}
+
+function packRgbaForBenchmark(r, g, b, a) {
+  return IMAGE_DATA_LITTLE_ENDIAN
+    ? (((a << 24) | (b << 16) | (g << 8) | r) >>> 0)
+    : (((r << 24) | (g << 16) | (b << 8) | a) >>> 0);
+}
+
+function renderSampleDataToImageLegacy({
+  sampleData,
+  imageData,
+  resultWidth,
+  drawSize,
+  maskPoints = null,
+  maskRowSpans,
+  displayedColorSet = null,
+  includeDefaceCheckerboard = false,
+}) {
+  if (!sampleData || !imageData?.data || !Number.isFinite(resultWidth) || !Number.isFinite(drawSize)) {
+    return imageData;
+  }
+  const safeResultWidth = Math.max(1, Math.trunc(Number(resultWidth) || 0));
+  const safeDrawSize = Math.max(1, Math.trunc(Number(drawSize) || 0));
+  const pixelData32 = new Uint32Array(
+    imageData.data.buffer,
+    imageData.data.byteOffset,
+    imageData.data.byteLength >>> 2
+  );
+  const usePointMode = Array.isArray(maskPoints) && maskPoints.length > 0 && maskPoints.length <= 32;
+  const pointOffsets = usePointMode
+    ? maskPoints.map((point) => point[1] * safeResultWidth + point[0])
+    : null;
+  const checkerDark = packRgbaForBenchmark(0, 0, 0, 32);
+  const checkerLight = packRgbaForBenchmark(255, 255, 255, 32);
+
+  for (let index = 0; index < sampleData.count; index++) {
+    const alpha = sampleData.a[index];
+    if (alpha < 1) continue;
+    const baseX = sampleData.x[index] * safeDrawSize;
+    const baseY = sampleData.y[index] * safeDrawSize;
+    const red = sampleData.r[index];
+    const green = sampleData.g[index];
+    const blue = sampleData.b[index];
+    const isDefacePixel = (sampleData.flags[index] & 1) === 1;
+
+    if (isDefacePixel) {
+      if (!includeDefaceCheckerboard) continue;
+      for (let offsetY = 0; offsetY < safeDrawSize; offsetY++) {
+        const rowOffset = (baseY + offsetY) * safeResultWidth + baseX;
+        const parity = offsetY & 1;
+        for (let offsetX = 0; offsetX < safeDrawSize; offsetX++) {
+          pixelData32[rowOffset + offsetX] = ((offsetX + parity) & 1) === 0 ? checkerDark : checkerLight;
+        }
+      }
+      continue;
+    }
+
+    if (displayedColorSet) {
+      const colorKey = getPaletteKeyForRgb(red, green, blue);
+      if (!displayedColorSet.has(colorKey)) continue;
+    }
+
+    const packedColor = packRgbaForBenchmark(red, green, blue, alpha);
+    if (usePointMode) {
+      const baseOffset = baseY * safeResultWidth + baseX;
+      for (let pointIndex = 0; pointIndex < pointOffsets.length; pointIndex++) {
+        pixelData32[baseOffset + pointOffsets[pointIndex]] = packedColor;
+      }
+      continue;
+    }
+    for (let row = 0; row < maskRowSpans.length; row++) {
+      const spans = maskRowSpans[row];
+      if (!spans || spans.length === 0) continue;
+      const rowOffset = (baseY + row) * safeResultWidth + baseX;
+      for (let spanIndex = 0; spanIndex < spans.length; spanIndex += 2) {
+        pixelData32.fill(
+          packedColor,
+          rowOffset + spans[spanIndex],
+          rowOffset + spans[spanIndex + 1]
+        );
+      }
+    }
+  }
+  return imageData;
+}
+
+function collectTemplateProgressFromSamplesLegacy({
+  sampleData,
+  tilePixels,
+  tileSize,
+  offsetX,
+  offsetY,
+  tileCoords,
+  templateEnabled,
+  templateKey,
+  paletteStats,
+  templateStats,
+  exampleMax,
+  colorMatchDelta = 3,
+  errorMapOnlyEnabledColors = false,
+  displayedColors = null,
+  errorData = null,
+  errorWidth = 0,
+  randomFn = Math.random,
+}) {
+  if (!sampleData || !tilePixels || !Number.isFinite(tileSize)) {
+    return { paintedCount: 0, wrongCount: 0, requiredCount: 0 };
+  }
+
+  let paintedCount = 0;
+  let wrongCount = 0;
+  let requiredCount = 0;
+  const safeTileSize = Math.max(1, Math.trunc(Number(tileSize) || 0));
+  const ensureTemplateProgress = () => {
+    if (!templateKey) return null;
+    if (templateStats[templateKey] === undefined) {
+      templateStats[templateKey] = { painted: 0 };
+    }
+    return templateStats[templateKey];
+  };
+
+  for (let index = 0; index < sampleData.count; index++) {
+    const localX = sampleData.x[index];
+    const localY = sampleData.y[index];
+    const pixelX = offsetX + localX;
+    const pixelY = offsetY + localY;
+    if (pixelX < 0 || pixelY < 0 || pixelX >= safeTileSize || pixelY >= safeTileSize) continue;
+
+    const templateRed = sampleData.r[index];
+    const templateGreen = sampleData.g[index];
+    const templateBlue = sampleData.b[index];
+    const templateAlpha = sampleData.a[index];
+    const isDefacePixel = (sampleData.flags[index] & 1) === 1;
+    if (templateAlpha < 64 || isDefacePixel) {
+      continue;
+    }
+
+    requiredCount++;
+    const templateProgress = ensureTemplateProgress();
+    const colorKey = getPaletteKeyForRgb(templateRed, templateGreen, templateBlue);
+    const tileIndex = (pixelY * safeTileSize + pixelX) * 4;
+    const liveRed = tilePixels[tileIndex];
+    const liveGreen = tilePixels[tileIndex + 1];
+    const liveBlue = tilePixels[tileIndex + 2];
+    const liveAlpha = tilePixels[tileIndex + 3];
+    const shouldColorAppearInErrorMap = !errorMapOnlyEnabledColors || displayedColors?.has(colorKey);
+    const errorIndex = errorData ? (localY * errorWidth + localX) * 4 : -1;
+
+    let isPainted = false;
+    if (liveAlpha < 64) {
+      if (errorData && templateEnabled && shouldColorAppearInErrorMap) {
+        errorData[errorIndex] = 128;
+        errorData[errorIndex + 1] = 128;
+        errorData[errorIndex + 2] = 128;
+        errorData[errorIndex + 3] = 200;
+      }
+    } else if (
+      (liveRed === templateRed && liveGreen === templateGreen && liveBlue === templateBlue)
+      || (
+        colorKey !== 'other'
+        && Math.abs(liveRed - templateRed) <= colorMatchDelta
+        && Math.abs(liveGreen - templateGreen) <= colorMatchDelta
+        && Math.abs(liveBlue - templateBlue) <= colorMatchDelta
+      )
+    ) {
+      paintedCount++;
+      isPainted = true;
+      if (paletteStats[colorKey] === undefined) {
+        paletteStats[colorKey] = {
+          painted: 1,
+          paintedAndEnabled: +templateEnabled,
+          missing: 0,
+          examplesEnabled: [],
+        };
+      } else {
+        paletteStats[colorKey].painted++;
+        if (templateEnabled) {
+          paletteStats[colorKey].paintedAndEnabled++;
+        }
+      }
+      if (templateProgress) {
+        templateProgress.painted++;
+      }
+      if (errorData && templateEnabled && shouldColorAppearInErrorMap) {
+        errorData[errorIndex] = 0;
+        errorData[errorIndex + 1] = 128;
+        errorData[errorIndex + 2] = 0;
+        errorData[errorIndex + 3] = 160;
+      }
+    } else {
+      wrongCount++;
+      if (errorData && templateEnabled && shouldColorAppearInErrorMap) {
+        errorData[errorIndex] = 255;
+        errorData[errorIndex + 1] = 0;
+        errorData[errorIndex + 2] = 0;
+        errorData[errorIndex + 3] = 224;
+      }
+    }
+
+    if (!isPainted) {
+      const example = [
+        tileCoords,
+        [pixelX, pixelY],
+      ];
+      if (paletteStats[colorKey] === undefined) {
+        paletteStats[colorKey] = {
+          painted: 0,
+          paintedAndEnabled: 0,
+          missing: 1,
+          examplesEnabled: [],
+        };
+        if (templateEnabled) {
+          addTemplateExampleToReservoir(paletteStats[colorKey], example, exampleMax, randomFn);
+        }
+      } else {
+        paletteStats[colorKey].missing++;
+        if (templateEnabled) {
+          addTemplateExampleToReservoir(paletteStats[colorKey], example, exampleMax, randomFn);
+        }
+      }
+    }
+  }
+
+  return { paintedCount, wrongCount, requiredCount };
 }
 
 function buildDefaultCrossMaskPoints(size) {
@@ -322,6 +1197,118 @@ function runBenchmark(name, iterations, fn, warmup = 2) {
   };
 }
 
+async function createNearestWasmRunner({
+  sampleData,
+  tilePixels,
+  displayedColorSet,
+  tileX,
+  tileY,
+  tileSize,
+  offsetX,
+  offsetY,
+  originPoint,
+  excludedCoordsKey,
+  colorMatchDelta = 3,
+  copyInputsPerRun = false,
+}) {
+  const wabtFactory = (await import('wabt')).default;
+  const wabt = await wabtFactory();
+  const parsed = wabt.parseWat('nearest_unpainted.wat', WASM_NEAREST_WAT);
+  const { buffer } = parsed.toBinary({ log: false, write_debug_names: false });
+  const { instance } = await WebAssembly.instantiate(buffer, {});
+  const { memory, find_nearest: findNearest } = instance.exports;
+  const memoryU8 = new Uint8Array(memory.buffer);
+  const memoryI32 = new Int32Array(memory.buffer);
+  const memoryF64 = new Float64Array(memory.buffer);
+
+  let cursor = 0;
+  const align = (value, size) => ((value + size - 1) & ~(size - 1));
+  const alloc = (bytes, alignment = 1) => {
+    cursor = align(cursor, alignment);
+    const ptr = cursor;
+    cursor += bytes;
+    if (cursor > memoryU8.length) {
+      throw new Error(`WASM memory exhausted at ${cursor} bytes (capacity ${memoryU8.length}).`);
+    }
+    return ptr;
+  };
+
+  const sampleCount = sampleData.count | 0;
+  const xPtr = alloc(sampleData.x.byteLength, 2);
+  const yPtr = alloc(sampleData.y.byteLength, 2);
+  const rPtr = alloc(sampleData.r.byteLength);
+  const gPtr = alloc(sampleData.g.byteLength);
+  const bPtr = alloc(sampleData.b.byteLength);
+  const aPtr = alloc(sampleData.a.byteLength);
+  const flagsPtr = alloc(sampleData.flags.byteLength);
+  const liveTilePtr = alloc(tilePixels.byteLength);
+  const allowedPackedColors = collectAllowedPackedColors(displayedColorSet);
+  const allowedColorPtr = alloc(allowedPackedColors.byteLength, 4);
+  const resultPtr = alloc(24, 8);
+
+  memoryU8.set(new Uint8Array(sampleData.x.buffer, sampleData.x.byteOffset, sampleData.x.byteLength), xPtr);
+  memoryU8.set(new Uint8Array(sampleData.y.buffer, sampleData.y.byteOffset, sampleData.y.byteLength), yPtr);
+  memoryU8.set(sampleData.r, rPtr);
+  memoryU8.set(sampleData.g, gPtr);
+  memoryU8.set(sampleData.b, bPtr);
+  memoryU8.set(sampleData.a, aPtr);
+  memoryU8.set(sampleData.flags, flagsPtr);
+  memoryU8.set(tilePixels, liveTilePtr);
+  memoryU8.set(new Uint8Array(allowedPackedColors.buffer), allowedColorPtr);
+
+  const excludedParts = String(excludedCoordsKey).split(',').map((value) => Number(value));
+  const excludedPixelX = Number.isFinite(excludedParts?.[2]) ? excludedParts[2] : -1;
+  const excludedPixelY = Number.isFinite(excludedParts?.[3]) ? excludedParts[3] : -1;
+
+  const worldWidth = MAP_WORLD_WIDTH_PX;
+  const originWorldX = Math.trunc(originPoint?.x || 0);
+  const originWorldY = Math.trunc(originPoint?.y || 0);
+
+  return () => {
+    if (copyInputsPerRun) {
+      memoryU8.set(new Uint8Array(sampleData.x.buffer, sampleData.x.byteOffset, sampleData.x.byteLength), xPtr);
+      memoryU8.set(new Uint8Array(sampleData.y.buffer, sampleData.y.byteOffset, sampleData.y.byteLength), yPtr);
+      memoryU8.set(sampleData.r, rPtr);
+      memoryU8.set(sampleData.g, gPtr);
+      memoryU8.set(sampleData.b, bPtr);
+      memoryU8.set(sampleData.a, aPtr);
+      memoryU8.set(sampleData.flags, flagsPtr);
+      memoryU8.set(tilePixels, liveTilePtr);
+    }
+    findNearest(
+      sampleCount,
+      xPtr,
+      yPtr,
+      rPtr,
+      gPtr,
+      bPtr,
+      aPtr,
+      flagsPtr,
+      liveTilePtr,
+      tileSize,
+      offsetX,
+      offsetY,
+      originWorldX,
+      originWorldY,
+      tileX,
+      tileY,
+      worldWidth,
+      colorMatchDelta,
+      excludedPixelX,
+      excludedPixelY,
+      allowedColorPtr,
+      allowedPackedColors.length,
+      resultPtr
+    );
+    const found = memoryI32[resultPtr >> 2];
+    if (!found) return 0;
+    const pixelX = memoryI32[(resultPtr + 4) >> 2];
+    const pixelY = memoryI32[(resultPtr + 8) >> 2];
+    const distanceSq = memoryF64[(resultPtr + 16) >> 3];
+    return Math.round(distanceSq) + pixelX + pixelY;
+  };
+}
+
 function printResults(results, fixture) {
   console.log('Template Performance Benchmark');
   console.log(`Fixture: source ${IMAGE_WIDTH}x${IMAGE_HEIGHT}, chunk ${CHUNK_WIDTH}x${CHUNK_HEIGHT}, sampled pixels ${fixture.sampleData.count}`);
@@ -350,7 +1337,7 @@ function printResults(results, fixture) {
   }
 }
 
-function main() {
+async function main() {
   const sourceData = buildSourceImageData();
   const sampleData = buildChunkSampleDataFromSource(
     sourceData,
@@ -369,16 +1356,67 @@ function main() {
   const crossMaskRowSpans = buildMaskRowSpans(crossMaskPoints, CROSS_DRAW_SIZE);
   const crossResultWidth = sampleData.width * CROSS_DRAW_SIZE;
   const crossResultHeight = sampleData.height * CROSS_DRAW_SIZE;
+  const colorFilterFixture = buildTemplateColorFilterFixture(sampleData);
+  const displayedColorSubset = (() => {
+    const subset = new Set();
+    let index = 0;
+    for (const colorKey of displayedColorSet) {
+      if ((index % 4) !== 0) {
+        subset.add(colorKey);
+      }
+      index++;
+    }
+    return subset;
+  })();
+  const displayedColorSubsetWithOther = new Set(displayedColorSubset);
+  displayedColorSubsetWithOther.add(TEMPLATE_OTHER_COLOR_KEY);
+  const displayedPackedNoOther = buildDisplayedColorPackedContext(displayedColorSubset);
+  const displayedPackedWithOther = buildDisplayedColorPackedContext(displayedColorSubsetWithOther);
   const overlayTransportSource = buildOverlayTransportSourceBuffer(crossResultWidth, crossResultHeight);
   const originPoint = {
     x: TILE_X * TEMPLATE_TILE_SIZE + 500,
     y: TILE_Y * TEMPLATE_TILE_SIZE + 500,
   };
   const excludedCoordsKey = `${TILE_X},${TILE_Y},500,500`;
+  let wasmNearestRunner = null;
+  let wasmNearestRunnerCopy = null;
+  try {
+    wasmNearestRunner = await createNearestWasmRunner({
+      sampleData,
+      tilePixels,
+      displayedColorSet,
+      tileX: TILE_X,
+      tileY: TILE_Y,
+      tileSize: TEMPLATE_TILE_SIZE,
+      offsetX: OFFSET_X,
+      offsetY: OFFSET_Y,
+      originPoint,
+      excludedCoordsKey,
+    });
+    wasmNearestRunnerCopy = await createNearestWasmRunner({
+      sampleData,
+      tilePixels,
+      displayedColorSet,
+      tileX: TILE_X,
+      tileY: TILE_Y,
+      tileSize: TEMPLATE_TILE_SIZE,
+      offsetX: OFFSET_X,
+      offsetY: OFFSET_Y,
+      originPoint,
+      excludedCoordsKey,
+      copyInputsPerRun: true,
+    });
+  } catch (error) {
+    console.warn('WASM benchmark path disabled (install optional dependency `wabt` to enable).', error?.message || error);
+  }
 
   const results = [
     runBenchmark('inspectSourceImagePalette', 8, () => {
       const result = inspectSourceImagePalette(sourceData, IMAGE_WIDTH, IMAGE_HEIGHT);
+      return result.required + result.deface + result.paletteMap.size;
+    }),
+    runBenchmark('inspectSourceImagePalette(legacy)', 8, () => {
+      const result = inspectSourceImagePaletteLegacy(sourceData, IMAGE_WIDTH, IMAGE_HEIGHT);
       return result.required + result.deface + result.paletteMap.size;
     }),
     runBenchmark('buildChunkSampleDataFromSource', 20, () => {
@@ -406,12 +1444,34 @@ function main() {
       const stats = finalizePaletteStatsAccumulator(accumulator);
       return result.count + stats.required + stats.deface + stats.paletteMap.size;
     }),
+    runBenchmark('buildChunkSampleDataFromSource+stats(legacyAcc)', 20, () => {
+      const accumulator = createPaletteStatsAccumulatorLegacy();
+      const result = buildChunkSampleDataFromSource(
+        sourceData,
+        IMAGE_WIDTH,
+        CHUNK_SOURCE_X,
+        CHUNK_SOURCE_Y,
+        CHUNK_WIDTH,
+        CHUNK_HEIGHT,
+        accumulator
+      );
+      const stats = finalizePaletteStatsAccumulator(accumulator);
+      return result.count + stats.required + stats.deface + stats.paletteMap.size;
+    }),
     runBenchmark('encodeChunkSampleData', 24, () => {
       const result = encodeChunkSampleData(sampleData);
       return result.length;
     }),
+    runBenchmark('encodeChunkSampleData(legacy)', 24, () => {
+      const result = encodeChunkSampleDataLegacy(sampleData);
+      return result.length;
+    }),
     runBenchmark('decodeChunkSampleBuffer', 24, () => {
       const result = decodeChunkSampleBuffer(encodedSample);
+      return (result?.count || 0) + (result?.width || 0) + (result?.height || 0);
+    }),
+    runBenchmark('decodeChunkSampleBuffer(legacy)', 24, () => {
+      const result = decodeChunkSampleBufferLegacy(encodedSample);
       return (result?.count || 0) + (result?.width || 0) + (result?.height || 0);
     }),
     runBenchmark('collectTemplateProgressFromSamples', 16, () => {
@@ -419,6 +1479,34 @@ function main() {
       const templateStats = {};
       const errorData = new Uint8ClampedArray(sampleData.width * sampleData.height * 4);
       const result = collectTemplateProgressFromSamples({
+        sampleData,
+        tilePixels,
+        tileSize: TEMPLATE_TILE_SIZE,
+        offsetX: OFFSET_X,
+        offsetY: OFFSET_Y,
+        tileCoords,
+        templateEnabled: true,
+        templateKey: 'bench-template',
+        paletteStats,
+        templateStats,
+        exampleMax: EXAMPLE_LIMIT,
+        errorMapOnlyEnabledColors: true,
+        displayedColors: displayedColorSet,
+        errorData,
+        errorWidth: sampleData.width,
+        randomFn: makeReservoirRng(0xabc00001),
+      });
+      const exampleCount = Object.values(paletteStats).reduce(
+        (sum, entry) => sum + (entry?.examplesEnabled?.length || 0),
+        0
+      );
+      return result.paintedCount + result.wrongCount + result.requiredCount + exampleCount + Object.keys(templateStats).length;
+    }),
+    runBenchmark('collectTemplateProgressFromSamples(legacy)', 16, () => {
+      const paletteStats = {};
+      const templateStats = {};
+      const errorData = new Uint8ClampedArray(sampleData.width * sampleData.height * 4);
+      const result = collectTemplateProgressFromSamplesLegacy({
         sampleData,
         tilePixels,
         tileSize: TEMPLATE_TILE_SIZE,
@@ -493,6 +1581,43 @@ function main() {
       });
       return image.data[0] + image.data[1] + image.data[2] + image.data[3] + image.data[image.data.length - 1];
     }),
+    runBenchmark('renderSampleDataToImage(legacy)', 10, () => {
+      const image = { data: new Uint8ClampedArray(crossResultWidth * crossResultHeight * 4) };
+      renderSampleDataToImageLegacy({
+        sampleData,
+        imageData: image,
+        resultWidth: crossResultWidth,
+        drawSize: CROSS_DRAW_SIZE,
+        maskPoints: crossMaskPoints,
+        maskRowSpans: crossMaskRowSpans,
+        includeDefaceCheckerboard: true,
+      });
+      return image.data[0] + image.data[1] + image.data[2] + image.data[3] + image.data[image.data.length - 1];
+    }),
+    runBenchmark('templateColorFilterLoop(legacy)', 6, () => (
+      templateColorFilterLegacyLoop({
+        ...colorFilterFixture,
+        displayedColorSet: displayedColorSubset,
+      })
+    )),
+    runBenchmark('templateColorFilterLoop(packed)', 6, () => (
+      templateColorFilterPackedLoop({
+        ...colorFilterFixture,
+        ...displayedPackedNoOther,
+      })
+    )),
+    runBenchmark('templateColorFilterLoop+other(legacy)', 6, () => (
+      templateColorFilterLegacyLoop({
+        ...colorFilterFixture,
+        displayedColorSet: displayedColorSubsetWithOther,
+      })
+    )),
+    runBenchmark('templateColorFilterLoop+other(packed)', 6, () => (
+      templateColorFilterPackedLoop({
+        ...colorFilterFixture,
+        ...displayedPackedWithOther,
+      })
+    )),
     runBenchmark('overlayTransportLegacySim', 10, () => (
       overlayTransportLegacySim(overlayTransportSource)
     )),
@@ -506,8 +1631,22 @@ function main() {
       hotPathLoggingGuardedOffSim()
     )),
   ];
+  if (typeof wasmNearestRunner === 'function') {
+    results.splice(8, 0, runBenchmark('findNearestUnpaintedSamplePixel(WASM)', 24, () => (
+      wasmNearestRunner()
+    )));
+  }
+  if (typeof wasmNearestRunnerCopy === 'function') {
+    const insertIndex = typeof wasmNearestRunner === 'function' ? 9 : 8;
+    results.splice(insertIndex, 0, runBenchmark('findNearestUnpaintedSamplePixel(WASM+copy)', 24, () => (
+      wasmNearestRunnerCopy()
+    )));
+  }
 
   printResults(results, { sampleData });
 }
 
-main();
+main().catch((error) => {
+  console.error('Benchmark failed:', error);
+  process.exitCode = 1;
+});

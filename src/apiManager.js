@@ -249,13 +249,51 @@ export default class ApiManager {
     }
   }
 
+  #resolveNextLevelPixels(dataJSON) {
+    const sanitize = (value) => {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) return null;
+      return Math.max(0, Math.ceil(numeric));
+    };
+
+    const directCandidates = [
+      dataJSON?.nextLevelPixels,
+      dataJSON?.pixelsToNextLevel,
+      dataJSON?.nextLevelPixelsLeft,
+      dataJSON?.nextLevel?.pixels,
+      dataJSON?.nextLevel?.pixelsLeft,
+      dataJSON?.progress?.pixelsToNextLevel,
+      dataJSON?.stats?.pixelsToNextLevel,
+      dataJSON?.levelProgress?.remaining,
+      dataJSON?.levelProgress?.remainingPixels,
+    ];
+    for (const candidate of directCandidates) {
+      const resolved = sanitize(candidate);
+      if (resolved !== null) return resolved;
+    }
+
+    const currentLevel = Number(dataJSON?.level);
+    const pixelsPainted = Number(dataJSON?.pixelsPainted);
+    if (!Number.isFinite(currentLevel) || !Number.isFinite(pixelsPainted)) {
+      return 0;
+    }
+
+    // Fallback approximation when backend payload does not expose remaining pixels directly.
+    const nextLevel = Math.max(0, Math.floor(currentLevel) + 1);
+    const threshold = Math.pow(nextLevel * 30, (1 / 0.65));
+    if (!Number.isFinite(threshold)) {
+      return 0;
+    }
+    return Math.max(0, Math.ceil(threshold - pixelsPainted));
+  }
+
   #applyUserData(dataJSON, fetchTime) {
     if (dataJSON === null) return;
-    const nextLevelPixels = Math.ceil(Math.pow(Math.floor(dataJSON['level']) * Math.pow(30, 0.65), (1/0.65)) - dataJSON['pixelsPainted']); // Calculates pixels to the next level
+    const nextLevelPixels = this.#resolveNextLevelPixels(dataJSON);
 
-    console.log(dataJSON['id']);
+    consoleLog(dataJSON['id']);
     if (!!dataJSON['id'] || dataJSON['id'] === 0) {
-      console.log(numberToEncoded(
+      consoleLog(numberToEncoded(
         dataJSON['id'],
         '!#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~'
       ));
@@ -293,7 +331,10 @@ export default class ApiManager {
     }
     const nextLevelElement = document.getElementById('bm-user-nextlevel');
     if (nextLevelElement) {
-      nextLevelElement.textContent = Math.floor(dataJSON['level']) + 1;
+      const level = Number(dataJSON?.level);
+      nextLevelElement.textContent = Number.isFinite(level)
+        ? Math.floor(level) + 1
+        : 1;
     }
   }
 
@@ -1474,7 +1515,7 @@ export default class ApiManager {
       // E.g. "wplace.live/api/files/s0/tiles/0/0/0.png" -> "tiles"
       const endpointText = data['endpoint']?.split('?')[0].split('/').filter(s => s && isNaN(Number(s))).filter(s => s && !s.includes('.')).pop();
 
-      console.log(`%cRus Marble%c: Recieved message about "%s"`, 'color: cornflowerblue;', '', endpointText);
+      consoleLog(`%cRus Marble%c: Recieved message about "%s"`, 'color: cornflowerblue;', '', endpointText);
 
       // Each case is something that Rus Marble can use from the fetch.
       // For instance, if the fetch was for "me", we can update the overlay stats
@@ -1556,11 +1597,11 @@ export default class ApiManager {
           const fullKeyChanged = !this.tileCache[tileKey] || this.tileCache[tileKey]["fullKey"] !== fullKey;
           const lastModifiedChanged = !this.tileCache[tileKey] || this.tileCache[tileKey]["lastModified"] !== lastModified;
           const errorMapChanged = !this.tileCache[tileKey] || this.tileCache[tileKey]["errorMap"] !== errorMap;
-          console.log(this.tileCache[tileKey]);
-          console.log(fullKey, lastModified, errorMap);
-          console.log(fullKeyChanged, lastModifiedChanged, errorMapChanged);
+          consoleLog(this.tileCache[tileKey]);
+          consoleLog(fullKey, lastModified, errorMap);
+          consoleLog(fullKeyChanged, lastModifiedChanged, errorMapChanged);
           if (!fullKeyChanged && !lastModifiedChanged && !errorMapChanged) {
-            console.log(`Unchanged tile: "${tileKey}"`);
+            consoleLog(`Unchanged tile: "${tileKey}"`);
           } else {
             const involvedTemplates = this.templateManager.getInvolvedTemplates(tileCoordsTile);
             if ( involvedTemplates.length > 0 && (

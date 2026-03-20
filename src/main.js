@@ -14,7 +14,7 @@ import { createTemplateCreationUi } from './templateCreationUi.js';
 import { createArchiveTemplateUi } from './archiveTemplateUi.js';
 import { layoutLanguageOptions, normalizeLayoutLanguage, translateLayout, getLayoutThemeLabel as getLocalizedLayoutThemeLabel, getTemplateDisplayLabel as getLocalizedTemplateDisplayLabel, getTemplateCreateModeLabel, getChatBanTypeLabel, getColorSortLabel } from './layoutI18n.js';
 import { findNearestUnpaintedSamplePixel } from './templateChunkUtils.js';
-import { consoleLog, consoleWarn, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels } from './utils.js';
+import { consoleLog, consoleWarn, isDebugLoggingEnabled, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels } from './utils.js';
 import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getCurrentTileSize} from './utilsMaptiler.js';
 // import { getCenterGeoCoords, addTemplate } from './utilsMaptiler.js';
 
@@ -180,7 +180,7 @@ const detectTemplateImageOtherColors = async (sourceFile) => {
     };
   }
 
-  const bitmap = await createImageBitmap(sourceFile);
+  const bitmap = await createBitmapPreservingPixels(sourceFile);
   const pixelCount = Math.max(0, (bitmap.width || 0) * (bitmap.height || 0));
   if (pixelCount > TEMPLATE_PRE_SCAN_MAX_PIXELS) {
     bitmap.close?.();
@@ -228,7 +228,7 @@ const convertTemplateImageFileToPaletteBlob = async (sourceFile, options = {}) =
     throw new Error('No source image provided for palette conversion.');
   }
   const normalizedOptions = normalizeTemplatePaletteConversionOptions(options || templatePaletteConversionDefaults);
-  const bitmap = await createImageBitmap(sourceFile);
+  const bitmap = await createBitmapPreservingPixels(sourceFile);
   let canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
   const context = canvas.getContext('2d', { willReadFrequently: true });
   if (!context) {
@@ -3513,6 +3513,8 @@ inject(() => {
   const consoleStyle = script?.getAttribute('bm-cStyle') || ''; // Gets the console style value that was passed in. Defaults to no styling if nothing was found
   const fetchedBlobQueue = new Map(); // Blobs being processed
   const REPORT_EVENT_TYPE = 'bm-report-request';
+  let debugLoggingEnabled = script?.getAttribute('bm-debug') === 'true';
+  const isDebugLoggingEnabledInjected = () => debugLoggingEnabled === true;
 
   const postReportRequestPhase = (phase, endpoint) => {
     window.postMessage({
@@ -3543,15 +3545,20 @@ inject(() => {
 
   window.addEventListener('message', (event) => {
     const { source, endpoint, blobID, blobData, blink } = event.data ?? {};
+    if (source === 'blue-marble' && event?.data?.type === 'bm-debug-logging') {
+      debugLoggingEnabled = event?.data?.enabled === true;
+      return;
+    }
     if (source !== 'blue-marble' || !blobID || !blobData || endpoint) return;
 
     const elapsed = Number.isFinite(blink) ? (Date.now() - blink) : 0;
 
-    // Since this code does not run in the userscript, we can't use consoleLog().
-    console.groupCollapsed(`%c${name}%c: ${fetchedBlobQueue.size} Recieved IMAGE message about blob "${blobID}"`, consoleStyle, '');
-    console.log(`Blob fetch took %c${String(Math.floor(elapsed/60000)).padStart(2,'0')}:${String(Math.floor(elapsed/1000) % 60).padStart(2,'0')}.${String(elapsed % 1000).padStart(3,'0')}%c MM:SS.mmm`, consoleStyle, '');
-    console.log(fetchedBlobQueue);
-    console.groupEnd();
+    if (isDebugLoggingEnabledInjected()) {
+      console.groupCollapsed(`%c${name}%c: ${fetchedBlobQueue.size} Recieved IMAGE message about blob "${blobID}"`, consoleStyle, '');
+      console.log(`Blob fetch took %c${String(Math.floor(elapsed/60000)).padStart(2,'0')}:${String(Math.floor(elapsed/1000) % 60).padStart(2,'0')}.${String(elapsed % 1000).padStart(3,'0')}%c MM:SS.mmm`, consoleStyle, '');
+      console.log(fetchedBlobQueue);
+      console.groupEnd();
+    }
 
     const callback = fetchedBlobQueue.get(blobID); // Retrieves the blob based on the UUID
 
@@ -3562,7 +3569,7 @@ inject(() => {
     } else {
       // ...else the blobID is unexpected. We don't know what it is, but we know for sure it is not a blob. This means we ignore it.
 
-      consoleWarn(`%c${name}%c: Attempted to retrieve a blob (%s) from queue, but the blobID was not a function! Skipping...`, consoleStyle, '', blobID);
+      console.warn(`%c${name}%c: Attempted to retrieve a blob (%s) from queue, but the blobID was not a function! Skipping...`, consoleStyle, '', blobID);
     }
 
     fetchedBlobQueue.delete(blobID); // Delete the blob from the queue, because we don't need to process it again
@@ -3598,8 +3605,9 @@ inject(() => {
     // Check Content-Type to only process JSON
     const contentType = cloned.headers.get('content-type') || '';
     if (contentType.includes('application/json')) {
-      // Since this code does not run in the userscript, we can't use consoleLog().
-      console.log(`%c${name}%c: Sending JSON message about endpoint "${endpointName}"`, consoleStyle, '');
+      if (isDebugLoggingEnabledInjected()) {
+        console.log(`%c${name}%c: Sending JSON message about endpoint "${endpointName}"`, consoleStyle, '');
+      }
       // Sends a message about the endpoint it spied on
       if (endpointName.endsWith("/tile/random")) {
         // modify the response to send to desired coordinate
@@ -3616,8 +3624,9 @@ inject(() => {
               statusText: cloned.statusText
             }));
 
-            // Since this code does not run in the userscript, we can't use consoleLog().
-            console.log(`%c${name}%c: ${fetchedBlobQueue.size} Processed blob "${blobUUID}"`, consoleStyle, '');
+            if (isDebugLoggingEnabledInjected()) {
+              console.log(`%c${name}%c: ${fetchedBlobQueue.size} Processed blob "${blobUUID}"`, consoleStyle, '');
+            }
           });
 
           cloned.json()
@@ -3693,8 +3702,9 @@ inject(() => {
 
       const blob = await cloned.blob(); // The original blob
 
-      // Since this code does not run in the userscript, we can't use consoleLog().
-      console.log(`%c${name}%c: ${fetchedBlobQueue.size} Sending IMAGE message about endpoint "${endpointName}"`, consoleStyle, '');
+      if (isDebugLoggingEnabledInjected()) {
+        console.log(`%c${name}%c: ${fetchedBlobQueue.size} Sending IMAGE message about endpoint "${endpointName}"`, consoleStyle, '');
+      }
 
       // Send the received blob
       window.postMessage({
@@ -3773,12 +3783,16 @@ if (typeof __INLINE_CSS__ !== 'undefined' && __INLINE_CSS__) {
         GM.addStyle(response.responseText);
       } else {
         consoleWarn(`%c${name}%c: Failed to load CSS (${response.status}) from ${CSS_BM_File}`, consoleStyle, '');
-        console.log(`${name}: CSS load failed`, { status: response.status, url: CSS_BM_File });
+        if (isDebugLoggingEnabled()) {
+          console.log(`${name}: CSS load failed`, { status: response.status, url: CSS_BM_File });
+        }
       }
     },
     onerror: (err) => {
       consoleWarn(`%c${name}%c: Failed to load CSS from ${CSS_BM_File}`, consoleStyle, '', err);
-      console.log(`${name}: CSS load error`, { url: CSS_BM_File, err });
+      if (isDebugLoggingEnabled()) {
+        console.log(`${name}: CSS load error`, { url: CSS_BM_File, err });
+      }
     }
   });
 }
@@ -3981,11 +3995,11 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   } catch {
     userSettings = {};
   }
-  console.log(userSettings);
-  console.log(Object.keys(userSettings).length);
+  consoleLog(userSettings);
+  consoleLog(Object.keys(userSettings).length);
   if (Object.keys(userSettings).length == 0) {
     const uuid = crypto.randomUUID(); // Generates a random UUID
-    console.log(uuid);
+    consoleLog(uuid);
     templateManager.setUserSettings({
       'uuid': uuid,
       'hideLockedColors': false,
@@ -4020,6 +4034,7 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
       'templateSyncStreams': ['root'],
       'chatDisabled': false,
       'mapCommentsDisabled': false,
+      'debugLogging': false,
     });
     templateManager.storeUserSettings();
   } else {
@@ -4036,7 +4051,7 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
     storageTemplates = {};
   }
 
-  console.log(storageTemplates);
+  consoleLog(storageTemplates);
   templateManager.importJSON(storageTemplates); // Loads the templates
 
   await waitForBody();
@@ -5529,6 +5544,7 @@ const applyLayoutLanguage = (value = null) => {
   setCheckboxLabelText('bm-event-hide-claimed', t('settings.hideClaimedEventItems'));
   setCheckboxLabelText('bm-event-hide-unavailable', t('settings.hideUnavailableEventItems'));
   setCheckboxLabelText('bm-memory-saving-enabled', t('settings.memorySaving'));
+  setCheckboxLabelText('bm-debug-logs-enabled', t('settings.debugLogs'));
 
   setSummaryText('bm-contain-colorfilter', t('section.colors'));
   const colorSortLabel = document.getElementById('bm-color-sort-label');
@@ -7065,8 +7081,9 @@ async function buildOverlayMain() {
       let label = document.createElement('span');
       label.style.fontSize = '12px';
 
+      const remainingCount = Math.max(0, totalCount - paintedCount);
       if (sortByParts[0] === "remaining" || (hideCompleted && sortByParts[0] !== "painted")) {
-        const remainingLabelText = Math.max(0, totalCount - paintedCount).toLocaleString();
+        const remainingLabelText = remainingCount.toLocaleString();
         label.textContent = `${colorName} • ${remainingLabelText} ${t('colors.leftSuffix')}`;
       } else {
         const labelText = totalCount.toLocaleString();
@@ -7080,6 +7097,7 @@ async function buildOverlayMain() {
       }
 
       const paletteEntry = combinedProgress[colorKey];
+      if (remainingCount > 0 && (paletteEntry?.examplesEnabled?.length ?? 0) === 0 && colorKey !== 'other') continue;
       let currentIndex = 0;
       swatch.addEventListener('click', () => {
         // if ((paletteEntry?.examples?.length ?? 0) > 0) {
@@ -7247,14 +7265,41 @@ async function buildOverlayMain() {
       const templateEnabledState = Object.fromEntries(
         (templateManager.templatesArray ?? []).map(t => [t.storageKey, t.enabled ?? true])
       );
+      const {
+        paletteSum: paletteSumForTemplateList,
+        combinedProgress: combinedProgressForTemplateList,
+      } = templateManager.getOverallPerColorProgress();
+      const phantomColorKeys = new Set();
+      Object.entries(paletteSumForTemplateList).forEach(([rgb, totalCount]) => {
+        if (rgb === 'other') return;
+        const paintedCount = Number(combinedProgressForTemplateList[rgb]?.paintedAndEnabled ?? 0);
+        const remainingCount = Math.max(0, (Number(totalCount) || 0) - paintedCount);
+        const exampleCount = Number(combinedProgressForTemplateList[rgb]?.examplesEnabled?.length ?? 0);
+        if (remainingCount > 0 && exampleCount === 0) {
+          phantomColorKeys.add(rgb);
+        }
+      });
       const combinedTemplate = {};
       for (const stats of templateManager.tileProgress.values()) {
         Object.entries(stats.template).forEach(([storageKey, content]) => {
           if (templateEnabledState[storageKey] === false) return;
           if (combinedTemplate[storageKey] === undefined) {
-            combinedTemplate[storageKey] = Object.fromEntries(Object.entries(content));
+            const painted = Number(content?.painted) || 0;
+            const palette = {};
+            Object.entries(content?.palette || {}).forEach(([rgb, count]) => {
+              palette[rgb] = Number(count) || 0;
+            });
+            combinedTemplate[storageKey] = { painted, palette };
           } else {
-            combinedTemplate[storageKey].painted += content.painted;
+            combinedTemplate[storageKey].painted += Number(content?.painted) || 0;
+            if (!combinedTemplate[storageKey].palette || typeof combinedTemplate[storageKey].palette !== 'object') {
+              combinedTemplate[storageKey].palette = {};
+            }
+            Object.entries(content?.palette || {}).forEach(([rgb, count]) => {
+              combinedTemplate[storageKey].palette[rgb] = (
+                Number(combinedTemplate[storageKey].palette[rgb]) || 0
+              ) + (Number(count) || 0);
+            });
           }
         });
       }
@@ -7366,19 +7411,36 @@ async function buildOverlayMain() {
         overlayMain.handleDisplayStatus(`Canceled position edit for "${templateName}".`);
       });
 
-        let label = document.createElement('span');
-        label.style.fontSize = '12px';
-        const paletteTotal = template?.colorPalette
-          ? Object.values(template.colorPalette).reduce((sum, meta) => sum + (Number(meta?.count) || 0), 0)
-          : 0;
-        const totalCount =
-          Number(template.requiredPixelCount ?? template.pixelCount ?? paletteTotal) || 0;
-        const totalLabelText = totalCount.toLocaleString();
+	        let label = document.createElement('span');
+	        label.style.fontSize = '12px';
+	        const paletteEntries = template?.colorPalette ? Object.entries(template.colorPalette) : [];
+	        const paletteTotal = paletteEntries.length
+	          ? paletteEntries.reduce((sum, [, meta]) => sum + (Number(meta?.count) || 0), 0)
+	          : 0;
+	        const paletteFilteredTotal = paletteEntries.length
+	          ? paletteEntries.reduce((sum, [rgb, meta]) => (
+	            phantomColorKeys.has(rgb) ? sum : sum + (Number(meta?.count) || 0)
+	          ), 0)
+	          : 0;
+	        const totalFallback = Number(template.requiredPixelCount ?? template.pixelCount ?? paletteTotal) || 0;
+	        const totalCount = paletteEntries.length ? paletteFilteredTotal : totalFallback;
+	        const totalLabelText = totalCount.toLocaleString();
 
-        const isHighlighted = normalizeFlag(template.remoteHighlighted) || normalizeFlag(templateStore.remoteHighlighted);
-        const filledCount = combinedTemplate[template.storageKey]?.painted ?? 0;
-        const filledLabelText = `${filledCount.toLocaleString()}`;
-        const remainingCount = Math.max(0, totalCount - filledCount);
+	        const isHighlighted = normalizeFlag(template.remoteHighlighted) || normalizeFlag(templateStore.remoteHighlighted);
+	        const templatePaintedPalette = combinedTemplate[template.storageKey]?.palette || {};
+	        const filledByFilteredPalette = paletteEntries.length
+	          ? paletteEntries.reduce((sum, [rgb, meta]) => {
+	            if (phantomColorKeys.has(rgb)) return sum;
+	            const expectedCount = Number(meta?.count) || 0;
+	            const paintedCountForColor = Number(templatePaintedPalette[rgb]) || 0;
+	            return sum + Math.min(expectedCount, paintedCountForColor);
+	          }, 0)
+	          : 0;
+	        const filledRaw = Number(combinedTemplate[template.storageKey]?.painted ?? 0);
+	        const filledBase = paletteEntries.length ? filledByFilteredPalette : (Number.isFinite(filledRaw) ? filledRaw : 0);
+	        const filledCount = Math.max(0, Math.min(totalCount, filledBase));
+	        const filledLabelText = `${filledCount.toLocaleString()}`;
+	        const remainingCount = Math.max(0, totalCount - filledCount);
         const remainingLabelText = `${remainingCount.toLocaleString()}`;
         const showRemaining = templateManager.isTemplateListRemainingEnabled();
         const shouldShowCount = !showRemaining || template.enabled;
@@ -7482,12 +7544,10 @@ async function buildOverlayMain() {
         template.enabled = toggle.checked;
         row.classList.toggle('bm-template-inactive', !toggle.checked);
         overlayMain.handleDisplayStatus(`${toggle.checked ? 'Enabled' : 'Disabled'} ${templateName}`);
+        templateManager.clearTileProgress(template);
         if (toggle.checked) {
           templateManager.createOverlayOnMap(template.sortID);
         } else {
-          // reset related tiles if it is being toggled off
-          // since the tile may not be involed in the template anymore
-          templateManager.clearTileProgress(template);
           removeLayer(null, template.sortID);
         }
         syncToggleList();
