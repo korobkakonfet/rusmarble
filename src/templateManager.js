@@ -1,11 +1,73 @@
 ﻿import Template from "./Template";
-import { numberToEncoded, cleanUpCanvas, rgbToMeta, sortByOptions, testCanvasSize, getCurrentColor, sleep, createBitmapPreservingPixels } from "./utils";
+import { numberToEncoded, cleanUpCanvas, rgbToMeta, sortByOptions, testCanvasSize, getCurrentColor, sleep, createBitmapPreservingPixels, consoleLog, setDebugLoggingEnabled as setGlobalDebugLoggingEnabled } from "./utils";
 import { themeList, addTemplateCanvas, removeLayer, removeTemplateCanvasSources, forceRefreshTiles, coordsGeoCoordsToTileCoords, getMapBounds, doAfterMapFound, isMapTilerLoaded, bmCanvas } from './utilsMaptiler.js';
 import { buildMaskRowSpans, collectTemplateProgressFromSamples, mergeTemplateExampleReservoir, renderSampleDataToImage } from './templateChunkUtils.js';
 
 const DEFAULT_TEMPLATE_SYNC_STREAM = 'root';
 const DEFAULT_TEMPLATE_EXAMPLE_LIMIT = 32;
 const SMART_TEMPLATE_EXAMPLE_LIMIT = 128;
+const TEMPLATE_OTHER_COLOR_KEY = 'other';
+const packRgb = (r, g, b) => ((r << 16) | (g << 8) | b);
+const parsePackedRgbKey = (key) => {
+  if (typeof key !== 'string') return null;
+  const firstComma = key.indexOf(',');
+  if (firstComma < 1) return null;
+  const secondComma = key.indexOf(',', firstComma + 1);
+  if (secondComma < firstComma + 2 || secondComma >= key.length - 1) return null;
+  const red = Number(key.slice(0, firstComma));
+  const green = Number(key.slice(firstComma + 1, secondComma));
+  const blue = Number(key.slice(secondComma + 1));
+  if (
+    !Number.isInteger(red) || red < 0 || red > 255
+    || !Number.isInteger(green) || green < 0 || green > 255
+    || !Number.isInteger(blue) || blue < 0 || blue > 255
+  ) {
+    return null;
+  }
+  return packRgb(red, green, blue);
+};
+const knownPalettePackedColors = (() => {
+  const packedSet = new Set();
+  for (const key of rgbToMeta.keys()) {
+    if (key === TEMPLATE_OTHER_COLOR_KEY) continue;
+    const packed = parsePackedRgbKey(key);
+    if (packed !== null) {
+      packedSet.add(packed);
+    }
+  }
+  return packedSet;
+})();
+const UI_WORK_SLICE_MS = 8;
+const getNowMs = () => (
+  typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
+);
+const yieldToBrowser = () => (
+  typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function'
+    ? new Promise((resolve) => window.requestAnimationFrame(() => resolve()))
+    : sleep(0)
+);
+const createUiWorkScheduler = (sliceMs = UI_WORK_SLICE_MS) => {
+  let lastYieldAt = getNowMs();
+  return async (force = false) => {
+    const now = getNowMs();
+    if (!force && now - lastYieldAt < sliceMs) return;
+    await yieldToBrowser();
+    lastYieldAt = getNowMs();
+  };
+};
+const syncInjectedDebugLogging = (enabled) => {
+  try {
+    if (typeof window !== 'undefined' && typeof window.postMessage === 'function') {
+      window.postMessage({
+        source: 'blue-marble',
+        type: 'bm-debug-logging',
+        enabled: enabled === true,
+      }, '*');
+    }
+  } catch (_) {}
+};
 const normalizeFlagValue = (value) => value === true || value === 'true' || value === 1 || value === '1';
 const normalizeTemplateSyncStreamValue = (value) => {
   const text = String(value ?? '').trim().toLowerCase();
@@ -194,7 +256,7 @@ export default class TemplateManager {
     const suppressStatus = options?.suppressStatus === true;
 
     // Creates the JSON object if it does not already exist
-    if (!this.templatesJSON) {this.templatesJSON = await this.createJSON(); console.log(`Creating JSON...`);}
+    if (!this.templatesJSON) {this.templatesJSON = await this.createJSON(); consoleLog(`Creating JSON...`);}
 
     if (!suppressStatus) {
       this.overlay.handleDisplayStatus(`Creating template at ${coords.join(', ')}...`);
@@ -211,6 +273,7 @@ export default class TemplateManager {
       tileSize: this.tileSize,
       forcePaletteConversion: Boolean(options?.convertToPalette),
       paletteConversionOptions: options?.convertOptions || null,
+      sampleNormalizeToPalette: Boolean(options?.normalizeSamplesToPalette ?? options?.remote),
     });
     const timeArchiveMeta = normalizeTimeArchiveMeta(options?.timeArchiveMeta);
     template.timeArchiveMeta = timeArchiveMeta;
@@ -419,7 +482,7 @@ export default class TemplateManager {
   async disableTemplate() {
 
     // Creates the JSON object if it does not already exist
-    if (!this.templatesJSON) {this.templatesJSON = await this.createJSON(); console.log(`Creating JSON...`);}
+    if (!this.templatesJSON) {this.templatesJSON = await this.createJSON(); consoleLog(`Creating JSON...`);}
   }
 
   /** Draws all templates on the specified tile.
@@ -430,6 +493,7 @@ export default class TemplateManager {
    */
   async countTemplateStatus(tileBlob, tileCoords, options = null) {
     void options;
+    const yieldUi = createUiWorkScheduler();
 
     const tileCoordsPadded = tileCoords[0].toString().padStart(4, '0') + ',' + tileCoords[1].toString().padStart(4, '0');
 
@@ -437,18 +501,31 @@ export default class TemplateManager {
     if (involvedTemplates.length === 0) return;
 
     const currentMemorySavingMode = this.isMemorySavingModeOn();
-    const templatesTilesToHandle = involvedTemplates.map((template) => {
+    const templatesTilesToHandle = involvedTemplates.flatMap((template) => {
       const matchingTiles = this._getTileKeysByPrefixMap(template).get(tileCoordsPadded) ?? [];
-      if (!matchingTiles.length) return null;
-      const tileKey = matchingTiles[0];
-      const coords = tileKey.split(',');
-      return {
-        template,
-        tileKey,
-        tileCoords: [+coords[0], +coords[1]],
-        pixelCoords: [+coords[2], +coords[3]],
-      };
-    }).filter(Boolean);
+      if (!matchingTiles.length) return [];
+      if (matchingTiles.length > 1) {
+        consoleLog(
+          '[TemplateProgress] Multiple chunks matched same tile prefix; processing all chunks.',
+          {
+            tilePrefix: tileCoordsPadded,
+            template: template?.displayName,
+            storageKey: template?.storageKey,
+            chunkCount: matchingTiles.length,
+            chunkKeys: matchingTiles,
+          }
+        );
+      }
+      return matchingTiles.map((tileKey) => {
+        const coords = tileKey.split(',');
+        return {
+          template,
+          tileKey,
+          tileCoords: [+coords[0], +coords[1]],
+          pixelCoords: [+coords[2], +coords[3]],
+        };
+      });
+    });
 
     const templateCount = templatesTilesToHandle?.length || 0;
     const enabledTemplateCount = this.templatesArray.filter((template) => template.enabled).length;
@@ -478,6 +555,7 @@ export default class TemplateManager {
     const tilePixels = context.getImageData(0, 0, tileSize, tileSize).data;
 
     for (const templateTile of templatesTilesToHandle) {
+      await yieldUi();
       const template = templateTile.template;
       const templateKey = template.storageKey;
       const sampleData = await template.getChunkSamples(templateTile.tileKey, {
@@ -705,20 +783,33 @@ export default class TemplateManager {
    * @since 0.86.1
    */
   async _createOverlayOnMapInternal(sortID = null, options = null) {
+    const yieldUi = createUiWorkScheduler();
     const tilePrefixSet = options?.tilePrefixes ?? null;
     const skipExisting = options?.skipExisting === true;
 
     const currentMemorySavingMode = this.isMemorySavingModeOn(); // To make sure that we do not free the object if it is stored due to race conditions.
     const templates = (this.templatesArray ?? []).filter(t => t.enabled && (sortID === null || t.sortID == sortID));
+    // Keep color visibility consistent across all templates rendered in this pass.
+    const displayedColors = this.getDisplayedColorsSorted();
+    const displayedColorSet = new Set(displayedColors);
+    const displayedColorPackedSet = new Set();
+    let displayOtherColor = false;
+    for (const colorKey of displayedColorSet) {
+      if (colorKey === TEMPLATE_OTHER_COLOR_KEY) {
+        displayOtherColor = true;
+        continue;
+      }
+      const packedColor = parsePackedRgbKey(colorKey);
+      if (packedColor !== null) {
+        displayedColorPackedSet.add(packedColor);
+      }
+    }
+    const hasColorDisabled = displayedColors.length !== Object.keys(this.getPaletteToggledStatus()).length;
+    const allColorsDisabled = displayedColors.length === 0; // Check if every color is disabled
 
     for (const template of templates) {
+      await yieldUi();
       if (!template.enabled) return; // no need to draw if template is disabled
-      // honor the same toggle Status for all templates
-      const displayedColors = this.getDisplayedColorsSorted();
-      // const tileCacheKey = this.getTileCacheKeyFromCalculated(displayedColors, involvedTemplates);
-      const displayedColorSet = new Set(displayedColors);
-      const hasColorDisabled = displayedColors.length !== Object.keys(this.getPaletteToggledStatus()).length;
-      const allColorsDisabled = displayedColors.length === 0; // Check if every color is disabled
       if (allColorsDisabled) {
         // make sure we removed all layers related to this template
         removeLayer("overlay", template.sortID);
@@ -733,6 +824,7 @@ export default class TemplateManager {
         continue;
       }
       for (const tileKey of tileKeys) {
+        await yieldUi();
         const sourceID = `BM-overlay-${tileKey}-${template.sortID}`;
         if (skipExisting && bmCanvas.overlay?.[sourceID] !== undefined) {
           continue;
@@ -806,35 +898,50 @@ export default class TemplateManager {
             templateContext.clearRect(0, 0, templateWidth, templateHeight);
             templateContext.drawImage(templateTileBitmap, 0, 0);
             const templateData = templateContext.getImageData(0, 0, templateWidth, templateHeight).data;
-
-            const image = resultContext.getImageData(0, 0, resultWidth, resultHeight);
+            const image = resultContext.createImageData(resultWidth, resultHeight);
             const imageData = image.data;
+            const drawMultCenterTemplateLocal = drawMultCenterTemplate;
+            const drawMultTemplateStepBytes = drawMultTemplate << 2;
+            const drawMultResultStepBytes = drawMultResult << 2;
+            const templateRowStepBytes = templateWidth << 2;
+            const resultRowStepBytes = resultWidth << 2;
+            const shouldCheckUnknownColors = displayOtherColor === true;
             for (const [offsetX, offsetY] of maskPoints) {
+              let processedRows = 0;
               for (
-                let yt = drawMultCenterTemplate, yr = offsetY;
+                let yt = drawMultCenterTemplateLocal, yr = offsetY;
                 yt < templateHeight;
                 yt += drawMultTemplate, yr += drawMultResult
               ) {
-                // await sleep(0);
+                processedRows++;
+                if ((processedRows & 7) === 0) {
+                  await yieldUi();
+                }
+                const templateRowBase = yt * templateRowStepBytes;
+                const resultRowBase = yr * resultRowStepBytes;
                 for (
-                  let xt = drawMultCenterTemplate, xr = offsetX;
+                  let xt = drawMultCenterTemplate, xr = offsetX,
+                    templatePixelCenter = templateRowBase + (xt << 2),
+                    realPixelCenter = resultRowBase + (xr << 2);
                   xt < templateWidth;
-                  xt += drawMultTemplate, xr += drawMultResult
+                  xt += drawMultTemplate, xr += drawMultResult,
+                    templatePixelCenter += drawMultTemplateStepBytes,
+                    realPixelCenter += drawMultResultStepBytes
                 ) {
-
-                  const templatePixelCenter = (yt * templateWidth + xt) * 4; // Shread block center pixel
                   const templatePixelCenterRed = templateData[templatePixelCenter]; // Shread block's center pixel's RED value
                   const templatePixelCenterGreen = templateData[templatePixelCenter + 1]; // Shread block's center pixel's GREEN value
                   const templatePixelCenterBlue = templateData[templatePixelCenter + 2]; // Shread block's center pixel's BLUE value
                   const templatePixelCenterAlpha = templateData[templatePixelCenter + 3]; // Shread block's center pixel's ALPHA value
 
                   if (templatePixelCenterAlpha < 1) { continue; } // leave transparent pixels as is
-
-                  let key = `${templatePixelCenterRed},${templatePixelCenterGreen},${templatePixelCenterBlue}`;
-                  if (!rgbToMeta.has(`${templatePixelCenterRed},${templatePixelCenterGreen},${templatePixelCenterBlue}`)) key = 'other';
-                  if (displayedColorSet.has(key)) {
-                    const realPixelCenter = (yr * resultWidth + xr) * 4;
-
+                  const packedTemplateColor = packRgb(
+                    templatePixelCenterRed,
+                    templatePixelCenterGreen,
+                    templatePixelCenterBlue
+                  );
+                  const shouldRender = displayedColorPackedSet.has(packedTemplateColor)
+                    || (shouldCheckUnknownColors && !knownPalettePackedColors.has(packedTemplateColor));
+                  if (shouldRender) {
                     // // show enabled color center pixel
                     imageData[realPixelCenter] = templatePixelCenterRed;
                     imageData[realPixelCenter + 1] = templatePixelCenterGreen;
@@ -1400,6 +1507,9 @@ export default class TemplateManager {
   setUserSettings(value) {
     this.userSettings = value || {};
     this.userSettings.templateSyncStreams = normalizeTemplateSyncStreamsValue(this.userSettings?.templateSyncStreams);
+    const enabled = this.isDebugLoggingEnabled();
+    setGlobalDebugLoggingEnabled(enabled);
+    syncInjectedDebugLogging(enabled);
   }
 
   /** A utility to check if hidden colors are set to be hidden.
@@ -1534,6 +1644,24 @@ export default class TemplateManager {
         template.chunked = temp;
       });
     }
+  }
+
+  /** A utility to check if debug logging is enabled.
+   * @returns {boolean}
+   */
+  isDebugLoggingEnabled() {
+    return this.userSettings?.debugLogging === true;
+  }
+
+  /** Sets debug logging visibility in console.
+   * @param {boolean} value - Whether debug logging is enabled
+   */
+  async setDebugLoggingEnabled(value) {
+    const enabled = value === true;
+    this.userSettings.debugLogging = enabled;
+    setGlobalDebugLoggingEnabled(enabled);
+    syncInjectedDebugLogging(enabled);
+    await this.storeUserSettings();
   }
 
   /** A utility to get the current anchor.

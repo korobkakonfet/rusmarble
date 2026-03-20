@@ -496,6 +496,16 @@ export function buildUserSettingsSection({
             }
           });
         }).buildElement()
+        .addCheckbox({'id': 'bm-debug-logs-enabled', 'textContent': t('settings.debugLogs'), 'checked': templateManager.isDebugLoggingEnabled()}, (instance, label, checkbox) => {
+          checkbox.addEventListener('change', () => {
+            templateManager.setDebugLoggingEnabled(checkbox.checked);
+            if (checkbox.checked) {
+              instance.handleDisplayStatus("Debug logs enabled.");
+            } else {
+              instance.handleDisplayStatus("Debug logs disabled.");
+            }
+          });
+        }).buildElement()
       .buildElement()
     .buildElement();
 }

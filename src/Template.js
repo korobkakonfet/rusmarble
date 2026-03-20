@@ -1,4 +1,4 @@
-import { uint8ToBase64, base64ToUint8, cleanUpCanvas, rgbToMeta, colorpalette, testCanvasSize, createBitmapPreservingPixels } from "./utils";
+import { uint8ToBase64, base64ToUint8, cleanUpCanvas, rgbToMeta, colorpalette, testCanvasSize, createBitmapPreservingPixels } from "./utils.js";
 import {
   buildMaskRowSpans,
   createChunkSampleData,
@@ -9,12 +9,14 @@ import {
   finalizePaletteStatsAccumulator,
   buildChunkSampleDataFromSource,
   renderSampleDataToImage,
+  TEMPLATE_DEFACE_RGB,
 } from "./templateChunkUtils.js";
 
 const clampByte = (value) => Math.max(0, Math.min(255, Math.round(Number(value) || 0)));
 const clampUnit = (value) => Math.max(0, Math.min(1, Number(value) || 0));
 const normalizeDistanceMode = (value) => String(value || '').toLowerCase() === 'euclidean' ? 'euclidean' : 'weighted';
 const normalizeDitherMode = (value) => String(value || '').toLowerCase() === 'floyd-steinberg' ? 'floyd-steinberg' : 'none';
+const TEMPLATE_DEFACE_KEY = `${TEMPLATE_DEFACE_RGB[0]},${TEMPLATE_DEFACE_RGB[1]},${TEMPLATE_DEFACE_RGB[2]}`;
 
 const templatePaletteColors = (() => {
   const options = [];
@@ -356,6 +358,7 @@ export default class Template {
     imageHeight = null,
     forcePaletteConversion = false,
     paletteConversionOptions = null,
+    sampleNormalizeToPalette = false,
   } = {}) {
     this.displayName = displayName;
     this.sortID = sortID;
@@ -372,6 +375,7 @@ export default class Template {
     this.imageHeight = Number.isFinite(Number(imageHeight)) ? Math.max(1, Math.trunc(Number(imageHeight))) : null;
     this.forcePaletteConversion = Boolean(forcePaletteConversion);
     this.paletteConversionOptions = normalizeTemplatePaletteConversionOptions(paletteConversionOptions || templatePaletteConversionDefaults);
+    this.sampleNormalizeToPalette = Boolean(sampleNormalizeToPalette);
     this.enabled = true;
     this.pixelCount = 0; // Total pixel count in template
     this.requiredPixelCount = 0; // Total number of non-transparent, non-#deface pixels
@@ -657,6 +661,25 @@ export default class Template {
     let sourceContext = null;
     let sourceData = null;
     let paletteStatsAccumulator = null;
+    const sampleNearestCache = new Map();
+    const sampleNormalizer = this.sampleNormalizeToPalette
+      ? ((r, g, b, a) => {
+        const sourceKey = `${r},${g},${b}`;
+        if (sourceKey === TEMPLATE_DEFACE_KEY) {
+          return { r, g, b, a, isDeface: true };
+        }
+        if (rgbToMeta.has(sourceKey)) {
+          return { r, g, b, a };
+        }
+        const nearest = getNearestPaletteColor(r, g, b, this.paletteConversionOptions, sampleNearestCache);
+        return {
+          r: nearest.rgb[0],
+          g: nearest.rgb[1],
+          b: nearest.rgb[2],
+          a,
+        };
+      })
+      : null;
     try {
       sourceCanvas = new OffscreenCanvas(imageWidth, imageHeight);
       sourceContext = sourceCanvas.getContext('2d', { willReadFrequently: true });
@@ -737,6 +760,7 @@ export default class Template {
             drawSizeX,
             drawSizeY,
             paletteStatsAccumulator,
+            sampleNormalizer,
           )
           : createChunkSampleData(drawSizeX, drawSizeY, 0, true);
 
