@@ -278,9 +278,9 @@ export default class ApiManager {
       return 0;
     }
 
-    // Fallback approximation when backend payload does not expose remaining pixels directly.
-    const nextLevel = Math.max(0, Math.floor(currentLevel) + 1);
-    const threshold = Math.pow(nextLevel * 30, (1 / 0.65));
+    // Legacy fallback approximation used before 0.87.45.
+    // Keep this for compatibility when backend does not expose remaining pixels directly.
+    const threshold = Math.pow(Math.floor(currentLevel) * Math.pow(30, 0.65), (1 / 0.65));
     if (!Number.isFinite(threshold)) {
       return 0;
     }
