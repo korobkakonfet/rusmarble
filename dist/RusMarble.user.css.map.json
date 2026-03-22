@@ -304,5 +304,8 @@
   "bm-help": "bm-4K",
   "bm-link": "bm-4L",
   "bm-fg": "bm-4M",
-  "bm-bg": "bm-4N"
+  "bm-bg": "bm-4N",
+  "bm-safe-mode-enabled": "bm-7j",
+  "bm-safe-mode-storage-key": "bm-6e",
+  "bm-safe-mode": "bm-92"
 }

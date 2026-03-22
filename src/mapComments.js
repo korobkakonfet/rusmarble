@@ -687,6 +687,19 @@ class MapCommentManagerImpl {
       return;
     }
 
+    if (this.comments.size === 0) {
+      this.hidePopup();
+      if (this.markers.size > 0) {
+        this.clearRenderedMarkers();
+      }
+      this.visibleCount = 0;
+      this.layer.setAttribute(DEBUG_STATE_ATTR, JSON.stringify({
+        total: 0,
+        visible: 0
+      }));
+      return;
+    }
+
     this.pruneExpired();
     const context = this.getBoundsContext();
     if (!context) {
