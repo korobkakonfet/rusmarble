@@ -717,6 +717,7 @@ export const findNearestUnpaintedSamplePixel = ({
   originPoint,
   displayedColorSet,
   excludedCoordsKey,
+  excludedCoordsKeySet,
   templateName,
   distanceSqFn,
   colorMatchDelta = LIVE_COLOR_MATCH_DELTA,
@@ -731,9 +732,15 @@ export const findNearestUnpaintedSamplePixel = ({
     return null;
   }
 
-  const excludedCoords = parseCoordsKey(excludedCoordsKey);
+  const excludedCoordsSet = excludedCoordsKeySet instanceof Set ? excludedCoordsKeySet : null;
+  const singleExcludedCoordsKey = (
+    excludedCoordsSet && excludedCoordsSet.size === 1
+      ? excludedCoordsSet.values().next().value
+      : excludedCoordsKey
+  );
+  const excludedCoords = parseCoordsKey(singleExcludedCoordsKey);
   const safeTileSize = Math.max(1, Math.trunc(Number(tileSize) || 0));
-  if (useWasm && isTemplateNearestWasmAvailable()) {
+  if (useWasm && (!excludedCoordsSet || excludedCoordsSet.size <= 1) && isTemplateNearestWasmAvailable()) {
     const displayedColorPackedArray = getDisplayedColorPackedArray(displayedColorSet);
     if (displayedColorPackedArray && displayedColorPackedArray.length > 0) {
       const wasmResult = findNearestUnpaintedPixelWithWasm({
@@ -813,6 +820,9 @@ export const findNearestUnpaintedSamplePixel = ({
 
     coordsScratch[2] = pixelX;
     coordsScratch[3] = pixelY;
+    if (excludedCoordsSet?.has(coordsScratch.join(','))) {
+      continue;
+    }
     const distanceSq = distanceSqFn(originPoint, coordsScratch);
     if (!Number.isFinite(distanceSq)) continue;
     if (distanceSq < bestDistanceSq) {

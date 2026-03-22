@@ -1586,6 +1586,10 @@ export default class ApiManager {
           // Runs only if the tile has the template
           let tileCoordsTile = data['endpoint'].split('/');
           tileCoordsTile = [parseInt(tileCoordsTile[tileCoordsTile.length - 2]), parseInt(tileCoordsTile[tileCoordsTile.length - 1].replace('.png', ''))];
+          const involvedTemplates = this.templateManager.getInvolvedTemplates(tileCoordsTile);
+          if (involvedTemplates.length === 0) {
+            break;
+          }
           
           const blobData = data['blobData'];
           const tileKey = tileCoordsTile[0].toString().padStart(4, '0') + ',' + tileCoordsTile[1].toString().padStart(4, '0');
@@ -1603,8 +1607,7 @@ export default class ApiManager {
           if (!fullKeyChanged && !lastModifiedChanged && !errorMapChanged) {
             consoleLog(`Unchanged tile: "${tileKey}"`);
           } else {
-            const involvedTemplates = this.templateManager.getInvolvedTemplates(tileCoordsTile);
-            if ( involvedTemplates.length > 0 && (
+            if ((
               fullKeyChanged ||
               lastModifiedChanged ||
               (errorMapChanged && errorMap) // error map toggled on

@@ -74,7 +74,7 @@ export function createTemplateSync({
   gmRequest,
   templateManager,
   templateSyncBaseUrl,
-  templateUpdatePollMs = 5000,
+  templateUpdatePollMs = 30000,
   remoteFlagsRefreshMs = 60000,
   buildTemplateFilterList,
   autoSyncOnStatus,
@@ -128,6 +128,18 @@ export function createTemplateSync({
     url.searchParams.set('stream', normalizeRemoteStream(stream));
     return url.toString();
   };
+  const hasTrackedRemoteTemplates = () => (
+    (templateManager?.templatesArray ?? []).some((template) => {
+      const store = template?.storageKey
+        ? templateManager?.templatesJSON?.templates?.[template.storageKey]
+        : null;
+      return template?.isRemote === true || store?.remote === true;
+    })
+  );
+  const shouldPollTemplateUpdates = () => (
+    hasTrackedRemoteTemplates()
+    || (templateManager?.isTemplateAutoSyncEnabled?.() ?? false)
+  );
   const getTemplateListUrl = (stream) => buildStreamUrl('/templates', stream);
   const getTemplateMetaUrl = (templateName, stream) => buildStreamUrl(`/templates/${encodeURIComponent(templateName)}`, stream);
   const getTemplateImageUrl = (templateName, stream) => buildStreamUrl(`/templates/${encodeURIComponent(templateName)}/image`, stream);
@@ -456,6 +468,12 @@ export function createTemplateSync({
 
   const checkTemplateUpdates = async () => {
     if (templateUpdatePollInFlight) return;
+    if (!shouldPollTemplateUpdates()) {
+      if (templateUpdatePendingCount !== 0) {
+        resetTemplateUpdateBadge();
+      }
+      return;
+    }
     templateUpdatePollInFlight = true;
     try {
       logSync('Checking server for template updates...');
@@ -566,6 +584,15 @@ export function createTemplateSync({
     if (templateUpdatePollId) return;
     templateUpdatePollId = setInterval(checkTemplateUpdates, templateUpdatePollMs);
     checkTemplateUpdates();
+  };
+
+  const stopTemplateUpdatePolling = () => {
+    if (templateUpdatePollId) {
+      clearInterval(templateUpdatePollId);
+      templateUpdatePollId = null;
+    }
+    templateUpdatePollInFlight = false;
+    resetTemplateUpdateBadge();
   };
 
   const resetTemplateUpdateBadge = () => {
@@ -956,6 +983,7 @@ export function createTemplateSync({
     checkTemplateUpdates,
     importTemplateByName,
     startTemplateUpdatePolling,
+    stopTemplateUpdatePolling,
     resetTemplateUpdateBadge,
     syncTemplateByName,
     syncTemplatesFromServer

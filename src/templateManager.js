@@ -1,6 +1,6 @@
 ﻿import Template from "./Template";
 import { numberToEncoded, cleanUpCanvas, rgbToMeta, sortByOptions, testCanvasSize, getCurrentColor, sleep, createBitmapPreservingPixels, consoleLog, setDebugLoggingEnabled as setGlobalDebugLoggingEnabled } from "./utils";
-import { themeList, addTemplateCanvas, removeLayer, removeTemplateCanvasSources, forceRefreshTiles, coordsGeoCoordsToTileCoords, getMapBounds, doAfterMapFound, isMapTilerLoaded, bmCanvas } from './utilsMaptiler.js';
+import { themeList, addTemplateCanvas, removeLayer, removeTemplateCanvasSources, forceRefreshTiles, coordsGeoCoordsToTileCoords, getMapBounds, doAfterMapFound, isMapTilerLoaded, bmCanvas, getMountedTemplateCanvasSourceIDs } from './utilsMaptiler.js';
 import { buildMaskRowSpans, collectTemplateProgressFromSamples, mergeTemplateExampleReservoir, renderSampleDataToImage } from './templateChunkUtils.js';
 
 const DEFAULT_TEMPLATE_SYNC_STREAM = 'root';
@@ -664,8 +664,12 @@ export default class TemplateManager {
 
     cleanUpCanvas(canvas);
 
-    window.buildColorFilterList();
-    window.buildTemplateFilterList();
+    if (typeof window.scheduleProgressUiRefresh === 'function') {
+      window.scheduleProgressUiRefresh();
+    } else {
+      window.buildColorFilterList?.();
+      window.buildTemplateFilterList?.();
+    }
 
     return tileBlob;
   }
@@ -807,6 +811,9 @@ export default class TemplateManager {
     const yieldUi = createUiWorkScheduler();
     const tilePrefixSet = options?.tilePrefixes ?? null;
     const skipExisting = options?.skipExisting === true;
+    const mountedOverlaySourceIDs = skipExisting
+      ? new Set(getMountedTemplateCanvasSourceIDs('overlay'))
+      : null;
 
     const currentMemorySavingMode = this.isMemorySavingModeOn(); // To make sure that we do not free the object if it is stored due to race conditions.
     const templates = (this.templatesArray ?? []).filter(t => t.enabled && (sortID === null || t.sortID == sortID));
@@ -847,7 +854,7 @@ export default class TemplateManager {
       for (const tileKey of tileKeys) {
         await yieldUi();
         const sourceID = `BM-overlay-${tileKey}-${template.sortID}`;
-        if (skipExisting && bmCanvas.overlay?.[sourceID] !== undefined) {
+        if (skipExisting && mountedOverlaySourceIDs?.has(sourceID)) {
           continue;
         }
         const drawMultTemplate = template.shreadSize;
@@ -2173,6 +2180,23 @@ export default class TemplateManager {
    */
   async setMapCommentsEnabled(value) {
     this.userSettings.mapCommentsDisabled = !Boolean(value);
+    await this.storeUserSettings();
+  }
+
+  /** A utility to check if safe mode is enabled.
+   * @returns {boolean}
+   * @since 0.90.0
+   */
+  isSafeModeEnabled() {
+    return this.userSettings?.safeMode === true;
+  }
+
+  /** Sets the safe mode flag.
+   * @param {boolean} value - The value
+   * @since 0.90.0
+   */
+  async setSafeModeEnabled(value) {
+    this.userSettings.safeMode = Boolean(value);
     await this.storeUserSettings();
   }
 

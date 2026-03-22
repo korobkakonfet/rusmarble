@@ -1,5 +1,11 @@
 import { consoleLog } from "./utils.js";
 
+let suppressForcedTileRefresh = false;
+
+export function setForcedTileRefreshSuppressed(value) {
+  suppressForcedTileRefresh = Boolean(value);
+}
+
 export function isMapTilerLoaded() {
   if (isMapFound) return true;
   const myLocationButton = document.querySelector(".right-3>button");
@@ -361,10 +367,31 @@ export function removeTemplateCanvasSources(sourceIDs, usage = "overlay") {
   }, safeSourceIDs, bmCanvas);
 }
 
+export function getMountedTemplateCanvasSourceIDs(usage = "overlay", sourceIDs = null) {
+  const safeSourceIDs = Array.isArray(sourceIDs)
+    ? sourceIDs.filter((sourceID) => typeof sourceID === 'string' && sourceID)
+    : Object.keys(bmCanvas[usage] ?? {});
+  if (!safeSourceIDs.length) return [];
+
+  try {
+    return controlMapTiler((map, sourceIDs) => {
+      return sourceIDs.filter((sourceID) => {
+        const canvas = document.getElementById(sourceID);
+        return !!canvas && !!map["getSource"](sourceID) && !!map["getLayer"](sourceID);
+      });
+    }, safeSourceIDs) ?? [];
+  } catch (_) {
+    return safeSourceIDs.filter((sourceID) => document.getElementById(sourceID));
+  }
+}
+
 /** Try to force the on-screen tiles to be refreshed
  * @since 0.85.37
  */
 export function forceRefreshTiles() {
+  if (suppressForcedTileRefresh) {
+    return;
+  }
   try {
     return controlMapTiler(map => {
       return map["refreshTiles"]("pixel-art-layer");

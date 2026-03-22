@@ -21,6 +21,7 @@
  * @param {(value?: boolean) => void} deps.forceRefreshTiles - Forces map tile refresh.
  * @param {(layer: string) => void} deps.removeLayer - Removes map layer by id.
  * @param {(enabled: boolean) => void} deps.setMapCommentsEnabled - Enables/disables map comments on the map layer.
+ * @param {() => void} deps.applySafeMode - Applies the persisted safe mode state to runtime hooks.
  * @param {object} deps.themeList - Available theme list.
  * @param {string} deps.outputStatusId - Element id for the status output.
  * @returns {import('./Overlay.js').default} Overlay builder instance for chaining.
@@ -46,6 +47,7 @@ export function buildUserSettingsSection({
   forceRefreshTiles,
   removeLayer,
   setMapCommentsEnabled,
+  applySafeMode,
   themeList,
   outputStatusId,
   t,
@@ -223,6 +225,18 @@ export function buildUserSettingsSection({
               setMapCommentsEnabled(enabled);
             }
             instance.handleDisplayStatus(enabled ? "Map comments are now Enabled." : "Map comments are now Disabled.");
+          });
+        }).buildElement()
+        .addCheckbox({'id': 'bm-safe-mode-enabled', 'textContent': 'Safe mode (disable hooks)', 'checked': templateManager.isSafeModeEnabled?.() ?? false}, (instance, label, checkbox) => {
+          checkbox.addEventListener('change', async () => {
+            const enabled = checkbox.checked;
+            await templateManager.setSafeModeEnabled?.(enabled);
+            applySafeMode?.();
+            instance.handleDisplayStatus(
+              enabled
+                ? 'Safe mode enabled. Chat, comments, notifications, sync polling, and map/body hooks were disabled.'
+                : 'Safe mode disabled. Background features were restored.'
+            );
           });
         }).buildElement()
         .addCheckbox({'id': 'bm-progress-bar-enabled', 'textContent': t('settings.showProgressBar'), 'checked': templateManager.isProgressBarEnabled()}, (instance, label, checkbox) => {

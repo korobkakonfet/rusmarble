@@ -15,7 +15,7 @@ import { createArchiveTemplateUi } from './archiveTemplateUi.js';
 import { layoutLanguageOptions, normalizeLayoutLanguage, translateLayout, getLayoutThemeLabel as getLocalizedLayoutThemeLabel, getTemplateDisplayLabel as getLocalizedTemplateDisplayLabel, getTemplateCreateModeLabel, getChatBanTypeLabel, getColorSortLabel } from './layoutI18n.js';
 import { findNearestUnpaintedSamplePixel } from './templateChunkUtils.js';
 import { consoleLog, consoleWarn, isDebugLoggingEnabled, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels } from './utils.js';
-import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getCurrentTileSize} from './utilsMaptiler.js';
+import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getCurrentTileSize, setForcedTileRefreshSuppressed} from './utilsMaptiler.js';
 // import { getCenterGeoCoords, addTemplate } from './utilsMaptiler.js';
 
 const name = GM_info.script.name.toString(); // Name of userscript
@@ -30,13 +30,16 @@ const TEMPLATE_SYNC_BASE_URL = typeof __TEMPLATE_SYNC_BASE_URL__ !== 'undefined'
 const CHAT_WS_URL = typeof __CHAT_WS_URL__ !== 'undefined' && __CHAT_WS_URL__
   ? __CHAT_WS_URL__
   : `${TEMPLATE_SYNC_BASE_URL.replace(/^http(s?):\/\//, (_, secure) => (secure ? 'wss://' : 'ws://'))}/ws/chat`;
-const TEMPLATE_UPDATE_POLL_MS = 5000;
+const TEMPLATE_UPDATE_POLL_MS = 30000;
 const REMOTE_FLAGS_REFRESH_MS = 60000;
 const NOTIFICATION_POLL_MS = 3000;
 const NOTIFICATION_ROTATE_MS = 10000;
 const CHAT_MAX_USER_LEN = 15;
 const CHAT_MAX_TEXT_LEN = 300;
 const REPORT_REQUEST_EVENT_TYPE = 'bm-report-request';
+const SAFE_MODE_MESSAGE_TYPE = 'bm-safe-mode';
+const INJECTED_SAFE_MODE_STORAGE_KEY = 'bmSafeModeEnabled';
+const INJECTED_SAFE_MODE_ATTR = 'data-bm-safe-mode';
 const REPORT_CLICK_FALLBACK_MS = 5000;
 const REPORT_POST_SEND_HIDE_MS = 1000;
 const MAP_WORLD_WIDTH_PX = 2048 * 1000;
@@ -51,6 +54,7 @@ let chatSocket = null;
 let chatInitialized = false;
 let mapCommentManager = null;
 let templateManagerRef = null;
+let observeBlackObserver = null;
 const reportCommentsState = {
   isApplied: false,
   clickActive: false,
@@ -62,6 +66,7 @@ const reportCommentsState = {
   reportModalObserver: null,
   chatDisplayBeforeHide: null,
 };
+let reportModalStateCheckQueued = false;
 const distanceMeasureState = {
   active: false,
   startPoint: null,
@@ -1352,6 +1357,38 @@ const applyLayoutTheme = (value) => {
   document.dispatchEvent(new CustomEvent('bm-layout-theme-changed', { detail: { layoutTheme: nextTheme } }));
 };
 
+function readInjectedSafeModeBootstrap() {
+  try {
+    const attrValue = document.documentElement?.getAttribute(INJECTED_SAFE_MODE_ATTR);
+    if (attrValue === 'true' || attrValue === 'false') {
+      return attrValue;
+    }
+    const storedValue = window.localStorage?.getItem(INJECTED_SAFE_MODE_STORAGE_KEY);
+    if (storedValue === '1' || storedValue === 'true') {
+      return 'true';
+    }
+    if (storedValue === '0' || storedValue === 'false') {
+      return 'false';
+    }
+  } catch (_) {}
+  return 'false';
+}
+
+function setInjectedSafeModeState(enabled, { broadcast = true } = {}) {
+  const normalized = enabled ? 'true' : 'false';
+  document.documentElement?.setAttribute(INJECTED_SAFE_MODE_ATTR, normalized);
+  try {
+    window.localStorage?.setItem(INJECTED_SAFE_MODE_STORAGE_KEY, enabled ? '1' : '0');
+  } catch (_) {}
+  if (broadcast) {
+    window.postMessage({
+      source: 'blue-marble',
+      type: SAFE_MODE_MESSAGE_TYPE,
+      enabled: enabled === true
+    }, '*');
+  }
+}
+
 /** Injects code into the client
  * This code will execute outside of TamperMonkey's sandbox
  * @param {*} callback - The code to execute
@@ -1361,6 +1398,8 @@ function inject(callback) {
     const script = document.createElement('script');
     script.setAttribute('bm-name', name); // Passes in the name value
     script.setAttribute('bm-cStyle', consoleStyle); // Passes in the console style value
+    script.setAttribute('bm-safe-mode', readInjectedSafeModeBootstrap());
+    script.setAttribute('bm-safe-mode-storage-key', INJECTED_SAFE_MODE_STORAGE_KEY);
     script.textContent = `(${callback})();`;
     // script.textContent = `setTimeout(${callback}, 1000);`; // For debugging the case when there is delay when starting the script
     document.documentElement?.appendChild(script);
@@ -1409,6 +1448,7 @@ let notificationShownInitPromise = null;
 let overlayBuildInFlight = false;
 
 function ensureMapCommentsManager() {
+  if (isSafeModeActive()) return null;
   if (mapCommentManager) return mapCommentManager;
   try {
     mapCommentManager = createMapCommentManager();
@@ -1417,6 +1457,16 @@ function ensureMapCommentsManager() {
     consoleWarn('Map comments initialization failed; chat will continue without map comments.', error);
   }
   return mapCommentManager;
+}
+
+function destroyMapCommentsManager() {
+  if (!mapCommentManager) return;
+  try {
+    mapCommentManager['destroy']?.();
+  } catch (error) {
+    consoleWarn('Failed to destroy map comments manager.', error);
+  }
+  mapCommentManager = null;
 }
 
 function setMapCommentsEnabled(enabled) {
@@ -1587,13 +1637,22 @@ function updateReportModalState() {
   reportCommentsState.reportModalOpen = dialogs.some(isReportDialogElement);
 }
 
+function queueReportModalStateUpdate() {
+  if (reportModalStateCheckQueued) return;
+  reportModalStateCheckQueued = true;
+  requestAnimationFrame(() => {
+    reportModalStateCheckQueued = false;
+    updateReportModalState();
+    syncReportCommentsHiddenState();
+  });
+}
+
 function ensureReportModalObserver() {
   if (reportCommentsState.reportModalObserver) return;
   const root = document.body || document.documentElement;
   if (!root) return;
   reportCommentsState.reportModalObserver = new MutationObserver(() => {
-    updateReportModalState();
-    syncReportCommentsHiddenState();
+    queueReportModalStateUpdate();
   });
   reportCommentsState.reportModalObserver.observe(root, {
     childList: true,
@@ -1664,6 +1723,8 @@ function persistNotificationShownIds() {
 function normalizeNotificationId(id) {
   return id === undefined || id === null ? null : String(id);
 }
+
+setInjectedSafeModeState(readInjectedSafeModeBootstrap() === 'true', { broadcast: false });
 
 function trackNotificationShown(id) {
   const normalized = normalizeNotificationId(id);
@@ -1893,7 +1954,9 @@ function startNotificationPolling() {
 }
 
 function initChat() {
-  ensureMapCommentsManager();
+  if (!isSafeModeActive() && templateManager.isMapCommentsEnabled()) {
+    ensureMapCommentsManager();
+  }
   const CHAT_USER_COLORS_STORAGE_KEY = 'bmChatUserColors';
   const CHAT_LAST_READ_ID_STORAGE_KEY = 'bmChatLastReadMessageId';
   const CHAT_NICKNAME_COLOR_VARIANTS = [
@@ -3513,8 +3576,36 @@ inject(() => {
   const consoleStyle = script?.getAttribute('bm-cStyle') || ''; // Gets the console style value that was passed in. Defaults to no styling if nothing was found
   const fetchedBlobQueue = new Map(); // Blobs being processed
   const REPORT_EVENT_TYPE = 'bm-report-request';
+  const SAFE_MODE_EVENT_TYPE = 'bm-safe-mode';
+  const SAFE_MODE_ATTR = 'data-bm-safe-mode';
+  const safeModeStorageKey = script?.getAttribute('bm-safe-mode-storage-key') || 'bmSafeModeEnabled';
   let debugLoggingEnabled = script?.getAttribute('bm-debug') === 'true';
+  let safeModeEnabled = false;
   const isDebugLoggingEnabledInjected = () => debugLoggingEnabled === true;
+  const readSafeModeEnabled = () => {
+    const scriptValue = script?.getAttribute('bm-safe-mode');
+    if (scriptValue === 'true' || scriptValue === 'false') {
+      return scriptValue === 'true';
+    }
+    const attrValue = document.documentElement?.getAttribute(SAFE_MODE_ATTR);
+    if (attrValue === 'true' || attrValue === 'false') {
+      return attrValue === 'true';
+    }
+    try {
+      const storedValue = window.localStorage?.getItem(safeModeStorageKey);
+      return storedValue === '1' || storedValue === 'true';
+    } catch (_) {
+      return false;
+    }
+  };
+  const syncSafeModeEnabled = (value) => {
+    safeModeEnabled = value === true;
+    document.documentElement?.setAttribute(SAFE_MODE_ATTR, safeModeEnabled ? 'true' : 'false');
+    try {
+      window.localStorage?.setItem(safeModeStorageKey, safeModeEnabled ? '1' : '0');
+    } catch (_) {}
+  };
+  syncSafeModeEnabled(readSafeModeEnabled());
 
   const postReportRequestPhase = (phase, endpoint) => {
     window.postMessage({
@@ -3545,6 +3636,10 @@ inject(() => {
 
   window.addEventListener('message', (event) => {
     const { source, endpoint, blobID, blobData, blink } = event.data ?? {};
+    if (source === 'blue-marble' && event?.data?.type === SAFE_MODE_EVENT_TYPE) {
+      syncSafeModeEnabled(event?.data?.enabled === true);
+      return;
+    }
     if (source === 'blue-marble' && event?.data?.type === 'bm-debug-logging') {
       debugLoggingEnabled = event?.data?.enabled === true;
       return;
@@ -3583,7 +3678,7 @@ inject(() => {
 
     const blink = Date.now(); // Current time
     const endpointName = ((args[0] instanceof Request) ? args[0]?.url : args[0]) || 'ignore';
-    const isReportRequest = isReportUserEndpoint(endpointName);
+    const isReportRequest = !safeModeEnabled && isReportUserEndpoint(endpointName);
     if (isReportRequest) {
       postReportRequestPhase('start', endpointName);
     }
@@ -3599,6 +3694,9 @@ inject(() => {
     }
     if (isReportRequest) {
       postReportRequestPhase('end', endpointName);
+    }
+    if (safeModeEnabled) {
+      return response;
     }
     const cloned = response.clone(); // Makes a copy of the response
 
@@ -3723,11 +3821,19 @@ inject(() => {
   const originalXhrSend = window.XMLHttpRequest?.prototype?.send;
   if (originalXhrOpen && originalXhrSend) {
     window.XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+      if (safeModeEnabled) {
+        this.__bmReportEndpoint = null;
+        this.__bmIsReportRequest = false;
+        return originalXhrOpen.call(this, method, url, ...rest);
+      }
       this.__bmReportEndpoint = url;
       this.__bmIsReportRequest = isReportUserEndpoint(url);
       return originalXhrOpen.call(this, method, url, ...rest);
     };
     window.XMLHttpRequest.prototype.send = function(...rest) {
+      if (safeModeEnabled || !this.__bmIsReportRequest) {
+        return originalXhrSend.apply(this, rest);
+      }
       if (this.__bmIsReportRequest) {
         const endpoint = this.__bmReportEndpoint;
         postReportRequestPhase('start', endpoint);
@@ -3803,6 +3909,12 @@ const templateManager = new TemplateManager(name, version, overlayMain); // Cons
 templateManagerRef = templateManager;
 const apiManager = new ApiManager(templateManager); // Constructs a new ApiManager object
 let templateViewportOverlayRefreshBound = false;
+let templateViewportOverlayRefreshMap = null;
+let templateViewportOverlayRefreshHandler = null;
+
+function isSafeModeActive() {
+  return templateManager.isSafeModeEnabled?.() ?? false;
+}
 
 function resolveTemplateOverlayMapInstance() {
   const direct = document.head?.['__bmmap'];
@@ -3813,12 +3925,13 @@ function resolveTemplateOverlayMapInstance() {
 }
 
 function bindTemplateViewportOverlayRefresh() {
-  if (templateViewportOverlayRefreshBound) return;
+  if (templateViewportOverlayRefreshBound || isSafeModeActive()) return;
   doAfterMapFound(() => {
-    if (templateViewportOverlayRefreshBound) return;
+    if (templateViewportOverlayRefreshBound || isSafeModeActive()) return;
     const map = resolveTemplateOverlayMapInstance();
     if (!map || typeof map['on'] !== 'function') return;
     const refreshVisibleOverlay = () => {
+      if (isSafeModeActive()) return;
       if (!(templateManager?.templatesArray ?? []).some((template) => template?.enabled)) {
         return;
       }
@@ -3827,8 +3940,27 @@ function bindTemplateViewportOverlayRefresh() {
     ['moveend', 'zoomend', 'resize'].forEach((eventName) => {
       map['on'](eventName, refreshVisibleOverlay);
     });
+    templateViewportOverlayRefreshMap = map;
+    templateViewportOverlayRefreshHandler = refreshVisibleOverlay;
     templateViewportOverlayRefreshBound = true;
   });
+}
+
+function unbindTemplateViewportOverlayRefresh() {
+  if (!templateViewportOverlayRefreshBound || !templateViewportOverlayRefreshMap || !templateViewportOverlayRefreshHandler) {
+    templateViewportOverlayRefreshBound = false;
+    templateViewportOverlayRefreshMap = null;
+    templateViewportOverlayRefreshHandler = null;
+    return;
+  }
+  if (typeof templateViewportOverlayRefreshMap['off'] === 'function') {
+    ['moveend', 'zoomend', 'resize'].forEach((eventName) => {
+      templateViewportOverlayRefreshMap['off'](eventName, templateViewportOverlayRefreshHandler);
+    });
+  }
+  templateViewportOverlayRefreshBound = false;
+  templateViewportOverlayRefreshMap = null;
+  templateViewportOverlayRefreshHandler = null;
 }
 
 const {
@@ -3961,7 +4093,54 @@ const templateSync = createTemplateSync({
   autoSyncBuildTemplateFilterList: () => window.buildTemplateFilterList?.(),
   autoSyncBuildColorFilterList: () => window.buildColorFilterList?.(),
 });
-bindTemplateViewportOverlayRefresh();
+
+function stopNotificationPolling() {
+  if (notificationPollId) {
+    clearInterval(notificationPollId);
+    notificationPollId = null;
+  }
+  stopNotificationRotation();
+  notificationQueue = [];
+  notificationCurrent = null;
+  hideNotification();
+}
+
+function applySafeModeState() {
+  const enabled = isSafeModeActive();
+  setInjectedSafeModeState(enabled);
+  setForcedTileRefreshSuppressed(enabled);
+
+  const chatDetails = document.getElementById('bm-contain-chat');
+  if (enabled) {
+    stopNotificationPolling();
+    templateSync.stopTemplateUpdatePolling?.();
+    unbindTemplateViewportOverlayRefresh();
+    stopObserveBlack();
+    if (chatDetails) {
+      chatDetails.style.display = 'none';
+    }
+    try {
+      window.setChatEnabled?.(false);
+    } catch (_) {}
+    destroyMapCommentsManager();
+    return;
+  }
+
+  bindTemplateViewportOverlayRefresh();
+  observeBlack();
+  initChat();
+  if (chatDetails) {
+    chatDetails.style.display = templateManager.isChatDisabled() ? 'none' : '';
+  }
+  try {
+    window.setChatEnabled?.(!templateManager.isChatDisabled());
+  } catch (_) {}
+  if (templateManager.isMapCommentsEnabled()) {
+    setMapCommentsEnabled(true);
+  }
+  templateSync.startTemplateUpdatePolling();
+  startNotificationPolling();
+}
 
 document.addEventListener('click', (event) => {
   if (isReportCancelControl(event.target)) {
@@ -3984,8 +4163,6 @@ window.addEventListener('message', (event) => {
     markReportRequestFinished();
   }
 });
-
-ensureMapCommentsManager();
 
 GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   const userSettingsValue = await GM.getValue('bmUserSettings', '{}');
@@ -4034,6 +4211,7 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
       'templateSyncStreams': ['root'],
       'chatDisabled': false,
       'mapCommentsDisabled': false,
+      'safeMode': false,
       'debugLogging': false,
     });
     templateManager.storeUserSettings();
@@ -4057,10 +4235,8 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   await waitForBody();
   observeWplaceTheme();
   await buildOverlayMain(); // Builds the main overlay
-  initChat();
   applyLayoutLanguage(currentLayoutLanguage);
-  templateSync.startTemplateUpdatePolling();
-  startNotificationPolling();
+  applySafeModeState();
 
   overlayMain.handleDrag('#bm-overlay', '#bm-bar-drag'); // Creates dragging capability on the drag bar for dragging the overlay
   const rebuildOverlayIfMissing = async () => {
@@ -4163,8 +4339,6 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
 
   apiManager.spontaneousResponseListener(overlayMain); // Reads spontaneous fetch responces
 
-  observeBlack(); // Observes the black palette color
-
   consoleLog(`%c${name}%c (${version}) userscript has loaded!`, 'color: cornflowerblue;', '');
 });
 
@@ -4216,63 +4390,109 @@ function createZoomButtons() {
  * @since 0.66.3
  */
 function observeBlack() {
-  const observer = new MutationObserver((mutations, observer) => {
-    createZoomButtons();
-
-    const black = document.querySelector('#color-1'); // Attempt to retrieve the black color element for anchoring
-
-    if (!black) {return;} // Black color does not exist yet. Kills iteself
-
-    let move = document.querySelector('#bm-button-move'); // Tries to find the move button
-
-    // If the move button does not exist, we make a new one
-    if (!move) {
-      move = document.createElement('button');
-      move.id = 'bm-button-move';
-      move.textContent = 'Move â†‘';
-      move.className = 'btn btn-soft';
-      move.onclick = function() {
-        const roundedBox = this.parentNode.parentNode.parentNode.parentNode; // Obtains the rounded box
-        const shouldMoveUp = (this.textContent == 'Move â†‘');
-        roundedBox.parentNode.className = roundedBox.parentNode.className.replace(shouldMoveUp ? 'bottom' : 'top', shouldMoveUp ? 'top' : 'bottom'); // Moves the rounded box to the top
-        roundedBox.style.borderTopLeftRadius = shouldMoveUp ? '0px' : 'var(--radius-box)';
-        roundedBox.style.borderTopRightRadius = shouldMoveUp ? '0px' : 'var(--radius-box)';
-        roundedBox.style.borderBottomLeftRadius = shouldMoveUp ? 'var(--radius-box)' : '0px';
-        roundedBox.style.borderBottomRightRadius = shouldMoveUp ? 'var(--radius-box)' : '0px';
-        this.textContent = shouldMoveUp ? 'Move â†“' : 'Move â†‘';
-      }
-
-      // Attempts to find the "Paint Pixel" element for anchoring
-      const paintPixel = black.parentNode.parentNode.parentNode.parentNode.querySelector('h2');
-
-      paintPixel.parentNode?.appendChild(move); // Adds the move button
-    }
-
-
-    // Hook color change to force refresh
-    Array.from(black.parentNode.parentNode.getElementsByTagName('button')).forEach((button) => {
-      // seems that the color selected button will remove all classes once clicked, so we hook the parent
-      if (button.parentElement.classList.contains("bm-hooked")) {
+  if (observeBlackObserver || isSafeModeActive()) {
+    return;
+  }
+  let syncQueued = false;
+  const hasObservedControls = () => {
+    if (!document.getElementById('BM-zoom-1x')) return false;
+    if (!document.getElementById('bm-button-move')) return false;
+    return true;
+  };
+  const isRelevantObserveBlackNode = (node) => (
+    node instanceof Element
+    && (
+      node.matches?.('#color-1, .gap-1, .gap-1 > .btn[title], #bm-button-move, #bm-button-paint')
+      || node.querySelector?.('#color-1, .gap-1 > .btn[title], #bm-button-move, #bm-button-paint')
+    )
+  );
+  const queueObserveBlackSync = () => {
+    if (syncQueued) return;
+    syncQueued = true;
+    requestAnimationFrame(() => {
+      syncQueued = false;
+      if (isSafeModeActive()) {
         return;
       }
-      button.addEventListener('click', function () {
-        if (templateManager.isOnlyCurrentColorShown()) {
-          // prevent lagging
-          setTimeout(() => {
-            templateManager.createOverlayOnMap()
-            if (templateManager.isErrorMapShown() && templateManager.isErrorMapOnlyEnabledColorsShown()) {
-              forceRefreshTiles();
-            };
-            // Just build the list (with the selected color toggled) as nothing has changed
-            buildColorFilterList();
-          }, 0);
-        };
+      createZoomButtons();
+
+      const black = document.querySelector('#color-1');
+      if (!black) { return; }
+
+      let move = document.querySelector('#bm-button-move');
+
+      // If the move button does not exist, we make a new one
+      if (!move) {
+        move = document.createElement('button');
+        move.id = 'bm-button-move';
+        move.textContent = 'Move â†‘';
+        move.className = 'btn btn-soft';
+        move.onclick = function() {
+          const roundedBox = this.parentNode.parentNode.parentNode.parentNode; // Obtains the rounded box
+          const shouldMoveUp = (this.textContent == 'Move â†‘');
+          roundedBox.parentNode.className = roundedBox.parentNode.className.replace(shouldMoveUp ? 'bottom' : 'top', shouldMoveUp ? 'top' : 'bottom'); // Moves the rounded box to the top
+          roundedBox.style.borderTopLeftRadius = shouldMoveUp ? '0px' : 'var(--radius-box)';
+          roundedBox.style.borderTopRightRadius = shouldMoveUp ? '0px' : 'var(--radius-box)';
+          roundedBox.style.borderBottomLeftRadius = shouldMoveUp ? 'var(--radius-box)' : '0px';
+          roundedBox.style.borderBottomRightRadius = shouldMoveUp ? 'var(--radius-box)' : '0px';
+          this.textContent = shouldMoveUp ? 'Move â†“' : 'Move â†‘';
+        }
+
+        // Attempts to find the "Paint Pixel" element for anchoring
+        const paintPixel = black.parentNode.parentNode.parentNode.parentNode.querySelector('h2');
+
+        paintPixel.parentNode?.appendChild(move); // Adds the move button
+      }
+
+
+      // Hook color change to force refresh
+      Array.from(black.parentNode.parentNode.getElementsByTagName('button')).forEach((button) => {
+        // seems that the color selected button will remove all classes once clicked, so we hook the parent
+        if (button.parentElement.classList.contains("bm-hooked")) {
+          return;
+        }
+        button.addEventListener('click', function () {
+          if (templateManager.isOnlyCurrentColorShown()) {
+            // prevent lagging
+            setTimeout(() => {
+              templateManager.createOverlayOnMap()
+              if (templateManager.isErrorMapShown() && templateManager.isErrorMapOnlyEnabledColorsShown()) {
+                forceRefreshTiles();
+              };
+              // Just build the list (with the selected color toggled) as nothing has changed
+              buildColorFilterList();
+            }, 0);
+          };
+        });
+        button.parentElement.classList.add("bm-hooked");
       });
-      button.parentElement.classList.add("bm-hooked");
-    })
+    });
+  };
+
+  const observer = new MutationObserver((mutations, observer) => {
+    if (!hasObservedControls()) {
+      queueObserveBlackSync();
+      return;
+    }
+    const hasRelevantMutation = mutations.some((mutation) => (
+      [...mutation.addedNodes, ...mutation.removedNodes].some(isRelevantObserveBlackNode)
+    ));
+    if (hasRelevantMutation) {
+      queueObserveBlackSync();
+    }
   });
 
+  queueObserveBlackSync();
+  observeBlackObserver = observer;
   observer.observe(document.body, { childList: true, subtree: true });
+}
+
+function stopObserveBlack() {
+  if (!observeBlackObserver) return;
+  try {
+    observeBlackObserver.disconnect();
+  } catch (_) {}
+  observeBlackObserver = null;
 }
 
 function normalizeTilePixelCoords(rawCoords) {
@@ -4572,7 +4792,30 @@ function getTilePixelDistanceSq(originPoint, rawCoords) {
   return dx * dx + dy * dy;
 }
 
-function findNearestCachedTemplatePixel(originPoint, displayedColorSet, excludedCoordsKey) {
+const templateJumpCycleState = {
+  scopeKey: '',
+  visitedCoordsKeys: new Set(),
+};
+
+function buildTemplateJumpCycleScopeKey(activeTemplates, displayedColors) {
+  const templateKey = (activeTemplates ?? [])
+    .map((template) => `${template?.storageKey ?? ''}:${template?.storageTimeString ?? ''}`)
+    .sort()
+    .join('|');
+  const colorKey = (displayedColors ?? []).slice().sort().join('|');
+  return `${templateKey}||${colorKey}`;
+}
+
+function syncTemplateJumpCycleState(scopeKey) {
+  if (templateJumpCycleState.scopeKey === scopeKey) {
+    return templateJumpCycleState.visitedCoordsKeys;
+  }
+  templateJumpCycleState.scopeKey = scopeKey;
+  templateJumpCycleState.visitedCoordsKeys = new Set();
+  return templateJumpCycleState.visitedCoordsKeys;
+}
+
+function findNearestCachedTemplatePixel(originPoint, displayedColorSet, excludedCoordsKeys) {
   let bestCandidate = null;
   for (const stats of templateManager.tileProgress.values()) {
     for (const [colorKey, content] of Object.entries(stats?.palette ?? {})) {
@@ -4588,7 +4831,7 @@ function findNearestCachedTemplatePixel(originPoint, displayedColorSet, excluded
         ]);
         if (!coords) continue;
         const coordsKey = coords.join(',');
-        if (coordsKey === excludedCoordsKey) continue;
+        if (excludedCoordsKeys?.has(coordsKey)) continue;
         const distanceSq = getTilePixelDistanceSq(originPoint, coords);
         if (!Number.isFinite(distanceSq)) continue;
         if (!bestCandidate || distanceSq < bestCandidate.distanceSq) {
@@ -4618,7 +4861,7 @@ async function getLiveTilePixels(tileX, tileY) {
   return imageData;
 }
 
-async function findNearestTemplatePixelInTile(tileCandidate, liveTilePixels, originPoint, displayedColorSet, excludedCoordsKey, memorySavingMode) {
+async function findNearestTemplatePixelInTile(tileCandidate, liveTilePixels, originPoint, displayedColorSet, excludedCoordsKeys, memorySavingMode) {
   let bestCandidate = null;
   for (const entry of tileCandidate.entries) {
     const sampleData = await entry.template.getChunkSamples(entry.tileKey, { memorySaving: memorySavingMode });
@@ -4633,7 +4876,7 @@ async function findNearestTemplatePixelInTile(tileCandidate, liveTilePixels, ori
       tileY: tileCandidate.tileY,
       originPoint,
       displayedColorSet,
-      excludedCoordsKey,
+      excludedCoordsKeySet: excludedCoordsKeys,
       templateName: entry.template.displayName,
       distanceSqFn: getTilePixelDistanceSq,
     });
@@ -4665,6 +4908,10 @@ async function jumpToNextUnpaintedTemplatePixel() {
       return;
     }
 
+    const jumpCycleVisitedCoordsKeys = syncTemplateJumpCycleState(
+      buildTemplateJumpCycleScopeKey(activeTemplates, displayedColors)
+    );
+
     const originCoords = getTemplateJumpOriginCoords();
     const originPoint = tilePixelCoordsToWorldPoint(originCoords);
     if (!originPoint) {
@@ -4673,9 +4920,10 @@ async function jumpToNextUnpaintedTemplatePixel() {
     }
 
     overlayMain.handleDisplayStatus('Searching for the next unpainted template pixel...');
-    const excludedCoordsKey = originPoint.coords.join(',');
+    const excludedCoordsKeys = new Set(jumpCycleVisitedCoordsKeys);
+    excludedCoordsKeys.add(originPoint.coords.join(','));
     const displayedColorSet = new Set(displayedColors);
-    let bestCandidate = findNearestCachedTemplatePixel(originPoint, displayedColorSet, excludedCoordsKey);
+    let bestCandidate = findNearestCachedTemplatePixel(originPoint, displayedColorSet, excludedCoordsKeys);
     const tileCandidatesMap = new Map();
     for (const template of activeTemplates) {
       const tileKeys = template.getChunkKeys?.() ?? Object.keys(template.chunkedBuffer ?? template.chunked ?? {});
@@ -4714,7 +4962,7 @@ async function jumpToNextUnpaintedTemplatePixel() {
           liveTilePixels,
           originPoint,
           displayedColorSet,
-          excludedCoordsKey,
+          excludedCoordsKeys,
           memorySavingMode
         );
         if (tileCandidateBest && (!bestCandidate || tileCandidateBest.distanceSq < bestCandidate.distanceSq)) {
@@ -4730,10 +4978,16 @@ async function jumpToNextUnpaintedTemplatePixel() {
     }
 
     if (!bestCandidate) {
+      if (jumpCycleVisitedCoordsKeys.size > 0) {
+        jumpCycleVisitedCoordsKeys.clear();
+        overlayMain.handleDisplayStatus('Reached the last unfinished pixel. Press J again to restart the cycle.');
+        return;
+      }
       overlayMain.handleDisplayStatus('No other unpainted pixels found for active templates.');
       return;
     }
 
+    jumpCycleVisitedCoordsKeys.add(bestCandidate.coordsKey);
     await teleportToTileCoords(bestCandidate.coords.slice(0, 2), bestCandidate.coords.slice(2, 4), {
       revealPixelInfo: false,
     });
@@ -6046,6 +6300,7 @@ async function buildOverlayMain() {
       forceRefreshTiles,
       removeLayer,
       setMapCommentsEnabled: (enabled) => setMapCommentsEnabled(enabled),
+      applySafeMode: () => applySafeModeState(),
       themeList,
       outputStatusId: overlayMain.outputStatusId,
       t,
@@ -7005,14 +7260,27 @@ async function buildOverlayMain() {
   };
   syncTemplatePositionJoystickWindow();
 
-  const buildColorFilterList = () => {
+  let progressUiRefreshQueued = false;
+  const scheduleProgressUiRefresh = () => {
+    if (progressUiRefreshQueued) return;
+    progressUiRefreshQueued = true;
+    requestAnimationFrame(() => {
+      progressUiRefreshQueued = false;
+      const progressSnapshot = templateManager.getOverallPerColorProgress();
+      buildColorFilterList(progressSnapshot);
+      buildTemplateFilterList(progressSnapshot);
+    });
+  };
+  window.scheduleProgressUiRefresh = scheduleProgressUiRefresh;
+
+  const buildColorFilterList = (progressSnapshot = null) => {
     const listContainer = document.querySelector('#bm-colorfilter-list');
     const toggleStatus = templateManager.getPaletteToggledStatus();
     const hideCompleted = templateManager.areCompletedColorsHidden();
     const hideLocked = templateManager.areLockedColorsHidden();
     listContainer.innerHTML = '';
 
-    const { paletteSum, combinedProgress } = templateManager.getOverallPerColorProgress();
+    const { paletteSum, combinedProgress } = progressSnapshot ?? templateManager.getOverallPerColorProgress();
 
     if (!listContainer || !(Object.keys(paletteSum).length)) {
       if (listContainer) { listContainer.innerHTML = `<small>${t('colors.empty.none')}</small>`; }
@@ -7158,7 +7426,7 @@ async function buildOverlayMain() {
   };
   window.buildColorFilterList = buildColorFilterList;
 
-  const buildTemplateFilterList = () => {
+  const buildTemplateFilterList = (progressSnapshot = null) => {
     const listContainer = document.querySelector('#bm-templatefilter-list');
     consoleLog(templateManager);
     if (templateManager.templatesArray?.length === 0) {
@@ -7268,7 +7536,7 @@ async function buildOverlayMain() {
       const {
         paletteSum: paletteSumForTemplateList,
         combinedProgress: combinedProgressForTemplateList,
-      } = templateManager.getOverallPerColorProgress();
+      } = progressSnapshot ?? templateManager.getOverallPerColorProgress();
       const phantomColorKeys = new Set();
       Object.entries(paletteSumForTemplateList).forEach(([rgb, totalCount]) => {
         if (rgb === 'other') return;
