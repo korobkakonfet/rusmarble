@@ -1,6 +1,6 @@
 {
   "name": "wplace-RusMarble",
-  "version": "0.87.47",
+  "version": "0.87.48",
   "type": "module",
   "homepage": "https://t.me/ruswplace",
   "repository": {
@@ -8,6 +8,7 @@
     "url": "https://github.com/t-wy/Wplace-RusMarble-Userscripts.git"
   },
   "scripts": {
+    "build:wasm": "node build/compile-wasm.js",
     "build": "node build/build.js",
     "build:prod": "node build/build.js --prod",
     "build:dev": "node build/build.js --dev",
@@ -19,6 +20,7 @@
     "esbuild": "^0.25.0",
     "jsdoc": "^4.0.4",
     "minami": "^1.2.3",
-    "terser": "^5.43.1"
+    "terser": "^5.43.1",
+    "wabt": "^1.0.39"
   }
 }

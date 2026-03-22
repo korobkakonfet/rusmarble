@@ -6505,10 +6505,10 @@ async function buildOverlayMain() {
                 }
                 if (createMode === TEMPLATE_CREATE_MODE_RUSSIAN_FLAG && flagCreateMeta?.ignoreArts) {
                   instance.handleDisplayStatus(
-                    `Template created with Ignore Arts mask (${flagCreateMeta.ignoredPixelCount.toLocaleString()} pixel(s) transparent).`
+                    `Template created with Ignore Arts mask (${flagCreateMeta.ignoredPixelCount.toLocaleString()} pixel(s) transparent). Rendering visible crosses...`
                   );
                 } else {
-                  instance.handleDisplayStatus('Template created!');
+                  instance.handleDisplayStatus('Template created. Rendering visible crosses...');
                 }
               } finally {
                 createFlowBusy = false;
@@ -7688,21 +7688,29 @@ async function buildOverlayMain() {
       const toggle = document.createElement('input');
       toggle.type = 'checkbox';
       toggle.checked = template.enabled;
-      toggle.addEventListener('change', () => {
+      toggle.addEventListener('change', async () => {
         template.enabled = toggle.checked;
         row.classList.toggle('bm-template-inactive', !toggle.checked);
-        overlayMain.handleDisplayStatus(`${toggle.checked ? 'Enabled' : 'Disabled'} ${templateName}`);
+        overlayMain.handleDisplayStatus(
+          toggle.checked
+            ? `Enabled ${templateName}. Rendering visible crosses...`
+            : `Disabled ${templateName}`
+        );
         templateManager.clearTileProgress(template);
-        if (toggle.checked) {
-          templateManager.createOverlayOnMap(template.sortID);
-        } else {
-          removeLayer(null, template.sortID);
-        }
         syncToggleList();
         buildTemplateFilterList();
         // The total count has changed from clearTileProgress, and that may be a template outside the current view, so we need to refresh
         buildColorFilterList();
         forceRefreshTiles();
+        if (toggle.checked) {
+          await templateManager.queueOverlayRefreshAfterUi(template.sortID, {
+            visibleFirst: true,
+            followUpFull: true,
+            immediate: true,
+          });
+        } else {
+          removeLayer(null, template.sortID);
+        }
       });
 
       row.appendChild(toggle);

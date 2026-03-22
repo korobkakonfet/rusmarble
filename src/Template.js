@@ -11,12 +11,14 @@ import {
   renderSampleDataToImage,
   TEMPLATE_DEFACE_RGB,
 } from "./templateChunkUtils.js";
+import { convertImageDataToPaletteWithWasm, isTemplatePaletteWasmAvailable } from "./templatePaletteWasm.js";
 
 const clampByte = (value) => Math.max(0, Math.min(255, Math.round(Number(value) || 0)));
 const clampUnit = (value) => Math.max(0, Math.min(1, Number(value) || 0));
 const normalizeDistanceMode = (value) => String(value || '').toLowerCase() === 'euclidean' ? 'euclidean' : 'weighted';
 const normalizeDitherMode = (value) => String(value || '').toLowerCase() === 'floyd-steinberg' ? 'floyd-steinberg' : 'none';
 const TEMPLATE_DEFACE_KEY = `${TEMPLATE_DEFACE_RGB[0]},${TEMPLATE_DEFACE_RGB[1]},${TEMPLATE_DEFACE_RGB[2]}`;
+const packRgb = (r, g, b) => ((r << 16) | (g << 8) | b) >>> 0;
 
 const templatePaletteColors = (() => {
   const options = [];
@@ -35,6 +37,25 @@ const templatePaletteColors = (() => {
     options.push({ key: '0,0,0', rgb: [0, 0, 0] });
   }
   return options;
+})();
+const templatePalettePackedEntries = templatePaletteColors.map((entry) => ({
+  ...entry,
+  packed: packRgb(entry.rgb[0], entry.rgb[1], entry.rgb[2]),
+}));
+const templatePalettePackedSet = new Set(
+  templatePalettePackedEntries.map((entry) => entry.packed)
+);
+const templatePaletteWasmBytes = (() => {
+  const bytes = new Uint8Array(templatePalettePackedEntries.length * 4);
+  for (let index = 0; index < templatePalettePackedEntries.length; index++) {
+    const offset = index << 2;
+    const rgb = templatePalettePackedEntries[index].rgb;
+    bytes[offset] = rgb[0];
+    bytes[offset + 1] = rgb[1];
+    bytes[offset + 2] = rgb[2];
+    bytes[offset + 3] = 0;
+  }
+  return bytes;
 })();
 
 export const templatePaletteConversionDefaults = Object.freeze({
@@ -73,13 +94,17 @@ const colorDistanceSq = (r, g, b, paletteRgb, distanceMode) => {
 };
 
 const getNearestPaletteColor = (r, g, b, options, cache) => {
-  const cacheKey = `${clampByte(r)},${clampByte(g)},${clampByte(b)},${options.distanceMode}`;
+  const cacheKey = packRgb(
+    clampByte(r),
+    clampByte(g),
+    clampByte(b)
+  );
   if (cache.has(cacheKey)) {
     return cache.get(cacheKey);
   }
-  let nearest = templatePaletteColors[0];
+  let nearest = templatePalettePackedEntries[0];
   let nearestDistance = Infinity;
-  for (const entry of templatePaletteColors) {
+  for (const entry of templatePalettePackedEntries) {
     const distance = colorDistanceSq(r, g, b, entry.rgb, options.distanceMode);
     if (distance < nearestDistance) {
       nearest = entry;
@@ -107,13 +132,14 @@ export function convertImageDataToWplacePalette(imageData, options = {}) {
   }
 
   const normalizedOptions = normalizeTemplatePaletteConversionOptions(options);
+  const allowWasm = options?.useWasm !== false;
   const width = Math.max(1, Math.trunc(imageData.width));
   const height = Math.max(1, Math.trunc(imageData.height));
   const data = imageData.data;
   const pixelCount = width * height;
   const original = new Uint8ClampedArray(data);
   const alphaPass = new Uint8Array(pixelCount);
-  const nonPaletteColorKeys = new Set();
+  const nonPalettePackedColors = new Set();
 
   let nonPalettePixels = 0;
   for (let i = 0; i < pixelCount; i++) {
@@ -124,14 +150,21 @@ export function convertImageDataToWplacePalette(imageData, options = {}) {
       continue;
     }
     alphaPass[i] = 1;
-    const key = `${original[base]},${original[base + 1]},${original[base + 2]}`;
-    if (!rgbToMeta.has(key)) {
+    const packed = packRgb(original[base], original[base + 1], original[base + 2]);
+    if (!templatePalettePackedSet.has(packed)) {
       nonPalettePixels++;
-      nonPaletteColorKeys.add(key);
+      nonPalettePackedColors.add(packed);
     }
   }
 
   const nearestCache = new Map();
+  const canUseWasm = (
+    allowWasm
+    && nonPalettePixels > 0
+    && normalizedOptions.ditherMode === 'none'
+    && normalizedOptions.antiDitherStrength <= 0
+    && isTemplatePaletteWasmAvailable()
+  );
   if (normalizedOptions.ditherMode === 'floyd-steinberg' && normalizedOptions.ditherStrength > 0) {
     const workingR = new Float32Array(pixelCount);
     const workingG = new Float32Array(pixelCount);
@@ -163,8 +196,8 @@ export function convertImageDataToWplacePalette(imageData, options = {}) {
           data[base + 3] = 0;
           continue;
         }
-        const originalKey = `${original[base]},${original[base + 1]},${original[base + 2]}`;
-        if (rgbToMeta.has(originalKey)) {
+        const originalPacked = packRgb(original[base], original[base + 1], original[base + 2]);
+        if (templatePalettePackedSet.has(originalPacked)) {
           data[base] = original[base];
           data[base + 1] = original[base + 1];
           data[base + 2] = original[base + 2];
@@ -198,6 +231,13 @@ export function convertImageDataToWplacePalette(imageData, options = {}) {
         }
       }
     }
+  } else if (canUseWasm) {
+    convertImageDataToPaletteWithWasm({
+      data,
+      paletteBytes: templatePaletteWasmBytes,
+      alphaThreshold: normalizedOptions.alphaThreshold,
+      distanceMode: normalizedOptions.distanceMode,
+    });
   } else {
     for (let i = 0; i < pixelCount; i++) {
       const base = i * 4;
@@ -205,8 +245,8 @@ export function convertImageDataToWplacePalette(imageData, options = {}) {
         data[base + 3] = 0;
         continue;
       }
-      const originalKey = `${original[base]},${original[base + 1]},${original[base + 2]}`;
-      if (rgbToMeta.has(originalKey)) {
+      const originalPacked = packRgb(original[base], original[base + 1], original[base + 2]);
+      if (templatePalettePackedSet.has(originalPacked)) {
         data[base] = original[base];
         data[base + 1] = original[base + 1];
         data[base + 2] = original[base + 2];
@@ -288,14 +328,14 @@ export function convertImageDataToWplacePalette(imageData, options = {}) {
     applyAntiDither();
   }
 
-  const convertedColorKeys = new Set();
+  const convertedColorPacks = new Set();
   let convertedPixels = 0;
   let remainingOtherPixels = 0;
   for (let i = 0; i < pixelCount; i++) {
     const base = i * 4;
     if (data[base + 3] === 0) continue;
-    const outputKey = `${data[base]},${data[base + 1]},${data[base + 2]}`;
-    if (!rgbToMeta.has(outputKey)) {
+    const outputPacked = packRgb(data[base], data[base + 1], data[base + 2]);
+    if (!templatePalettePackedSet.has(outputPacked)) {
       remainingOtherPixels++;
     }
     if (
@@ -305,7 +345,7 @@ export function convertImageDataToWplacePalette(imageData, options = {}) {
       original[base + 3] !== data[base + 3]
     ) {
       convertedPixels++;
-      convertedColorKeys.add(`${original[base]},${original[base + 1]},${original[base + 2]}`);
+      convertedColorPacks.add(packRgb(original[base], original[base + 1], original[base + 2]));
     }
   }
 
@@ -314,9 +354,9 @@ export function convertImageDataToWplacePalette(imageData, options = {}) {
     options: normalizedOptions,
     stats: {
       nonPalettePixels,
-      nonPaletteColorCount: nonPaletteColorKeys.size,
+      nonPaletteColorCount: nonPalettePackedColors.size,
       convertedPixels,
-      convertedColorCount: convertedColorKeys.size,
+      convertedColorCount: convertedColorPacks.size,
       remainingOtherPixels,
     },
   };
@@ -613,7 +653,7 @@ export default class Template {
   async createTemplateTiles(anchor, options = {}) {
     if (this.shreadSize === null) {
       // initialize shreadSize (usually already assigned by the template manager)
-      this.shreadSize = testCanvasSize(5000, 5000) ? 5 : 4; // Scale image factor for pixel art enhancement (must be odd)
+      this.shreadSize = testCanvasSize(5000, 5000) ? 5 : 3; // Scale image factor for pixel art enhancement (must be odd)
     }
     const shreadSize = this.shreadSize;
     const persistBitmapTiles = options?.persistBitmapTiles === true;
