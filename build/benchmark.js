@@ -14,6 +14,7 @@ import {
   findNearestUnpaintedSamplePixel,
   renderSampleDataToImage,
 } from '../src/templateChunkUtils.js';
+import { convertImageDataToWplacePalette } from '../src/Template.js';
 import { colorpalette, rgbToMeta, uint8ToBase64, base64ToUint8 } from '../src/utils.js';
 
 const TEMPLATE_TILE_SIZE = 1000;
@@ -418,6 +419,61 @@ function buildSourceImageData() {
   return data;
 }
 
+function pickNonPaletteColor(rng) {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const red = Math.floor(rng() * 256);
+    const green = Math.floor(rng() * 256);
+    const blue = Math.floor(rng() * 256);
+    if (!rgbToMeta.has(`${red},${green},${blue}`)) {
+      return [red, green, blue];
+    }
+  }
+  return [1, 2, 3];
+}
+
+function buildNonPaletteSourceImageData() {
+  const rng = createRng(0x5eed5678);
+  const palette = getBenchmarkPalette();
+  const data = new Uint8ClampedArray(IMAGE_WIDTH * IMAGE_HEIGHT * 4);
+  for (let index = 0; index < IMAGE_WIDTH * IMAGE_HEIGHT; index++) {
+    const offset = index * 4;
+    const roll = rng();
+    if (roll < 0.08) {
+      data[offset + 3] = 0;
+      continue;
+    }
+    if (roll < 0.1) {
+      data[offset] = 222;
+      data[offset + 1] = 250;
+      data[offset + 2] = 206;
+      data[offset + 3] = 255;
+      continue;
+    }
+    if (roll < 0.3) {
+      const color = palette[Math.floor(rng() * palette.length)];
+      data[offset] = color[0];
+      data[offset + 1] = color[1];
+      data[offset + 2] = color[2];
+      data[offset + 3] = 255;
+      continue;
+    }
+    const [red, green, blue] = pickNonPaletteColor(rng);
+    data[offset] = red;
+    data[offset + 1] = green;
+    data[offset + 2] = blue;
+    data[offset + 3] = 255;
+  }
+  return data;
+}
+
+function cloneImageDataFixture(sourceData, width, height) {
+  return {
+    data: new Uint8ClampedArray(sourceData),
+    width,
+    height,
+  };
+}
+
 function buildTilePixels(sampleData) {
   const tilePixels = new Uint8ClampedArray(TEMPLATE_TILE_SIZE * TEMPLATE_TILE_SIZE * 4);
   for (let index = 0; index < tilePixels.length; index += 4) {
@@ -708,6 +764,91 @@ function createReservoirExamples(sampleData, count = 512) {
     ]);
   }
   return examples;
+}
+
+function createNearestPaletteNormalizer() {
+  const palette = getBenchmarkPalette();
+  const cache = new Map();
+  return (r, g, b, a) => {
+    const packed = ((r << 16) | (g << 8) | b) >>> 0;
+    const cached = cache.get(packed);
+    if (cached) {
+      return {
+        r: cached[0],
+        g: cached[1],
+        b: cached[2],
+        a,
+      };
+    }
+    let best = palette[0];
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (let index = 0; index < palette.length; index++) {
+      const color = palette[index];
+      const dr = color[0] - r;
+      const dg = color[1] - g;
+      const db = color[2] - b;
+      const distance = dr * dr + dg * dg + db * db;
+      if (distance < bestDistance) {
+        best = color;
+        bestDistance = distance;
+        if (distance === 0) break;
+      }
+    }
+    if (cache.size < 16384) {
+      cache.set(packed, best);
+    }
+    return {
+      r: best[0],
+      g: best[1],
+      b: best[2],
+      a,
+    };
+  };
+}
+
+function runTemplateChunkCreationPipeline({
+  sourceData,
+  sampleNormalizer = null,
+  includeStats = true,
+  drawSize = CROSS_DRAW_SIZE,
+  maskPoints,
+  maskRowSpans,
+}) {
+  const accumulator = includeStats ? createPaletteStatsAccumulator() : null;
+  const sampleData = buildChunkSampleDataFromSource(
+    sourceData,
+    IMAGE_WIDTH,
+    CHUNK_SOURCE_X,
+    CHUNK_SOURCE_Y,
+    CHUNK_WIDTH,
+    CHUNK_HEIGHT,
+    accumulator,
+    sampleNormalizer
+  );
+  const resultWidth = sampleData.width * drawSize;
+  const resultHeight = sampleData.height * drawSize;
+  const image = { data: new Uint8ClampedArray(resultWidth * resultHeight * 4) };
+  renderSampleDataToImage({
+    sampleData,
+    imageData: image,
+    resultWidth,
+    drawSize,
+    maskPoints,
+    maskRowSpans,
+    includeDefaceCheckerboard: true,
+  });
+  const encoded = encodeChunkSampleData(sampleData);
+  const stats = accumulator ? finalizePaletteStatsAccumulator(accumulator) : null;
+  return (
+    sampleData.count
+    + encoded.length
+    + image.data[0]
+    + image.data[1]
+    + image.data[2]
+    + image.data[image.data.length - 1]
+    + (stats?.required || 0)
+    + (stats?.deface || 0)
+  );
 }
 
 function encodeChunkSampleDataLegacy(sampleData) {
@@ -1312,6 +1453,7 @@ async function createNearestWasmRunner({
 function printResults(results, fixture) {
   console.log('Template Performance Benchmark');
   console.log(`Fixture: source ${IMAGE_WIDTH}x${IMAGE_HEIGHT}, chunk ${CHUNK_WIDTH}x${CHUNK_HEIGHT}, sampled pixels ${fixture.sampleData.count}`);
+  console.log('Scope: pure template creation/checking helpers plus optional WASM for nearest-pixel scan.');
   console.log('');
   const header = [
     'Benchmark'.padEnd(36),
@@ -1339,6 +1481,8 @@ function printResults(results, fixture) {
 
 async function main() {
   const sourceData = buildSourceImageData();
+  const nonPaletteSourceData = buildNonPaletteSourceImageData();
+  const sampleNormalizer = createNearestPaletteNormalizer();
   const sampleData = buildChunkSampleDataFromSource(
     sourceData,
     IMAGE_WIDTH,
@@ -1353,7 +1497,9 @@ async function main() {
   const tileCoords = [TILE_X, TILE_Y];
   const examplePool = createReservoirExamples(sampleData);
   const crossMaskPoints = buildDefaultCrossMaskPoints(CROSS_DRAW_SIZE);
+  const fullMaskPoints = buildFullMaskPoints(CROSS_DRAW_SIZE);
   const crossMaskRowSpans = buildMaskRowSpans(crossMaskPoints, CROSS_DRAW_SIZE);
+  const fullMaskRowSpans = buildMaskRowSpans(fullMaskPoints, CROSS_DRAW_SIZE);
   const crossResultWidth = sampleData.width * CROSS_DRAW_SIZE;
   const crossResultHeight = sampleData.height * CROSS_DRAW_SIZE;
   const colorFilterFixture = buildTemplateColorFilterFixture(sampleData);
@@ -1411,6 +1557,14 @@ async function main() {
   }
 
   const results = [
+    runBenchmark('buildMaskRowSpans(cross-mask)', 5000, () => {
+      const spans = buildMaskRowSpans(crossMaskPoints, CROSS_DRAW_SIZE);
+      return spans.length + spans[0].length;
+    }),
+    runBenchmark('buildMaskRowSpans(full-mask)', 5000, () => {
+      const spans = buildMaskRowSpans(fullMaskPoints, CROSS_DRAW_SIZE);
+      return spans.length + spans[0].length;
+    }),
     runBenchmark('inspectSourceImagePalette', 8, () => {
       const result = inspectSourceImagePalette(sourceData, IMAGE_WIDTH, IMAGE_HEIGHT);
       return result.required + result.deface + result.paletteMap.size;
@@ -1457,6 +1611,71 @@ async function main() {
       );
       const stats = finalizePaletteStatsAccumulator(accumulator);
       return result.count + stats.required + stats.deface + stats.paletteMap.size;
+    }),
+    runBenchmark('buildChunkSampleDataFromSource+normalizer', 16, () => {
+      const accumulator = createPaletteStatsAccumulator();
+      const result = buildChunkSampleDataFromSource(
+        nonPaletteSourceData,
+        IMAGE_WIDTH,
+        CHUNK_SOURCE_X,
+        CHUNK_SOURCE_Y,
+        CHUNK_WIDTH,
+        CHUNK_HEIGHT,
+        accumulator,
+        sampleNormalizer
+      );
+      const stats = finalizePaletteStatsAccumulator(accumulator);
+      return result.count + stats.required + stats.deface + stats.paletteMap.size;
+    }),
+    runBenchmark('convertImageDataToWplacePalette(noop/js)', 6, () => {
+      const fixture = cloneImageDataFixture(sourceData, IMAGE_WIDTH, IMAGE_HEIGHT);
+      const result = convertImageDataToWplacePalette(fixture, {
+        ditherMode: 'none',
+        ditherStrength: 0,
+        antiDitherStrength: 0,
+        useWasm: false,
+      });
+      return result.stats.convertedPixels + result.stats.remainingOtherPixels + fixture.data[0];
+    }),
+    runBenchmark('convertImageDataToWplacePalette(noop/wasm)', 6, () => {
+      const fixture = cloneImageDataFixture(sourceData, IMAGE_WIDTH, IMAGE_HEIGHT);
+      const result = convertImageDataToWplacePalette(fixture, {
+        ditherMode: 'none',
+        ditherStrength: 0,
+        antiDitherStrength: 0,
+        useWasm: true,
+      });
+      return result.stats.convertedPixels + result.stats.remainingOtherPixels + fixture.data[0];
+    }),
+    runBenchmark('convertImageDataToWplacePalette(map/js)', 6, () => {
+      const fixture = cloneImageDataFixture(nonPaletteSourceData, IMAGE_WIDTH, IMAGE_HEIGHT);
+      const result = convertImageDataToWplacePalette(fixture, {
+        ditherMode: 'none',
+        ditherStrength: 0,
+        antiDitherStrength: 0,
+        useWasm: false,
+      });
+      return result.stats.convertedPixels + result.stats.remainingOtherPixels + fixture.data[0];
+    }),
+    runBenchmark('convertImageDataToWplacePalette(map/wasm)', 6, () => {
+      const fixture = cloneImageDataFixture(nonPaletteSourceData, IMAGE_WIDTH, IMAGE_HEIGHT);
+      const result = convertImageDataToWplacePalette(fixture, {
+        ditherMode: 'none',
+        ditherStrength: 0,
+        antiDitherStrength: 0,
+        useWasm: true,
+      });
+      return result.stats.convertedPixels + result.stats.remainingOtherPixels + fixture.data[0];
+    }),
+    runBenchmark('convertImageDataToWplacePalette(dither)', 4, () => {
+      const fixture = cloneImageDataFixture(nonPaletteSourceData, IMAGE_WIDTH, IMAGE_HEIGHT);
+      const result = convertImageDataToWplacePalette(fixture, {
+        ditherMode: 'floyd-steinberg',
+        ditherStrength: 1,
+        antiDitherStrength: 0.5,
+        useWasm: false,
+      });
+      return result.stats.convertedPixels + result.stats.remainingOtherPixels + fixture.data[0];
     }),
     runBenchmark('encodeChunkSampleData', 24, () => {
       const result = encodeChunkSampleData(sampleData);
@@ -1553,6 +1772,7 @@ async function main() {
         excludedCoordsKey,
         templateName: 'Benchmark Template',
         distanceSqFn: getTilePixelDistanceSq,
+        useWasm: false,
       });
       return (result?.distanceSq || 0) + (result?.coords?.[2] || 0) + (result?.coords?.[3] || 0);
     }),
@@ -1594,6 +1814,28 @@ async function main() {
       });
       return image.data[0] + image.data[1] + image.data[2] + image.data[3] + image.data[image.data.length - 1];
     }),
+    runBenchmark('templateChunkCreatePipeline', 12, () => (
+      runTemplateChunkCreationPipeline({
+        sourceData,
+        maskPoints: crossMaskPoints,
+        maskRowSpans: crossMaskRowSpans,
+      })
+    )),
+    runBenchmark('templateChunkCreatePipeline+normalizer', 10, () => (
+      runTemplateChunkCreationPipeline({
+        sourceData: nonPaletteSourceData,
+        sampleNormalizer,
+        maskPoints: crossMaskPoints,
+        maskRowSpans: crossMaskRowSpans,
+      })
+    )),
+    runBenchmark('templateChunkCreatePipeline(full-mask)', 8, () => (
+      runTemplateChunkCreationPipeline({
+        sourceData,
+        maskPoints: fullMaskPoints,
+        maskRowSpans: fullMaskRowSpans,
+      })
+    )),
     runBenchmark('templateColorFilterLoop(legacy)', 6, () => (
       templateColorFilterLegacyLoop({
         ...colorFilterFixture,

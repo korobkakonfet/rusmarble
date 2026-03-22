@@ -65,6 +65,8 @@ console.log(`Mode: ${isProduction ? 'production' : 'development'} (${buildModeRa
 
 // Tries to bump the version
 try {
+  execSync('node build/compile-wasm.js', { stdio: 'inherit' });
+  console.log(`WASM assets compiled ${consoleStyle.GREEN}successfully${consoleStyle.RESET}`);
   const update = execSync('node build/update-version.js', { stdio: 'inherit' });
   console.log(`Version updated in meta file ${consoleStyle.GREEN}successfully${consoleStyle.RESET}`);
 } catch (error) {

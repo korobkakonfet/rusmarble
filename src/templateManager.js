@@ -57,6 +57,10 @@ const createUiWorkScheduler = (sliceMs = UI_WORK_SLICE_MS) => {
     lastYieldAt = getNowMs();
   };
 };
+const waitForUiPaint = async () => {
+  await yieldToBrowser();
+  await yieldToBrowser();
+};
 const syncInjectedDebugLogging = (enabled) => {
   try {
     if (typeof window !== 'undefined' && typeof window.postMessage === 'function') {
@@ -163,7 +167,7 @@ export default class TemplateManager {
     this.encodingBase = '!#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~'; // Characters to use for encoding/decoding
     this.tileSize = 1000; // The number of pixels in a tile. Assumes the tile is square
 
-    this.drawMult = testCanvasSize(5000, 5000) ? 5 : 4; // The enlarged size for each pixel. E.g. when "3", a 1x1 pixel becomes a 1x1 pixel inside a 3x3 area. MUST BE ODD
+    this.drawMult = testCanvasSize(5000, 5000) ? 5 : 3; // The enlarged size for each pixel. E.g. when "3", a 1x1 pixel becomes a 1x1 pixel inside a 3x3 area. MUST BE ODD
 
     this.drawMultCenter = (this.drawMult - 1) >> 1; // Even: better be upper left than down right
     
@@ -399,7 +403,14 @@ export default class TemplateManager {
       this.requestListRebuild();
     }
     if (!deferOverlayRefresh) {
-      this.createOverlayOnMapVisibleOnly(template.sortID);
+      if (!suppressStatus) {
+        this.overlay.handleDisplayStatus(`Template created. Rendering visible crosses for "${template.displayName}"...`);
+      }
+      this.queueOverlayRefreshAfterUi(template.sortID, {
+        visibleFirst: true,
+        followUpFull: true,
+        immediate: true,
+      });
     }
     return template;
   }
@@ -778,6 +789,16 @@ export default class TemplateManager {
     return Promise.resolve();
   }
 
+  /** Queue an overlay refresh after the browser has had a chance to paint UI updates first.
+   * @param {number?} sortID
+   * @param {object?} options
+   * @since 0.90.0
+   */
+  async queueOverlayRefreshAfterUi(sortID = null, options = null) {
+    await waitForUiPaint();
+    return this.createOverlayOnMap(sortID, options);
+  }
+
   /** Add the template overlay layer to the map (no debounce)
    * @param {number?} sortID
    * @since 0.86.1
@@ -831,18 +852,21 @@ export default class TemplateManager {
         }
         const drawMultTemplate = template.shreadSize;
         const drawMultCenterTemplate = (template.shreadSize - 1) >> 1;
-        const nativeSampleData = template.hasNativeChunkSamples(tileKey)
-          ? await template.getChunkSamples(tileKey, { allowBitmapFallback: false })
-          : null;
-        const templateTileBitmap = nativeSampleData
+        // Prefer sample-based overlay rendering even for bitmap-backed chunks.
+        // This keeps the displayed shape consistent across browsers and avoids
+        // occasional Chrome bitmap-path glitches where the cross mask is not visible.
+        const sampleData = await template.getChunkSamples(tileKey, {
+          memorySaving: currentMemorySavingMode,
+        });
+        const templateTileBitmap = sampleData
           ? null
           : await template.getChunked(tileKey, currentMemorySavingMode);
-        const originalWidth = nativeSampleData
-          ? nativeSampleData.width
+        const originalWidth = sampleData
+          ? sampleData.width
           : Math.max(1, Math.round((templateTileBitmap?.width || 0) / template.shreadSize));
         const safeOriginalWidth = Math.max(1, Math.round(Number(originalWidth) || 0));
-        const originalHeight = nativeSampleData
-          ? nativeSampleData.height
+        const originalHeight = sampleData
+          ? sampleData.height
           : Math.max(1, Math.round((templateTileBitmap?.height || 0) / template.shreadSize));
         const safeOriginalHeight = Math.max(1, Math.round(Number(originalHeight) || 0));
         const resultWidth = safeOriginalWidth * drawMultResult; // Calculate draw multiplier for scaling
@@ -861,11 +885,11 @@ export default class TemplateManager {
         resultContext.clearRect(0, 0, resultWidth, resultHeight); // Draws transparent background
 
         try {
-          if (nativeSampleData) {
+          if (sampleData) {
             const image = resultContext.createImageData(resultWidth, resultHeight);
             if (!hasColorDisabled && drawMultTemplate === drawMultResult && displayMode !== 'fill') {
               renderSampleDataToImage({
-                sampleData: nativeSampleData,
+                sampleData,
                 imageData: image,
                 resultWidth,
                 drawSize: drawMultResult,
@@ -875,7 +899,7 @@ export default class TemplateManager {
               });
             } else if (!allColorsDisabled) {
               renderSampleDataToImage({
-                sampleData: nativeSampleData,
+                sampleData,
                 imageData: image,
                 resultWidth,
                 drawSize: drawMultResult,
