@@ -6,6 +6,7 @@ import {
   createPaletteStatsAccumulator,
   finalizePaletteStatsAccumulator,
   buildChunkSampleDataFromSource,
+  encodeChunkSampleBytes,
   encodeChunkSampleData,
   decodeChunkSampleBuffer,
   collectTemplateProgressFromSamples,
@@ -16,6 +17,7 @@ import {
 } from '../src/templateChunkUtils.js';
 import { convertImageDataToWplacePalette } from '../src/Template.js';
 import { colorpalette, rgbToMeta, uint8ToBase64, base64ToUint8 } from '../src/utils.js';
+import { createTemplateSampleExtractorWithWasm, isTemplateSampleExtractWasmAvailable } from '../src/templateSampleExtractWasm.js';
 
 const TEMPLATE_TILE_SIZE = 1000;
 const MAP_WORLD_WIDTH_PX = 2048 * TEMPLATE_TILE_SIZE;
@@ -837,11 +839,11 @@ function runTemplateChunkCreationPipeline({
     maskRowSpans,
     includeDefaceCheckerboard: true,
   });
-  const encoded = encodeChunkSampleData(sampleData);
+  const encoded = encodeChunkSampleBytes(sampleData);
   const stats = accumulator ? finalizePaletteStatsAccumulator(accumulator) : null;
   return (
     sampleData.count
-    + encoded.length
+    + encoded.byteLength
     + image.data[0]
     + image.data[1]
     + image.data[2]
@@ -849,6 +851,191 @@ function runTemplateChunkCreationPipeline({
     + (stats?.required || 0)
     + (stats?.deface || 0)
   );
+}
+
+function measureTemplateCreationSimulation({
+  sourceData,
+  sampleNormalizer = null,
+  drawSize = CROSS_DRAW_SIZE,
+  maskPoints,
+  maskRowSpans,
+  startPixelX = OFFSET_X,
+  startPixelY = OFFSET_Y,
+  renderTiles = true,
+  sampleExtractor = null,
+  persistEncodedSamples = true,
+}) {
+  const accumulator = createPaletteStatsAccumulator();
+  const stageTotals = {
+    sampleMs: 0,
+    renderMs: 0,
+    encodeMs: 0,
+    finalizeMs: 0,
+  };
+  let checksum = 0;
+  let chunkCount = 0;
+  const totalStart = performance.now();
+
+  for (let pixelY = startPixelY; pixelY < IMAGE_HEIGHT + startPixelY;) {
+    const drawSizeY = Math.min(
+      TEMPLATE_TILE_SIZE - (pixelY % TEMPLATE_TILE_SIZE),
+      IMAGE_HEIGHT + startPixelY - pixelY
+    );
+    for (let pixelX = startPixelX; pixelX < IMAGE_WIDTH + startPixelX;) {
+      const drawSizeX = Math.min(
+        TEMPLATE_TILE_SIZE - (pixelX % TEMPLATE_TILE_SIZE),
+        IMAGE_WIDTH + startPixelX - pixelX
+      );
+      const sourceX = pixelX - startPixelX;
+      const sourceY = pixelY - startPixelY;
+
+      const sampleStart = performance.now();
+      const sampleResult = sampleExtractor
+        ? sampleExtractor({
+          sourceX,
+          sourceY,
+          chunkWidth: drawSizeX,
+          chunkHeight: drawSizeY,
+          includeStats: !!accumulator,
+        })
+        : {
+          sampleData: buildChunkSampleDataFromSource(
+            sourceData,
+            IMAGE_WIDTH,
+            sourceX,
+            sourceY,
+            drawSizeX,
+            drawSizeY,
+            accumulator,
+            sampleNormalizer
+          ),
+          stats: null,
+        };
+      const sampleData = sampleResult.sampleData;
+      if (sampleResult.stats && accumulator) {
+        accumulator.required += sampleResult.stats.required || 0;
+        accumulator.deface += sampleResult.stats.deface || 0;
+        if (sampleResult.stats.hasOther) {
+          accumulator.hasOther = true;
+        }
+        accumulator.paletteCounts = accumulator.paletteCounts || Object.create(null);
+        for (const [key, count] of Object.entries(sampleResult.stats.paletteCounts || {})) {
+          accumulator.paletteCounts[key] = (accumulator.paletteCounts[key] || 0) + (count || 0);
+        }
+        accumulator.paletteCountsByIndex = null;
+        accumulator.seenPaletteOrder = null;
+      }
+      stageTotals.sampleMs += performance.now() - sampleStart;
+
+      let image = null;
+      if (renderTiles) {
+        const resultWidth = sampleData.width * drawSize;
+        const resultHeight = sampleData.height * drawSize;
+        image = { data: new Uint8ClampedArray(resultWidth * resultHeight * 4) };
+
+        const renderStart = performance.now();
+        renderSampleDataToImage({
+          sampleData,
+          imageData: image,
+          resultWidth,
+          drawSize,
+          maskPoints,
+          maskRowSpans,
+          includeDefaceCheckerboard: true,
+        });
+        stageTotals.renderMs += performance.now() - renderStart;
+      }
+
+      let encoded = null;
+      if (persistEncodedSamples) {
+        const encodeStart = performance.now();
+        encoded = encodeChunkSampleBytes(sampleData);
+        stageTotals.encodeMs += performance.now() - encodeStart;
+      }
+
+      checksum = (
+        checksum
+        + sampleData.count
+        + (encoded?.byteLength || 0)
+        + (image?.data?.[0] || 0)
+        + (image?.data?.[1] || 0)
+        + (image?.data?.[2] || 0)
+        + (image?.data?.[image.data.length - 1] || 0)
+      ) >>> 0;
+      chunkCount++;
+      pixelX += drawSizeX;
+    }
+    pixelY += drawSizeY;
+  }
+
+  const finalizeStart = performance.now();
+  const stats = finalizePaletteStatsAccumulator(accumulator);
+  stageTotals.finalizeMs += performance.now() - finalizeStart;
+  checksum = (
+    checksum
+    + (stats?.required || 0)
+    + (stats?.deface || 0)
+    + (stats?.paletteMap?.size || 0)
+  ) >>> 0;
+
+  const totalMs = performance.now() - totalStart;
+  return {
+    checksum,
+    chunkCount,
+    totalMs,
+    sampleMs: stageTotals.sampleMs,
+    renderMs: stageTotals.renderMs,
+    encodeMs: stageTotals.encodeMs,
+    finalizeMs: stageTotals.finalizeMs,
+    otherMs: Math.max(
+      0,
+      totalMs
+      - stageTotals.sampleMs
+      - stageTotals.renderMs
+      - stageTotals.encodeMs
+      - stageTotals.finalizeMs
+    ),
+  };
+}
+
+function runTemplateCreationBreakdownBenchmark(name, iterations, options, warmup = 1) {
+  let checksum = 0;
+  let chunkCount = 0;
+  for (let index = 0; index < warmup; index++) {
+    const result = measureTemplateCreationSimulation(options);
+    checksum = (checksum + (result?.checksum || 0) + index) >>> 0;
+  }
+  const totals = {
+    totalMs: 0,
+    sampleMs: 0,
+    renderMs: 0,
+    encodeMs: 0,
+    finalizeMs: 0,
+    otherMs: 0,
+  };
+  for (let index = 0; index < iterations; index++) {
+    const result = measureTemplateCreationSimulation(options);
+    checksum = (checksum + (result?.checksum || 0) + index) >>> 0;
+    chunkCount = result.chunkCount;
+    totals.totalMs += result.totalMs;
+    totals.sampleMs += result.sampleMs;
+    totals.renderMs += result.renderMs;
+    totals.encodeMs += result.encodeMs;
+    totals.finalizeMs += result.finalizeMs;
+    totals.otherMs += result.otherMs;
+  }
+  return {
+    name,
+    iterations,
+    chunkCount,
+    checksum,
+    totalMs: totals.totalMs / iterations,
+    sampleMs: totals.sampleMs / iterations,
+    renderMs: totals.renderMs / iterations,
+    encodeMs: totals.encodeMs / iterations,
+    finalizeMs: totals.finalizeMs / iterations,
+    otherMs: totals.otherMs / iterations,
+  };
 }
 
 function encodeChunkSampleDataLegacy(sampleData) {
@@ -1479,6 +1666,31 @@ function printResults(results, fixture) {
   }
 }
 
+function printTemplateCreationBreakdown(breakdowns) {
+  if (!Array.isArray(breakdowns) || breakdowns.length === 0) {
+    return;
+  }
+  console.log('');
+  console.log('Template Creation Breakdown');
+  for (const breakdown of breakdowns) {
+    console.log(
+      `${breakdown.name}: avg ${formatMs(breakdown.totalMs)} across ${breakdown.chunkCount} chunk(s) per iteration`
+    );
+    const stages = [
+      ['sample', breakdown.sampleMs],
+      ['render', breakdown.renderMs],
+      ['encode', breakdown.encodeMs],
+      ['finalize', breakdown.finalizeMs],
+      ['other', breakdown.otherMs],
+    ].sort((a, b) => b[1] - a[1]);
+    for (const [label, value] of stages) {
+      const share = breakdown.totalMs > 0 ? ((value / breakdown.totalMs) * 100).toFixed(1) : '0.0';
+      console.log(`  ${label.padEnd(8)} ${formatMs(value).padStart(12)} ${share.padStart(6)}%`);
+    }
+    console.log(`  checksum ${String(breakdown.checksum >>> 0)}`);
+  }
+}
+
 async function main() {
   const sourceData = buildSourceImageData();
   const nonPaletteSourceData = buildNonPaletteSourceImageData();
@@ -1492,6 +1704,7 @@ async function main() {
     CHUNK_HEIGHT
   );
   const encodedSample = encodeChunkSampleData(sampleData);
+  const encodedSampleBytes = encodeChunkSampleBytes(sampleData);
   const tilePixels = buildTilePixels(sampleData);
   const displayedColorSet = buildDisplayedColorSet(sampleData);
   const tileCoords = [TILE_X, TILE_Y];
@@ -1519,6 +1732,12 @@ async function main() {
   const displayedPackedNoOther = buildDisplayedColorPackedContext(displayedColorSubset);
   const displayedPackedWithOther = buildDisplayedColorPackedContext(displayedColorSubsetWithOther);
   const overlayTransportSource = buildOverlayTransportSourceBuffer(crossResultWidth, crossResultHeight);
+  const wasmSampleExtractor = isTemplateSampleExtractWasmAvailable()
+    ? createTemplateSampleExtractorWithWasm({
+      sourceData,
+      imageWidth: IMAGE_WIDTH,
+    })
+    : null;
   const originPoint = {
     x: TILE_X * TEMPLATE_TILE_SIZE + 500,
     y: TILE_Y * TEMPLATE_TILE_SIZE + 500,
@@ -1612,6 +1831,18 @@ async function main() {
       const stats = finalizePaletteStatsAccumulator(accumulator);
       return result.count + stats.required + stats.deface + stats.paletteMap.size;
     }),
+    ...(typeof wasmSampleExtractor === 'function' ? [runBenchmark('buildChunkSampleDataFromSource+stats(wasm)', 20, () => {
+      const result = wasmSampleExtractor({
+        sourceX: CHUNK_SOURCE_X,
+        sourceY: CHUNK_SOURCE_Y,
+        chunkWidth: CHUNK_WIDTH,
+        chunkHeight: CHUNK_HEIGHT,
+        includeStats: true,
+      });
+      const stats = result?.stats || {};
+      const paletteSize = Object.keys(stats.paletteCounts || {}).length;
+      return (result?.sampleData?.count || 0) + (stats.required || 0) + (stats.deface || 0) + paletteSize;
+    })] : []),
     runBenchmark('buildChunkSampleDataFromSource+normalizer', 16, () => {
       const accumulator = createPaletteStatsAccumulator();
       const result = buildChunkSampleDataFromSource(
@@ -1676,6 +1907,14 @@ async function main() {
         useWasm: false,
       });
       return result.stats.convertedPixels + result.stats.remainingOtherPixels + fixture.data[0];
+    }),
+    runBenchmark('encodeChunkSampleBytes', 24, () => {
+      const result = encodeChunkSampleBytes(sampleData);
+      return result.byteLength;
+    }),
+    runBenchmark('uint8ToBase64(chunkSampleBytes)', 24, () => {
+      const result = uint8ToBase64(encodedSampleBytes);
+      return result.length;
     }),
     runBenchmark('encodeChunkSampleData', 24, () => {
       const result = encodeChunkSampleData(sampleData);
@@ -1885,7 +2124,40 @@ async function main() {
     )));
   }
 
+  const templateCreationBreakdowns = [
+    runTemplateCreationBreakdownBenchmark('templateCreateTilesSim(local)', 8, {
+      sourceData,
+      maskPoints: crossMaskPoints,
+      maskRowSpans: crossMaskRowSpans,
+      renderTiles: false,
+      persistEncodedSamples: false,
+    }),
+    runTemplateCreationBreakdownBenchmark('templateCreateTilesSim(local+normalizer)', 6, {
+      sourceData: nonPaletteSourceData,
+      sampleNormalizer,
+      maskPoints: crossMaskPoints,
+      maskRowSpans: crossMaskRowSpans,
+      renderTiles: false,
+      persistEncodedSamples: false,
+    }),
+    runTemplateCreationBreakdownBenchmark('templateCreateTilesSim(remote-bitmap)', 6, {
+      sourceData,
+      maskPoints: crossMaskPoints,
+      maskRowSpans: crossMaskRowSpans,
+      renderTiles: true,
+      persistEncodedSamples: false,
+    }),
+    ...(typeof wasmSampleExtractor === 'function' ? [runTemplateCreationBreakdownBenchmark('templateCreateTilesSim(local+wasmExtract)', 6, {
+      sourceData,
+      maskPoints: crossMaskPoints,
+      maskRowSpans: crossMaskRowSpans,
+      renderTiles: false,
+      sampleExtractor: wasmSampleExtractor,
+    })] : []),
+  ];
+
   printResults(results, { sampleData });
+  printTemplateCreationBreakdown(templateCreationBreakdowns);
 }
 
 main().catch((error) => {

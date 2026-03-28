@@ -1,5 +1,5 @@
 ﻿import Template from "./Template";
-import { numberToEncoded, cleanUpCanvas, rgbToMeta, sortByOptions, testCanvasSize, getCurrentColor, sleep, createBitmapPreservingPixels, consoleLog, setDebugLoggingEnabled as setGlobalDebugLoggingEnabled } from "./utils";
+import { numberToEncoded, cleanUpCanvas, rgbToMeta, sortByOptions, testCanvasSize, getCurrentColor, sleep, createBitmapPreservingPixels, consoleLog, uint8ToBase64, setDebugLoggingEnabled as setGlobalDebugLoggingEnabled } from "./utils";
 import { themeList, addTemplateCanvas, removeLayer, removeTemplateCanvasSources, forceRefreshTiles, coordsGeoCoordsToTileCoords, getMapBounds, doAfterMapFound, isMapTilerLoaded, bmCanvas, getMountedTemplateCanvasSourceIDs } from './utilsMaptiler.js';
 import { buildMaskRowSpans, collectTemplateProgressFromSamples, mergeTemplateExampleReservoir, renderSampleDataToImage } from './templateChunkUtils.js';
 
@@ -116,6 +116,9 @@ const normalizeTimeArchiveMeta = (value) => {
     height,
   };
 };
+const templateJsonReplacer = (_key, value) => (
+  value instanceof Uint8Array ? uint8ToBase64(value) : value
+);
 
 
 /** Manages the template system.
@@ -284,10 +287,15 @@ export default class TemplateManager {
     const preferBitmapTileStorage = options?.preferBitmapTileStorage === true || options?.remote === true;
     const createTileOptions = {
       persistBitmapTiles: options?.persistBitmapTiles ?? preferBitmapTileStorage,
-      keepBitmapTilesInMemory: options?.keepBitmapTilesInMemory ?? !preferBitmapTileStorage,
+      keepBitmapTilesInMemory: options?.keepBitmapTilesInMemory ?? false,
       persistChunkSamples: options?.persistChunkSamples ?? !preferBitmapTileStorage,
       keepChunkSamplesInMemory: options?.keepChunkSamplesInMemory ?? !preferBitmapTileStorage,
     };
+    createTileOptions.lazyPersistChunkSamples = (
+      createTileOptions.persistChunkSamples === true
+      && createTileOptions.keepChunkSamplesInMemory === true
+      && options?.lazyPersistChunkSamples !== false
+    );
     this.largestSeenSortID++;
     template.shreadSize = this.drawMult; // Copy to template's shread Size
     //template.chunked = await template.createTemplateTiles(this.tileSize); // Chunks the tiles
@@ -326,6 +334,8 @@ export default class TemplateManager {
     template.chunkedBuffer = templateTilesBuffers;
     template.chunkedSamples = createTileOptions.keepChunkSamplesInMemory === false ? {} : templateChunkSamples;
     template.chunkedSamplesBuffer = createTileOptions.persistChunkSamples === false ? {} : templateChunkSampleBuffers;
+    template.persistBitmapTiles = createTileOptions.persistBitmapTiles === true;
+    template.persistChunkSamples = createTileOptions.persistChunkSamples === true;
     const storedTileBuffers = createTileOptions.persistBitmapTiles ? templateTilesBuffers : {};
 
     // Appends a child into the templates object
@@ -340,7 +350,7 @@ export default class TemplateManager {
       "height": Number.isFinite(template.imageHeight) ? template.imageHeight : null,
       "enabled": templateEnabled,
       "tiles": storedTileBuffers,
-      "samples": createTileOptions.persistChunkSamples ? templateChunkSampleBuffers : {},
+      "samples": createTileOptions.persistChunkSamples && createTileOptions.lazyPersistChunkSamples !== true ? templateChunkSampleBuffers : {},
       "tileKeys": templateTileKeys,
       "palette": template.colorPalette, // Persist palette and enabled flags
       "shreadSize": template.shreadSize // Record shread size of the created template
@@ -450,7 +460,37 @@ export default class TemplateManager {
    * @since 0.72.7
    */
   async storeTemplates() {
-    await GM.setValue('bmTemplates', JSON.stringify(this.templatesJSON));
+    await GM.setValue('bmTemplates', JSON.stringify(this.getPersistableTemplatesJSON(), templateJsonReplacer));
+  }
+
+  getPersistableTemplatesJSON() {
+    const source = this.templatesJSON || {
+      whoami: 'BlueMarble',
+      scriptVersion: this.version,
+      schemaVersion: this.templatesVersion,
+      templates: {},
+    };
+    const templates = {};
+    for (const [storageKey, templateStore] of Object.entries(source.templates || {})) {
+      templates[storageKey] = { ...templateStore };
+    }
+    const templateByKey = new Map(
+      (this.templatesArray || [])
+        .filter((template) => template?.storageKey)
+        .map((template) => [template.storageKey, template])
+    );
+    for (const [storageKey, templateStore] of Object.entries(templates)) {
+      const template = templateByKey.get(storageKey);
+      if (!template) continue;
+      const tileKeys = template.getChunkKeys?.() ?? templateStore.tileKeys ?? [];
+      templateStore.tileKeys = tileKeys;
+      templateStore.tiles = template.getPersistableChunkBuffers?.(tileKeys) ?? templateStore.tiles ?? {};
+      templateStore.samples = template.getPersistableChunkSampleBuffers?.(tileKeys) ?? templateStore.samples ?? {};
+    }
+    return {
+      ...source,
+      templates,
+    };
   }
 
   /** Deletes a template from the JSON object.
@@ -1092,6 +1132,8 @@ export default class TemplateManager {
           this.largestSeenSortID = templateInstance.sortID;
         }
         templateInstance.shreadSize = parsedShreadSize;
+        templateInstance.persistBitmapTiles = Object.keys(tilesbase64).length > 0;
+        templateInstance.persistChunkSamples = Object.keys(samplesBase64).length > 0;
         templateInstance.enabled = templateValue.enabled ?? true;
         templateInstance.isRemote = templateValue.remote === true;
         templateInstance.remoteName = templateValue.remoteName ?? null;

@@ -1,8 +1,8 @@
-import { uint8ToBase64, base64ToUint8, cleanUpCanvas, rgbToMeta, colorpalette, testCanvasSize, createBitmapPreservingPixels } from "./utils.js";
+import { base64ToUint8, cleanUpCanvas, colorpalette, testCanvasSize, createBitmapPreservingPixels } from "./utils.js";
 import {
   buildMaskRowSpans,
   createChunkSampleData,
-  encodeChunkSampleData,
+  encodeChunkSampleBytes,
   decodeChunkSampleBuffer,
   inspectSourceImagePalette,
   createPaletteStatsAccumulator,
@@ -17,8 +17,8 @@ const clampByte = (value) => Math.max(0, Math.min(255, Math.round(Number(value) 
 const clampUnit = (value) => Math.max(0, Math.min(1, Number(value) || 0));
 const normalizeDistanceMode = (value) => String(value || '').toLowerCase() === 'euclidean' ? 'euclidean' : 'weighted';
 const normalizeDitherMode = (value) => String(value || '').toLowerCase() === 'floyd-steinberg' ? 'floyd-steinberg' : 'none';
-const TEMPLATE_DEFACE_KEY = `${TEMPLATE_DEFACE_RGB[0]},${TEMPLATE_DEFACE_RGB[1]},${TEMPLATE_DEFACE_RGB[2]}`;
 const packRgb = (r, g, b) => ((r << 16) | (g << 8) | b) >>> 0;
+const TEMPLATE_DEFACE_PACKED = packRgb(TEMPLATE_DEFACE_RGB[0], TEMPLATE_DEFACE_RGB[1], TEMPLATE_DEFACE_RGB[2]);
 
 const templatePaletteColors = (() => {
   const options = [];
@@ -410,6 +410,8 @@ export default class Template {
     this.chunkedBuffer = chunkedBuffer;
     this.chunkedSamples = chunkedSamples || {};
     this.chunkedSamplesBuffer = chunkedSamplesBuffer || {};
+    this.persistBitmapTiles = false;
+    this.persistChunkSamples = false;
     this.tileSize = tileSize;
     this.imageWidth = Number.isFinite(Number(imageWidth)) ? Math.max(1, Math.trunc(Number(imageWidth))) : null;
     this.imageHeight = Number.isFinite(Number(imageHeight)) ? Math.max(1, Math.trunc(Number(imageHeight))) : null;
@@ -513,6 +515,55 @@ export default class Template {
     return inspectSourceImagePalette(inspectData, bitmap.width, bitmap.height);
   }
 
+  normalizeSourceImageDataForSamples(imageData) {
+    if (
+      !this.sampleNormalizeToPalette
+      || this.forcePaletteConversion
+      || !imageData?.data
+      || !Number.isFinite(imageData?.width)
+      || !Number.isFinite(imageData?.height)
+    ) {
+      return imageData;
+    }
+
+    const data = imageData.data;
+    const defaceOffsets = [];
+    let hasNonPaletteColors = false;
+    for (let base = 0; base < data.length; base += 4) {
+      if ((data[base + 3] || 0) <= 0) continue;
+      const packed = packRgb(data[base], data[base + 1], data[base + 2]);
+      if (packed === TEMPLATE_DEFACE_PACKED) {
+        defaceOffsets.push(base);
+        continue;
+      }
+      if (!templatePalettePackedSet.has(packed)) {
+        hasNonPaletteColors = true;
+      }
+    }
+    if (!hasNonPaletteColors) {
+      return imageData;
+    }
+
+    const options = {
+      ...this.paletteConversionOptions,
+      ditherMode: 'none',
+      ditherStrength: 0,
+      antiDitherStrength: 0,
+      alphaThreshold: 1,
+      useWasm: true,
+    };
+    const conversion = convertImageDataToWplacePalette(imageData, options);
+    if (defaceOffsets.length > 0) {
+      for (let index = 0; index < defaceOffsets.length; index++) {
+        const base = defaceOffsets[index];
+        data[base] = TEMPLATE_DEFACE_RGB[0];
+        data[base + 1] = TEMPLATE_DEFACE_RGB[1];
+        data[base + 2] = TEMPLATE_DEFACE_RGB[2];
+      }
+    }
+    return conversion?.imageData || imageData;
+  }
+
   getChunkKeys() {
     const keys = new Set();
     const sources = [
@@ -526,6 +577,37 @@ export default class Template {
       Object.keys(source).forEach((key) => keys.add(key));
     }
     return [...keys];
+  }
+
+  getPersistableChunkBuffers(tileKeys = null) {
+    if (this.persistBitmapTiles !== true) {
+      return {};
+    }
+    const keys = Array.isArray(tileKeys) && tileKeys.length ? tileKeys : this.getChunkKeys();
+    const result = {};
+    for (const tileKey of keys) {
+      if (!this.chunkedBuffer || !Object.prototype.hasOwnProperty.call(this.chunkedBuffer, tileKey)) continue;
+      result[tileKey] = this.chunkedBuffer[tileKey];
+    }
+    return result;
+  }
+
+  getPersistableChunkSampleBuffers(tileKeys = null) {
+    if (this.persistChunkSamples !== true) {
+      return {};
+    }
+    const keys = Array.isArray(tileKeys) && tileKeys.length ? tileKeys : this.getChunkKeys();
+    const result = {};
+    for (const tileKey of keys) {
+      if (this.chunkedSamplesBuffer && Object.prototype.hasOwnProperty.call(this.chunkedSamplesBuffer, tileKey)) {
+        result[tileKey] = this.chunkedSamplesBuffer[tileKey];
+        continue;
+      }
+      if (this.chunkedSamples && this.chunkedSamples[tileKey]) {
+        result[tileKey] = encodeChunkSampleBytes(this.chunkedSamples[tileKey]);
+      }
+    }
+    return result;
   }
 
   hasNativeChunkSamples(tileKey) {
@@ -660,6 +742,7 @@ export default class Template {
     const keepBitmapTilesInMemory = options?.keepBitmapTilesInMemory !== false;
     const persistChunkSamples = options?.persistChunkSamples !== false;
     const keepChunkSamplesInMemory = options?.keepChunkSamplesInMemory !== false;
+    const lazyPersistChunkSamples = options?.lazyPersistChunkSamples === true;
     let bitmap = this.file instanceof ImageBitmap ? this.file : await createBitmapPreservingPixels(this.file); // Create efficient bitmap from uploaded file
     if (this.forcePaletteConversion) {
       bitmap = await this.convertBitmapToWplacePalette(bitmap);
@@ -701,25 +784,8 @@ export default class Template {
     let sourceContext = null;
     let sourceData = null;
     let paletteStatsAccumulator = null;
-    const sampleNearestCache = new Map();
-    const sampleNormalizer = this.sampleNormalizeToPalette
-      ? ((r, g, b, a) => {
-        const sourceKey = `${r},${g},${b}`;
-        if (sourceKey === TEMPLATE_DEFACE_KEY) {
-          return { r, g, b, a, isDeface: true };
-        }
-        if (rgbToMeta.has(sourceKey)) {
-          return { r, g, b, a };
-        }
-        const nearest = getNearestPaletteColor(r, g, b, this.paletteConversionOptions, sampleNearestCache);
-        return {
-          r: nearest.rgb[0],
-          g: nearest.rgb[1],
-          b: nearest.rgb[2],
-          a,
-        };
-      })
-      : null;
+    let precomputedPaletteStats = null;
+    const needsChunkSamples = keepChunkSamplesInMemory || persistChunkSamples;
     try {
       sourceCanvas = new OffscreenCanvas(imageWidth, imageHeight);
       sourceContext = sourceCanvas.getContext('2d', { willReadFrequently: true });
@@ -729,8 +795,16 @@ export default class Template {
       sourceContext.imageSmoothingEnabled = false;
       sourceContext.clearRect(0, 0, imageWidth, imageHeight);
       sourceContext.drawImage(bitmap, 0, 0);
-      sourceData = sourceContext.getImageData(0, 0, imageWidth, imageHeight).data;
-      paletteStatsAccumulator = createPaletteStatsAccumulator();
+      const sourceImageData = sourceContext.getImageData(0, 0, imageWidth, imageHeight);
+      if (this.sampleNormalizeToPalette) {
+        this.normalizeSourceImageDataForSamples(sourceImageData);
+      }
+      sourceData = sourceImageData.data;
+      if (needsChunkSamples) {
+        paletteStatsAccumulator = createPaletteStatsAccumulator();
+      } else {
+        precomputedPaletteStats = inspectSourceImagePalette(sourceData, imageWidth, imageHeight);
+      }
     } catch (err) {
       this.requiredPixelCount = Math.max(0, this.pixelCount);
       this.defacePixelCount = 0;
@@ -791,7 +865,8 @@ export default class Template {
 
         const sourceX = pixelX - this.coords[2];
         const sourceY = pixelY - this.coords[3];
-        const sampleData = sourceData
+        const useSampleBasedChunking = !!(sourceData && needsChunkSamples);
+        const sampleData = useSampleBasedChunking
           ? buildChunkSampleDataFromSource(
             sourceData,
             imageWidth,
@@ -800,9 +875,8 @@ export default class Template {
             drawSizeX,
             drawSizeY,
             paletteStatsAccumulator,
-            sampleNormalizer,
           )
-          : createChunkSampleData(drawSizeX, drawSizeY, 0, true);
+          : (sourceData ? null : createChunkSampleData(drawSizeX, drawSizeY, 0, true));
 
         if (sourceData ? (persistBitmapTiles || keepBitmapTilesInMemory) : true) {
           if (!canvas) {
@@ -819,7 +893,7 @@ export default class Template {
           canvas.height = canvasHeight;
           context.imageSmoothingEnabled = false;
           context.clearRect(0, 0, canvasWidth, canvasHeight);
-          if (sourceData) {
+          if (sampleData) {
             const chunkImage = context.createImageData(canvasWidth, canvasHeight);
             renderSampleDataToImage({
               sampleData,
@@ -876,14 +950,14 @@ export default class Template {
           if (persistBitmapTiles) {
             const canvasBlob = await canvas.convertToBlob();
             const canvasBuffer = await canvasBlob.arrayBuffer();
-            templateTilesBuffers[templateTileName] = uint8ToBase64(new Uint8Array(canvasBuffer));
+            templateTilesBuffers[templateTileName] = new Uint8Array(canvasBuffer);
           }
         }
-        if (keepChunkSamplesInMemory) {
+        if (keepChunkSamplesInMemory && sampleData) {
           templateChunkSamples[templateTileName] = sampleData;
         }
-        if (persistChunkSamples) {
-          templateChunkSampleBuffers[templateTileName] = encodeChunkSampleData(sampleData);
+        if (persistChunkSamples && sampleData && !lazyPersistChunkSamples) {
+          templateChunkSampleBuffers[templateTileName] = encodeChunkSampleBytes(sampleData);
         }
         // Record tile prefix for fast lookup later
         this.tilePrefixes.add(templateTileName.split(',').slice(0,2).join(','));
@@ -899,6 +973,14 @@ export default class Template {
       this.defacePixelCount = paletteStats.deface;
       const paletteObj = {};
       for (const [key, count] of (paletteStats.paletteMap ?? new Map()).entries()) {
+        paletteObj[key] = { count, enabled: true };
+      }
+      this.colorPalette = paletteObj;
+    } else if (precomputedPaletteStats) {
+      this.requiredPixelCount = Math.max(0, Number(precomputedPaletteStats.required) || 0);
+      this.defacePixelCount = Math.max(0, Number(precomputedPaletteStats.deface) || 0);
+      const paletteObj = {};
+      for (const [key, count] of (precomputedPaletteStats.paletteMap ?? new Map()).entries()) {
         paletteObj[key] = { count, enabled: true };
       }
       this.colorPalette = paletteObj;
