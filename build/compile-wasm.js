@@ -16,6 +16,11 @@ const targets = [
     output: path.join(outputDir, 'findNearestUnpaintedWasmBytes.js'),
     exportName: 'findNearestUnpaintedWasmBytes',
   },
+  {
+    source: path.join(sourceDir, 'templateSampleExtract.wat'),
+    output: path.join(outputDir, 'templateSampleExtractWasmBytes.js'),
+    exportName: 'templateSampleExtractWasmBytes',
+  },
 ];
 
 const formatUint8Array = (bytes) => {

@@ -118,11 +118,48 @@ export function numberToEncoded(number, encoding) {
  * @since 0.72.9
  */
 export function uint8ToBase64(uint8) {
-  let binary = '';
-  for (let i = 0; i < uint8.length; i++) {
-    binary += String.fromCharCode(uint8[i]);
+  if (!(uint8 instanceof Uint8Array) || uint8.length === 0) {
+    return '';
   }
-  return btoa(binary); // Binary to ASCII
+  if (typeof Buffer !== 'undefined' && typeof Buffer.from === 'function') {
+    return Buffer.from(uint8.buffer, uint8.byteOffset, uint8.byteLength).toString('base64');
+  }
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  const chunks = [];
+  let chunk = '';
+  let index = 0;
+  const flushChunk = () => {
+    if (chunk) {
+      chunks.push(chunk);
+      chunk = '';
+    }
+  };
+  while (index + 2 < uint8.length) {
+    const value = (uint8[index] << 16) | (uint8[index + 1] << 8) | uint8[index + 2];
+    chunk += alphabet[(value >> 18) & 63]
+      + alphabet[(value >> 12) & 63]
+      + alphabet[(value >> 6) & 63]
+      + alphabet[value & 63];
+    index += 3;
+    if (chunk.length >= 16384) {
+      flushChunk();
+    }
+  }
+  const remaining = uint8.length - index;
+  if (remaining === 1) {
+    const value = uint8[index];
+    chunk += alphabet[(value >> 2) & 63]
+      + alphabet[(value & 3) << 4]
+      + '==';
+  } else if (remaining === 2) {
+    const value = (uint8[index] << 8) | uint8[index + 1];
+    chunk += alphabet[(value >> 10) & 63]
+      + alphabet[(value >> 4) & 63]
+      + alphabet[(value & 15) << 2]
+      + '=';
+  }
+  flushChunk();
+  return chunks.join('');
 }
 
 /** Decodes a base 64 encoded Uint8 array using the browser's built-in ASCII to binary function

@@ -4742,8 +4742,79 @@ function closePixelInfoWindows() {
   }
 }
 
-function getTemplateJumpOriginCoords() {
+function normalizeTemplateJumpOriginMode(value) {
+  const normalizedValue = String(value ?? 'center').trim().toLowerCase().replace(/[\s_]+/g, '-');
+  switch (normalizedValue) {
+    case 'center':
+    case 'middle':
+    case 'c':
+      return 'center';
+    case 'top-left':
+    case 'left-top':
+    case 'tl':
+    case 'lt':
+      return 'top-left';
+    case 'top-right':
+    case 'right-top':
+    case 'tr':
+    case 'rt':
+      return 'top-right';
+    case 'bottom-left':
+    case 'left-bottom':
+    case 'bl':
+    case 'lb':
+      return 'bottom-left';
+    case 'bottom-right':
+    case 'right-bottom':
+    case 'br':
+    case 'rb':
+      return 'bottom-right';
+    default:
+      return 'center';
+  }
+}
+
+function getTemplateJumpOriginLabel(originMode) {
+  switch (normalizeTemplateJumpOriginMode(originMode)) {
+    case 'top-left':
+      return 'top-left';
+    case 'top-right':
+      return 'top-right';
+    case 'bottom-left':
+      return 'bottom-left';
+    case 'bottom-right':
+      return 'bottom-right';
+    default:
+      return 'center';
+  }
+}
+
+function getTemplateJumpOriginGeoCoords(bounds, originMode) {
+  if (!bounds?.sw || !bounds?.ne) return null;
+  switch (normalizeTemplateJumpOriginMode(originMode)) {
+    case 'top-left':
+      return [bounds.ne[0], bounds.sw[1]];
+    case 'top-right':
+      return [bounds.ne[0], bounds.ne[1]];
+    case 'bottom-left':
+      return [bounds.sw[0], bounds.sw[1]];
+    case 'bottom-right':
+      return [bounds.sw[0], bounds.ne[1]];
+    default:
+      return null;
+  }
+}
+
+function getTemplateJumpOriginCoords(originMode = 'center') {
+  const normalizedOriginMode = normalizeTemplateJumpOriginMode(originMode);
   try {
+    if (normalizedOriginMode !== 'center') {
+      const cornerGeoCoords = getTemplateJumpOriginGeoCoords(getMapBounds(), normalizedOriginMode);
+      if (Array.isArray(cornerGeoCoords) && cornerGeoCoords.length >= 2) {
+        const [coordsTile, coordsPixel] = coordsGeoCoordsToTileCoords(cornerGeoCoords[0], cornerGeoCoords[1], true);
+        return normalizeTilePixelCoords([coordsTile[0], coordsTile[1], coordsPixel[0], coordsPixel[1]]);
+      }
+    }
     const geoCoords = getCenterGeoCoords();
     const [coordsTile, coordsPixel] = coordsGeoCoordsToTileCoords(geoCoords[0], geoCoords[1], true);
     return normalizeTilePixelCoords([coordsTile[0], coordsTile[1], coordsPixel[0], coordsPixel[1]]);
@@ -4797,13 +4868,13 @@ const templateJumpCycleState = {
   visitedCoordsKeys: new Set(),
 };
 
-function buildTemplateJumpCycleScopeKey(activeTemplates, displayedColors) {
+function buildTemplateJumpCycleScopeKey(activeTemplates, displayedColors, originMode = 'center') {
   const templateKey = (activeTemplates ?? [])
     .map((template) => `${template?.storageKey ?? ''}:${template?.storageTimeString ?? ''}`)
     .sort()
     .join('|');
   const colorKey = (displayedColors ?? []).slice().sort().join('|');
-  return `${templateKey}||${colorKey}`;
+  return `${templateKey}||${colorKey}||${normalizeTemplateJumpOriginMode(originMode)}`;
 }
 
 function syncTemplateJumpCycleState(scopeKey) {
@@ -4888,10 +4959,12 @@ async function findNearestTemplatePixelInTile(tileCandidate, liveTilePixels, ori
 }
 
 let isJumpToNextTemplatePixelRunning = false;
-async function jumpToNextUnpaintedTemplatePixel() {
+async function jumpToNextUnpaintedTemplatePixel(options = null) {
   if (isJumpToNextTemplatePixelRunning) return;
   isJumpToNextTemplatePixelRunning = true;
   try {
+    const originMode = normalizeTemplateJumpOriginMode(options?.originMode);
+    const originLabel = getTemplateJumpOriginLabel(originMode);
     closePixelInfoWindows();
     const activeTemplates = (templateManager.templatesArray ?? []).filter((template) => template?.enabled);
     if (!activeTemplates.length) {
@@ -4909,17 +4982,21 @@ async function jumpToNextUnpaintedTemplatePixel() {
     }
 
     const jumpCycleVisitedCoordsKeys = syncTemplateJumpCycleState(
-      buildTemplateJumpCycleScopeKey(activeTemplates, displayedColors)
+      buildTemplateJumpCycleScopeKey(activeTemplates, displayedColors, originMode)
     );
 
-    const originCoords = getTemplateJumpOriginCoords();
+    const originCoords = getTemplateJumpOriginCoords(originMode);
     const originPoint = tilePixelCoordsToWorldPoint(originCoords);
     if (!originPoint) {
       overlayMain.handleDisplayError('Map position is unavailable.');
       return;
     }
 
-    overlayMain.handleDisplayStatus('Searching for the next unpainted template pixel...');
+    overlayMain.handleDisplayStatus(
+      originMode === 'center'
+        ? 'Searching for the next unpainted template pixel...'
+        : `Searching for the next unpainted template pixel from the ${originLabel}...`
+    );
     const excludedCoordsKeys = new Set(jumpCycleVisitedCoordsKeys);
     excludedCoordsKeys.add(originPoint.coords.join(','));
     const displayedColorSet = new Set(displayedColors);
@@ -4980,7 +5057,11 @@ async function jumpToNextUnpaintedTemplatePixel() {
     if (!bestCandidate) {
       if (jumpCycleVisitedCoordsKeys.size > 0) {
         jumpCycleVisitedCoordsKeys.clear();
-        overlayMain.handleDisplayStatus('Reached the last unfinished pixel. Press J again to restart the cycle.');
+        overlayMain.handleDisplayStatus(
+          originMode === 'center'
+            ? 'Reached the last unfinished pixel. Press J again to restart the cycle.'
+            : `Reached the last unfinished pixel for the ${originLabel} jump. Trigger it again to restart the cycle.`
+        );
         return;
       }
       overlayMain.handleDisplayStatus('No other unpainted pixels found for active templates.');
@@ -4994,7 +5075,8 @@ async function jumpToNextUnpaintedTemplatePixel() {
     closePixelInfoWindows();
     applyIntegerZoomLevel(NEXT_TEMPLATE_PIXEL_ZOOM_LEVEL);
     const templateLabel = bestCandidate.templateName ? ` in "${bestCandidate.templateName}"` : '';
-    overlayMain.handleDisplayStatus(`Jumped to next unpainted pixel${templateLabel}: ${formatTilePixelCoords(bestCandidate.coords)}.`);
+    const originSuffix = originMode === 'center' ? '' : ` from ${originLabel}`;
+    overlayMain.handleDisplayStatus(`Jumped to next unpainted pixel${originSuffix}${templateLabel}: ${formatTilePixelCoords(bestCandidate.coords)}.`);
   } catch (error) {
     consoleWarn('Failed to jump to the next unpainted template pixel.', error);
     overlayMain.handleDisplayError('Failed to find the next unpainted template pixel.');
@@ -7849,21 +7931,385 @@ async function buildOverlayMain() {
   };
   window.buildTemplateFilterList = buildTemplateFilterList;
 
+  const parseBooleanLike = (value) => {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') {
+      if (value === 1) return true;
+      if (value === 0) return false;
+    }
+    const normalizedValue = String(value ?? '').trim().toLowerCase();
+    if (['true', '1', 'yes', 'on', 'enable', 'enabled'].includes(normalizedValue)) return true;
+    if (['false', '0', 'no', 'off', 'disable', 'disabled'].includes(normalizedValue)) return false;
+    return null;
+  };
+
+  const findTemplatesByNames = (templateNames) => {
+    const safeNames = Array.isArray(templateNames) ? templateNames : [];
+    const uniqueNames = [...new Set(
+      safeNames
+        .map((templateName) => String(templateName ?? '').trim())
+        .filter(Boolean)
+    )];
+    const matches = [];
+    const missing = [];
+    uniqueNames.forEach((templateName) => {
+      const lookup = templateName.toLowerCase();
+      const foundTemplates = (templateManager.templatesArray ?? []).filter((template) => {
+        const candidates = [
+          template?.displayName,
+          template?.remoteName,
+          template?.storageKey,
+        ];
+        return candidates.some((candidate) => String(candidate ?? '').trim().toLowerCase() === lookup);
+      });
+      if (!foundTemplates.length) {
+        missing.push(templateName);
+        return;
+      }
+      foundTemplates.forEach((template) => {
+        if (!matches.includes(template)) {
+          matches.push(template);
+        }
+      });
+    });
+    return { matches, missing };
+  };
+
+  const setMatchedTemplatesEnabledState = async (matchedTemplates, enabled) => {
+    const safeTemplates = Array.isArray(matchedTemplates) ? matchedTemplates.filter(Boolean) : [];
+    let changedCount = 0;
+    for (const template of safeTemplates) {
+      const nextEnabled = Boolean(enabled);
+      if (template.enabled === nextEnabled) continue;
+      template.enabled = nextEnabled;
+      changedCount += 1;
+      templateManager.clearTileProgress(template);
+      if (!nextEnabled) {
+        removeLayer(null, template.sortID);
+      }
+    }
+    if (!changedCount) {
+      return { matched: safeTemplates.length, changed: 0 };
+    }
+    syncToggleList();
+    buildTemplateFilterList();
+    buildColorFilterList();
+    forceRefreshTiles();
+    if (enabled) {
+      await templateManager.createOverlayOnMapVisibleFirst();
+    }
+    return { matched: safeTemplates.length, changed: changedCount };
+  };
+
+  const normalizeRusMarbleControlAction = (info) => {
+    if (!info || typeof info !== 'object') return null;
+    const rawAction = String(
+      info.bmAction
+      ?? info.action
+      ?? info.command
+      ?? info.kind
+      ?? ''
+    ).trim().toLowerCase().replace(/[\s_]+/g, '-');
+    const singleTemplateName = String(info.templateName ?? info.template ?? info.name ?? '').trim();
+    const templateNames = Array.isArray(info.templateNames)
+      ? info.templateNames.map((entry) => String(entry ?? '').trim()).filter(Boolean)
+      : (singleTemplateName ? [singleTemplateName] : []);
+    const enabledValue = parseBooleanLike(info.enabled ?? info.value ?? null);
+    switch (rawAction) {
+      case 'add-template':
+      case 'add-template-by-name':
+      case 'import-template':
+      case 'import-template-by-name':
+      case 'template-add':
+      case 'template-add-by-name':
+        if (!singleTemplateName) return null;
+        return {
+          kind: 'add-template-by-name',
+          templateName: singleTemplateName,
+          buttonText: 'Add',
+          label: info.label ?? `Add template "${singleTemplateName}"`,
+        };
+      case 'enable-template':
+      case 'enable-templates':
+      case 'template-enable':
+        if (!templateNames.length) return null;
+        return {
+          kind: 'set-template-enabled',
+          enabled: true,
+          templateNames,
+          buttonText: 'Enable',
+          label: info.label ?? `Enable template${templateNames.length === 1 ? '' : 's'}: ${templateNames.join(', ')}`,
+        };
+      case 'disable-template':
+      case 'disable-templates':
+      case 'template-disable':
+        if (!templateNames.length) return null;
+        return {
+          kind: 'set-template-enabled',
+          enabled: false,
+          templateNames,
+          buttonText: 'Disable',
+          label: info.label ?? `Disable template${templateNames.length === 1 ? '' : 's'}: ${templateNames.join(', ')}`,
+        };
+      case 'toggle-template':
+      case 'template-toggle':
+        if (!templateNames.length || enabledValue === null) return null;
+        return {
+          kind: 'set-template-enabled',
+          enabled: enabledValue,
+          templateNames,
+          buttonText: enabledValue ? 'Enable' : 'Disable',
+          label: info.label ?? `${enabledValue ? 'Enable' : 'Disable'} template${templateNames.length === 1 ? '' : 's'}: ${templateNames.join(', ')}`,
+        };
+      case 'disable-all-templates':
+      case 'template-disable-all':
+      case 'templates-disable-all':
+        return {
+          kind: 'set-all-templates-enabled',
+          enabled: false,
+          buttonText: 'Disable All',
+          label: info.label ?? 'Disable all templates',
+        };
+      case 'enable-all-templates':
+      case 'template-enable-all':
+      case 'templates-enable-all':
+        return {
+          kind: 'set-all-templates-enabled',
+          enabled: true,
+          buttonText: 'Enable All',
+          label: info.label ?? 'Enable all templates',
+        };
+      case 'jump':
+      case 'j':
+      case 'jump-next-template-pixel':
+      case 'next-template-pixel':
+      case 'template-jump':
+      case 'j-functionality':
+        return {
+          kind: 'jump-next-template-pixel',
+          originMode: normalizeTemplateJumpOriginMode(
+            info.origin
+            ?? info.point
+            ?? info.corner
+            ?? info.from
+            ?? 'center'
+          ),
+          buttonText: 'Jump',
+          label: info.label ?? `Jump to next template pixel from ${getTemplateJumpOriginLabel(
+            info.origin ?? info.point ?? info.corner ?? info.from ?? 'center'
+          )}`,
+        };
+      default:
+        return null;
+    }
+  };
+
+  const getEventDataEntries = (data) => {
+    if (Array.isArray(data)) {
+      return data.map((entry, index) => [entry?.id ?? index, entry]);
+    }
+    if (Array.isArray(data?.items)) {
+      return data.items.map((entry, index) => [entry?.id ?? index, entry]);
+    }
+    if (Array.isArray(data?.events)) {
+      return data.events.map((entry, index) => [entry?.id ?? index, entry]);
+    }
+    if (Array.isArray(data?.entries)) {
+      return data.entries.map((entry, index) => [entry?.id ?? index, entry]);
+    }
+    return Object.entries(data);
+  };
+
+  const executeRusMarbleControlAction = async (controlAction) => {
+    if (!controlAction) return;
+    switch (controlAction.kind) {
+      case 'add-template-by-name': {
+        const createdTemplate = await templateSync.importTemplateByName({
+          templateName: controlAction.templateName,
+          onStatus: (message) => overlayMain.handleDisplayStatus(message),
+          onError: (message) => overlayMain.handleDisplayError(message),
+          syncToggleList: () => window.syncToggleList?.(),
+          buildTemplateFilterList: () => window.buildTemplateFilterList?.(),
+          buildColorFilterList: () => window.buildColorFilterList?.(),
+          defaultEnabled: true,
+        });
+        if (createdTemplate) {
+          const statusMessage = `Template "${controlAction.templateName}" imported from event control.`;
+          overlayMain.handleDisplayStatus(statusMessage);
+          return statusMessage;
+        }
+        return `Template "${controlAction.templateName}" import requested.`;
+      }
+      case 'set-template-enabled': {
+        const { matches, missing } = findTemplatesByNames(controlAction.templateNames);
+        if (!matches.length) {
+          throw new Error(`Template${controlAction.templateNames.length === 1 ? '' : 's'} not found: ${controlAction.templateNames.join(', ')}.`);
+        }
+        const result = await setMatchedTemplatesEnabledState(matches, controlAction.enabled);
+        const actionLabel = controlAction.enabled ? 'Enabled' : 'Disabled';
+        let statusMessage = `${actionLabel} ${result.changed || result.matched} template${(result.changed || result.matched) === 1 ? '' : 's'}.`;
+        if (missing.length) {
+          statusMessage += ` Missing: ${missing.join(', ')}.`;
+        }
+        overlayMain.handleDisplayStatus(statusMessage);
+        return statusMessage;
+      }
+      case 'set-all-templates-enabled': {
+        const templates = templateManager.templatesArray ?? [];
+        if (!templates.length) {
+          throw new Error('No templates are loaded.');
+        }
+        const result = await setMatchedTemplatesEnabledState(templates, controlAction.enabled);
+        const statusMessage = (
+          `${controlAction.enabled ? 'Enabled' : 'Disabled'} all templates${result.changed ? ` (${result.changed} changed)` : ''}.`
+        );
+        overlayMain.handleDisplayStatus(statusMessage);
+        return statusMessage;
+      }
+      case 'jump-next-template-pixel':
+        await jumpToNextUnpaintedTemplatePixel({ originMode: controlAction.originMode });
+        return `Jump requested from ${getTemplateJumpOriginLabel(controlAction.originMode)}.`;
+      default:
+        throw new Error('Unsupported RusMarble control action.');
+    }
+  };
+
+  const BM_CONSOLE_REQUEST_EVENT = 'bm-console-command';
+  const BM_CONSOLE_RESPONSE_EVENT = 'bm-console-response';
+
+  const dispatchRusMarbleConsoleResponse = (requestId, payload = {}) => {
+    if (!requestId) return;
+    document.dispatchEvent(new CustomEvent(BM_CONSOLE_RESPONSE_EVENT, {
+      detail: {
+        requestId,
+        ...payload,
+      },
+    }));
+  };
+
+  const handleRusMarbleConsoleCommand = async (detail = {}) => {
+    const requestId = String(detail?.requestId ?? '').trim();
+    const command = String(detail?.command ?? '').trim().toLowerCase();
+    try {
+      switch (command) {
+        case 'control': {
+          const controlAction = normalizeRusMarbleControlAction(detail?.payload);
+          if (!controlAction) {
+            throw new Error('Invalid RusMarble control payload.');
+          }
+          const result = await executeRusMarbleControlAction(controlAction);
+          dispatchRusMarbleConsoleResponse(requestId, { ok: true, result });
+          return;
+        }
+        case 'build-event-list':
+          buildEventList();
+          dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: 'Event list rebuild requested.' });
+          return;
+        case 'build-template-filter-list':
+          buildTemplateFilterList();
+          dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: 'Template list rebuild requested.' });
+          return;
+        case 'build-color-filter-list':
+          buildColorFilterList();
+          dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: 'Color list rebuild requested.' });
+          return;
+        case 'sync-toggle-list':
+          syncToggleList();
+          dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: 'Template state synced.' });
+          return;
+        default:
+          throw new Error(`Unknown RusMarble console command: ${command || '(empty)'}.`);
+      }
+    } catch (error) {
+      dispatchRusMarbleConsoleResponse(requestId, {
+        ok: false,
+        error: error?.message || 'RusMarble console command failed.',
+      });
+    }
+  };
+
+  document.removeEventListener(BM_CONSOLE_REQUEST_EVENT, document.__bmConsoleCommandListener);
+  document.__bmConsoleCommandListener = (event) => {
+    void handleRusMarbleConsoleCommand(event?.detail ?? {});
+  };
+  document.addEventListener(BM_CONSOLE_REQUEST_EVENT, document.__bmConsoleCommandListener);
+
+  const installRusMarblePageConsoleBridge = () => {
+    if (!document.documentElement || document.documentElement.dataset.bmConsoleBridgeInstalled === '1') return;
+    const script = document.createElement('script');
+    script.textContent = `
+      (() => {
+        if (window.bmControl && window.buildEventList && window.buildTemplateFilterList && window.buildColorFilterList) {
+          return;
+        }
+        const requestEventName = ${JSON.stringify(BM_CONSOLE_REQUEST_EVENT)};
+        const responseEventName = ${JSON.stringify(BM_CONSOLE_RESPONSE_EVENT)};
+        let sequence = 0;
+        const sendRusMarbleCommand = (command, payload) => new Promise((resolve, reject) => {
+          const requestId = 'bm-console-' + Date.now() + '-' + (++sequence);
+          let settled = false;
+          let timeoutId = null;
+          const cleanup = () => {
+            if (timeoutId !== null) {
+              clearTimeout(timeoutId);
+              timeoutId = null;
+            }
+            document.removeEventListener(responseEventName, onResponse);
+          };
+          const onResponse = (event) => {
+            if (event?.detail?.requestId !== requestId || settled) return;
+            settled = true;
+            cleanup();
+            if (event.detail.ok) {
+              resolve(event.detail.result);
+            } else {
+              reject(new Error(event.detail.error || 'RusMarble command failed.'));
+            }
+          };
+          document.addEventListener(responseEventName, onResponse);
+          timeoutId = window.setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            reject(new Error('RusMarble did not respond to the console command.'));
+          }, 15000);
+          document.dispatchEvent(new CustomEvent(requestEventName, {
+            detail: {
+              requestId,
+              command,
+              payload,
+            },
+          }));
+        });
+        window.bmControl = (payload) => sendRusMarbleCommand('control', payload);
+        window.buildEventList = () => sendRusMarbleCommand('build-event-list');
+        window.buildTemplateFilterList = () => sendRusMarbleCommand('build-template-filter-list');
+        window.buildColorFilterList = () => sendRusMarbleCommand('build-color-filter-list');
+        window.syncToggleList = () => sendRusMarbleCommand('sync-toggle-list');
+      })();
+    `;
+    document.documentElement.dataset.bmConsoleBridgeInstalled = '1';
+    document.documentElement.appendChild(script);
+    script.remove();
+  };
+
+  installRusMarblePageConsoleBridge();
+
   const buildEventList = () => {
     const listContainer = document.querySelector('#bm-eventitem-list');
     const showClaimed = templateManager.isEventClaimedShown();
     const showUnavailable = templateManager.isEventUnavailableShown();
     const provider = apiManager.eventDataURL ?? templateManager.getEventProvider();
-    if (apiManager.eventClaimed === null) {
-      listContainer.innerHTML = `<small>${t('event.noClaimedLoaded')}</small>`;
-      return;
-    };
     if (apiManager.eventData === null && (provider === null || provider == "")) {
       // rely on external sources
-      listContainer.innerHTML = `<small>${t('event.providerNotSet')}</small>`;
+      listContainer.innerHTML = `<small>${
+        apiManager.eventClaimed === null
+          ? t('event.noClaimedLoaded')
+          : t('event.providerNotSet')
+      }</small>`;
       return;
     };
-    const eventClaimedList = new Set(apiManager.eventClaimed);
+    const eventClaimedList = new Set(Array.isArray(apiManager.eventClaimed) ? apiManager.eventClaimed : []);
     consoleLog("eventClaimedList", eventClaimedList);
     // Format: e.g. https://wplace.samuelscheit.com/tiles/pumpkin.json
     (
@@ -7884,15 +8330,14 @@ async function buildOverlayMain() {
       }
       listContainer.textContent = "";
       let hasEntries = false;
-      const dataSource = (
-        Array.isArray(data) ?
-        data.map((entry, index) => [entry.id ?? index, entry]) :
-        Object.entries(data)
-      );
+      const dataSource = getEventDataEntries(data);
       dataSource.forEach(([itemId, info]) => {
-        itemId = Number(itemId);
-        const isClaimed = eventClaimedList.has(itemId)
-        if (isClaimed && !showClaimed) return;
+        const numericItemId = Number(itemId);
+        const hasNumericItemId = Number.isFinite(numericItemId);
+        const itemLabel = hasNumericItemId ? `#${numericItemId}` : `#${String(itemId ?? '').trim() || '?'}`;
+        const controlAction = normalizeRusMarbleControlAction(info);
+        const isClaimed = hasNumericItemId && eventClaimedList.has(numericItemId);
+        if (!controlAction && isClaimed && !showClaimed) return;
         const row = document.createElement('div');
         row.style.display = 'flex';
         row.style.alignItems = 'center';
@@ -7952,13 +8397,38 @@ async function buildOverlayMain() {
             };
           }
           row.appendChild(teleportButton);
-        } else {
+        } else if (!controlAction) {
           coordStatus = t('event.unknownCoordsPrefix');
+        }
+
+        if (controlAction) {
+          const actionButton = document.createElement('button');
+          actionButton.type = 'button';
+          actionButton.textContent = controlAction.buttonText;
+          actionButton.style.fontSize = '11px';
+          actionButton.style.padding = '0 6px';
+          actionButton.onclick = async () => {
+            actionButton.disabled = true;
+            try {
+              await executeRusMarbleControlAction(controlAction);
+            } catch (error) {
+              consoleWarn('Failed to execute RusMarble control event.', { controlAction, error });
+              overlayMain.handleDisplayError(error?.message || 'Failed to execute the RusMarble control event.');
+            } finally {
+              actionButton.disabled = false;
+            }
+          };
+          row.appendChild(actionButton);
         }
 
         let label = document.createElement('span');
         label.style.fontSize = '12px';
-        label.textContent = `#${itemId} • ${coordStatus}${eventClaimedList.has(itemId) ? t('event.claimed') : t('event.unclaimed')}`;
+        if (controlAction) {
+          const prefix = itemLabel ? `${itemLabel} • ` : '';
+          label.textContent = `${prefix}${controlAction.label}`;
+        } else {
+          label.textContent = `${itemLabel} • ${coordStatus}${eventClaimedList.has(numericItemId) ? t('event.claimed') : t('event.unclaimed')}`;
+        }
         row.appendChild(label);
         listContainer.appendChild(row);
         hasEntries = true;

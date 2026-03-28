@@ -304,27 +304,39 @@ export const createChunkSampleData = (width, height, count, native = true) => ({
   native,
 });
 
-export const encodeChunkSampleData = (sampleData) => {
+export const encodeChunkSampleBytes = (sampleData) => {
   const width = Math.max(0, Math.trunc(Number(sampleData?.width) || 0));
   const height = Math.max(0, Math.trunc(Number(sampleData?.height) || 0));
   const count = Math.max(0, Math.trunc(Number(sampleData?.count) || 0));
-  const buffer = new ArrayBuffer(TEMPLATE_CHUNK_SAMPLE_HEADER_BYTES + count * TEMPLATE_CHUNK_SAMPLE_RECORD_BYTES);
-  const view = new DataView(buffer);
-  view.setUint16(0, width, true);
-  view.setUint16(2, height, true);
-  view.setUint32(4, count, true);
+  const bytes = new Uint8Array(TEMPLATE_CHUNK_SAMPLE_HEADER_BYTES + count * TEMPLATE_CHUNK_SAMPLE_RECORD_BYTES);
+  bytes[0] = width & 255;
+  bytes[1] = (width >> 8) & 255;
+  bytes[2] = height & 255;
+  bytes[3] = (height >> 8) & 255;
+  bytes[4] = count & 255;
+  bytes[5] = (count >> 8) & 255;
+  bytes[6] = (count >> 16) & 255;
+  bytes[7] = (count >> 24) & 255;
   let offset = TEMPLATE_CHUNK_SAMPLE_HEADER_BYTES;
   for (let index = 0; index < count; index++) {
-    view.setUint16(offset, sampleData.x[index], true);
-    view.setUint16(offset + 2, sampleData.y[index], true);
-    view.setUint8(offset + 4, sampleData.flags[index] || 0);
-    view.setUint8(offset + 5, sampleData.r[index] || 0);
-    view.setUint8(offset + 6, sampleData.g[index] || 0);
-    view.setUint8(offset + 7, sampleData.b[index] || 0);
-    view.setUint8(offset + 8, sampleData.a[index] || 0);
+    const x = sampleData.x[index] || 0;
+    const y = sampleData.y[index] || 0;
+    bytes[offset] = x & 255;
+    bytes[offset + 1] = (x >> 8) & 255;
+    bytes[offset + 2] = y & 255;
+    bytes[offset + 3] = (y >> 8) & 255;
+    bytes[offset + 4] = sampleData.flags[index] || 0;
+    bytes[offset + 5] = sampleData.r[index] || 0;
+    bytes[offset + 6] = sampleData.g[index] || 0;
+    bytes[offset + 7] = sampleData.b[index] || 0;
+    bytes[offset + 8] = sampleData.a[index] || 0;
     offset += TEMPLATE_CHUNK_SAMPLE_RECORD_BYTES;
   }
-  return uint8ToBase64(new Uint8Array(buffer));
+  return bytes;
+};
+
+export const encodeChunkSampleData = (sampleData) => {
+  return uint8ToBase64(encodeChunkSampleBytes(sampleData));
 };
 
 export const decodeChunkSampleBuffer = (bufferValue) => {
@@ -404,12 +416,41 @@ export const createPaletteStatsAccumulator = () => ({
   seenPaletteOrder: [],
 });
 
+export const mergePaletteStatsAccumulator = (accumulator, stats = {}) => {
+  if (!accumulator || typeof accumulator !== 'object') {
+    return accumulator;
+  }
+  accumulator.required = Math.max(0, Number(accumulator.required) || 0) + Math.max(0, Number(stats.required) || 0);
+  accumulator.deface = Math.max(0, Number(accumulator.deface) || 0) + Math.max(0, Number(stats.deface) || 0);
+  if (stats.hasOther === true) {
+    accumulator.hasOther = true;
+  }
+  const paletteCounts = (stats.paletteCounts && typeof stats.paletteCounts === 'object') ? stats.paletteCounts : null;
+  if (paletteCounts && Object.keys(paletteCounts).length) {
+    accumulator.paletteCounts = accumulator.paletteCounts || Object.create(null);
+    for (const [key, count] of Object.entries(paletteCounts)) {
+      const safeCount = Math.max(0, Number(count) || 0);
+      if (safeCount <= 0) continue;
+      accumulator.paletteCounts[key] = (accumulator.paletteCounts[key] || 0) + safeCount;
+    }
+    accumulator.paletteCountsByIndex = null;
+    accumulator.seenPaletteOrder = null;
+  }
+  return accumulator;
+};
+
 export const finalizePaletteStatsAccumulator = (accumulator) => {
   if (!accumulator || typeof accumulator !== 'object') {
     return { required: 0, deface: 0, hasOther: false, paletteMap: new Map() };
   }
   const paletteMap = new Map();
-  if (accumulator.paletteCountsByIndex instanceof Uint32Array && Array.isArray(accumulator.seenPaletteOrder)) {
+  const objectCounts = accumulator.paletteCounts || {};
+  const hasObjectCounts = Object.keys(objectCounts).length > 0;
+  if (
+    accumulator.paletteCountsByIndex instanceof Uint32Array
+    && Array.isArray(accumulator.seenPaletteOrder)
+    && (!hasObjectCounts || accumulator.seenPaletteOrder.length > 0)
+  ) {
     for (let index = 0; index < accumulator.seenPaletteOrder.length; index++) {
       const paletteIndex = accumulator.seenPaletteOrder[index];
       const count = accumulator.paletteCountsByIndex[paletteIndex] || 0;
@@ -417,7 +458,7 @@ export const finalizePaletteStatsAccumulator = (accumulator) => {
       paletteMap.set(paletteKeyByIndex[paletteIndex] || TEMPLATE_OTHER_COLOR_KEY, count);
     }
   } else {
-    for (const [key, count] of Object.entries(accumulator.paletteCounts || {})) {
+    for (const [key, count] of Object.entries(objectCounts)) {
       if ((Number(count) || 0) > 0) {
         paletteMap.set(key, Number(count) || 0);
       }
@@ -450,16 +491,8 @@ export const buildChunkSampleDataFromSource = (
   const paletteCountsObject = (paletteStatsAccumulator && typeof paletteStatsAccumulator === 'object')
     ? (paletteStatsAccumulator.paletteCounts || (paletteStatsAccumulator.paletteCounts = Object.create(null)))
     : null;
-  let count = 0;
-  for (let y = 0; y < chunkHeight; y++) {
-    for (let x = 0; x < chunkWidth; x++) {
-      const idx = ((sourceY + y) * imageWidth + (sourceX + x)) * 4;
-      if ((sourceData[idx + 3] || 0) > 0) {
-        count++;
-      }
-    }
-  }
-  const sampleData = createChunkSampleData(chunkWidth, chunkHeight, count, true);
+  const maxCount = Math.max(0, Math.trunc(chunkWidth * chunkHeight));
+  const sampleData = createChunkSampleData(chunkWidth, chunkHeight, maxCount, true);
   let writeIndex = 0;
   for (let y = 0; y < chunkHeight; y++) {
     for (let x = 0; x < chunkWidth; x++) {
@@ -515,6 +548,16 @@ export const buildChunkSampleDataFromSource = (
       writeIndex++;
     }
   }
+  if (writeIndex !== maxCount) {
+    sampleData.x = sampleData.x.subarray(0, writeIndex);
+    sampleData.y = sampleData.y.subarray(0, writeIndex);
+    sampleData.r = sampleData.r.subarray(0, writeIndex);
+    sampleData.g = sampleData.g.subarray(0, writeIndex);
+    sampleData.b = sampleData.b.subarray(0, writeIndex);
+    sampleData.a = sampleData.a.subarray(0, writeIndex);
+    sampleData.flags = sampleData.flags.subarray(0, writeIndex);
+  }
+  sampleData.count = writeIndex;
   return sampleData;
 };
 
