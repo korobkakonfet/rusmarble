@@ -310,5 +310,11 @@
   "bm-help": "bm-4Q",
   "bm-link": "bm-4R",
   "bm-fg": "bm-4S",
-  "bm-bg": "bm-4T"
+  "bm-bg": "bm-4T",
+  "bm-flag-template-window-preview-zoom-number": "bm-4W",
+  "bm-flag-template-window-preview-stage": "bm-4Z",
+  "bm-flag-template-window-preview-tools": "bm-4-",
+  "bm-flag-template-window-preview": "bm-5e",
+  "bm-flag-template-window-preview-zoom-value": "bm-4-",
+  "bm-flag-template-window-preview-controls": "bm-4_"
 }

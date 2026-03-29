@@ -64,14 +64,18 @@ export const createTemplateCreationUi = (deps = {}) => {
     TEMPLATE_FLAG_DEFAULT_W,
     TEMPLATE_FLAG_DEFAULT_H,
     TEMPLATE_FLAG_IGNORE_BACKGROUND_COLOR_COUNT,
+    TEMPLATE_FLAG_IGNORE_MODE_ALL_EXCEPT_SELECTED,
+    TEMPLATE_FLAG_IGNORE_MODE_ONLY_SELECTED,
     TEMPLATE_FLAG_ORIENTATION_HORIZONTAL,
     TEMPLATE_FLAG_ORIENTATION_VERTICAL,
     TEMPLATE_FLAG_VERTICAL_ORDER_FIRST_LEFT,
     TEMPLATE_FLAG_VERTICAL_ORDER_FIRST_RIGHT,
     normalizeRussianFlagStyleKey,
+    normalizeFlagIgnoreMode,
     normalizeFlagStripeOrientation,
     normalizeFlagVerticalOrder,
     normalizeFlagStripeColorKeys,
+    normalizeFlagStripeWeights,
     normalizeFlagTemplateDimension,
     normalizeFlagPointCoords,
     computeFlagTemplateEndFromStartAndSize,
@@ -113,6 +117,9 @@ export const createTemplateCreationUi = (deps = {}) => {
       ? tt('dialog.flag.orientation.vertical', 'Vertical')
       : tt('dialog.flag.orientation.horizontal', 'Horizontal')
   );
+  const TEMPLATE_FLAG_PREVIEW_ZOOM_MIN = 1;
+  const TEMPLATE_FLAG_PREVIEW_ZOOM_MAX = 12;
+  const formatPreviewZoomText = (value) => `${Math.round((Number(value) || 0) * 100)}%`;
 
   /**
    * Opens a preview dialog that lets the user inspect and tweak palette conversion settings
@@ -860,6 +867,8 @@ export const createTemplateCreationUi = (deps = {}) => {
     const initialStripeOrientation = normalizeFlagStripeOrientation(options?.initialStripeOrientation);
     const initialVerticalOrder = normalizeFlagVerticalOrder(options?.initialVerticalOrder);
     const initialStripeColorKeys = normalizeFlagStripeColorKeys(options?.initialStripeColorKeys, initialStyleKey);
+    const initialStripeWeights = normalizeFlagStripeWeights(options?.initialStripeWeights);
+    const initialIgnoreMode = normalizeFlagIgnoreMode(options?.initialIgnoreMode);
     const initialWidth = normalizeFlagTemplateDimension(options?.initialWidth, TEMPLATE_FLAG_DEFAULT_W);
     const initialHeight = normalizeFlagTemplateDimension(options?.initialHeight, TEMPLATE_FLAG_DEFAULT_H);
     const initialIgnoreArts = Boolean(options?.initialIgnoreArts);
@@ -1036,6 +1045,36 @@ export const createTemplateCreationUi = (deps = {}) => {
       stripeColorGroup.appendChild(stripeColorRow);
       controls.appendChild(stripeColorGroup);
 
+      const stripeWeightGroup = document.createElement('div');
+      stripeWeightGroup.className = 'bm-text-template-window-control';
+      stripeWeightGroup.style.gridColumn = '1 / -1';
+      const stripeWeightLabel = document.createElement('label');
+      stripeWeightLabel.className = 'bm-text-template-window-label';
+      stripeWeightLabel.textContent = tt('dialog.flag.stripeWidths', 'Stripe Widths');
+      const stripeWeightRow = document.createElement('div');
+      stripeWeightRow.style.display = 'grid';
+      stripeWeightRow.style.gridTemplateColumns = 'repeat(3, minmax(0, 1fr))';
+      stripeWeightRow.style.gap = '6px';
+      const stripeWeightInputs = [0, 1, 2].map((index) => {
+        const slot = document.createElement('div');
+        slot.className = 'bm-text-template-window-control';
+        const slotLabel = document.createElement('label');
+        slotLabel.className = 'bm-text-template-window-label';
+        const slotInput = document.createElement('input');
+        slotInput.className = 'bm-text-template-window-number';
+        slotInput.type = 'number';
+        slotInput.min = '1';
+        slotInput.step = '1';
+        slotInput.value = String(initialStripeWeights[index] || 1);
+        slot.appendChild(slotLabel);
+        slot.appendChild(slotInput);
+        stripeWeightRow.appendChild(slot);
+        return { label: slotLabel, input: slotInput };
+      });
+      stripeWeightGroup.appendChild(stripeWeightLabel);
+      stripeWeightGroup.appendChild(stripeWeightRow);
+      controls.appendChild(stripeWeightGroup);
+
       const pointsGroup = document.createElement('div');
       pointsGroup.className = 'bm-text-template-window-control';
       pointsGroup.style.gridColumn = '1 / -1';
@@ -1102,8 +1141,21 @@ export const createTemplateCreationUi = (deps = {}) => {
       ignoreToggle.checked = initialIgnoreArts;
       ignoreToggle.style.alignSelf = 'flex-start';
       ignoreToggle.style.marginTop = '2px';
+      const ignoreModeSelect = document.createElement('select');
+      ignoreModeSelect.className = 'bm-text-template-window-select';
+      [
+        [TEMPLATE_FLAG_IGNORE_MODE_ALL_EXCEPT_SELECTED, tt('dialog.flag.ignoreMode.allExceptSelected', 'All art except selected')],
+        [TEMPLATE_FLAG_IGNORE_MODE_ONLY_SELECTED, tt('dialog.flag.ignoreMode.onlySelected', 'Only selected colors')],
+      ].forEach(([value, label]) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        ignoreModeSelect.appendChild(option);
+      });
+      ignoreModeSelect.value = initialIgnoreMode;
       ignoreGroup.appendChild(ignoreLabel);
       ignoreGroup.appendChild(ignoreToggle);
+      ignoreGroup.appendChild(ignoreModeSelect);
       controls.appendChild(ignoreGroup);
 
       const protectedGroup = document.createElement('div');
@@ -1154,11 +1206,41 @@ export const createTemplateCreationUi = (deps = {}) => {
       body.appendChild(previewMeta);
 
       const previewWrap = document.createElement('div');
-      previewWrap.className = 'bm-text-template-window-preview';
+      previewWrap.className = 'bm-text-template-window-preview bm-flag-template-window-preview';
       const previewCanvas = document.createElement('canvas');
       previewCanvas.className = 'bm-text-template-window-canvas';
       previewWrap.appendChild(previewCanvas);
       body.appendChild(previewWrap);
+
+      const previewControls = document.createElement('div');
+      previewControls.className = 'bm-flag-template-window-preview-controls';
+      const previewHint = document.createElement('div');
+      previewHint.className = 'bm-text-template-window-label';
+      previewHint.textContent = tt('dialog.flag.previewHint', 'Wheel to zoom. Drag to pan.');
+      const previewZoomTools = document.createElement('div');
+      previewZoomTools.className = 'bm-flag-template-window-preview-tools';
+      const previewZoomOut = document.createElement('button');
+      previewZoomOut.type = 'button';
+      previewZoomOut.textContent = '-';
+      previewZoomOut.title = tt('dialog.flag.previewZoomOut', 'Zoom out');
+      const previewZoomValueLabel = document.createElement('span');
+      previewZoomValueLabel.className = 'bm-flag-template-window-preview-zoom-value';
+      previewZoomValueLabel.textContent = formatPreviewZoomText(TEMPLATE_TEXT_PREVIEW_ZOOM_DEFAULT);
+      const previewZoomReset = document.createElement('button');
+      previewZoomReset.type = 'button';
+      previewZoomReset.textContent = tt('dialog.flag.previewZoomReset', 'Reset');
+      previewZoomReset.title = tt('dialog.flag.previewZoomResetTitle', 'Reset zoom and pan');
+      const previewZoomIn = document.createElement('button');
+      previewZoomIn.type = 'button';
+      previewZoomIn.textContent = '+';
+      previewZoomIn.title = tt('dialog.flag.previewZoomIn', 'Zoom in');
+      previewZoomTools.appendChild(previewZoomOut);
+      previewZoomTools.appendChild(previewZoomValueLabel);
+      previewZoomTools.appendChild(previewZoomReset);
+      previewZoomTools.appendChild(previewZoomIn);
+      previewControls.appendChild(previewHint);
+      previewControls.appendChild(previewZoomTools);
+      body.appendChild(previewControls);
 
       const errorOutput = document.createElement('div');
       errorOutput.className = 'bm-text-template-window-error';
@@ -1185,12 +1267,18 @@ export const createTemplateCreationUi = (deps = {}) => {
       let resizeObserver = null;
       let previewRenderTimer = null;
       let previewRenderToken = 0;
+      let previewViewportRedrawQueued = false;
       let previewRendering = false;
       let createBusy = false;
       let lastRenderResult = null;
       let maskRegionCache = { key: '', value: null };
       const protectedColorKeys = new Set(initialProtectedKeys);
       let stripeColorKeys = initialStripeColorKeys.slice(0, 3);
+      let stripeWeights = initialStripeWeights.slice(0, 3);
+      let previewZoomValue = TEMPLATE_TEXT_PREVIEW_ZOOM_DEFAULT;
+      let previewPanX = 0;
+      let previewPanY = 0;
+      let previewHasImage = false;
 
       const readDimensions = () => {
         const rawWidth = Math.round(Number(widthInput.value));
@@ -1244,6 +1332,7 @@ export const createTemplateCreationUi = (deps = {}) => {
           writePointInputs(endRowInputs, rect.bottomRight);
         }
         writeDimensions(rect.width, rect.height);
+        syncOrientationFromRect(rect);
         return rect;
       };
       const syncEndFromStartAndSize = () => {
@@ -1256,9 +1345,36 @@ export const createTemplateCreationUi = (deps = {}) => {
         return syncRectFromPoints({ canonicalize: true });
       };
       const getCurrentRect = () => syncRectFromPoints({ canonicalize: true });
+      const getIgnoreMode = () => normalizeFlagIgnoreMode(ignoreModeSelect.value);
       const getStripeOrientation = () => normalizeFlagStripeOrientation(orientationSelect.value);
       const getVerticalOrder = () => normalizeFlagVerticalOrder(verticalOrderSelect.value);
       const getSelectedStyle = () => getRussianFlagStyle(styleSelect.value);
+      const syncOrientationFromRect = (rect) => {
+        if (!rect || !Number.isFinite(rect.width) || !Number.isFinite(rect.height)) return null;
+        const nextOrientation = rect.height > rect.width
+          ? TEMPLATE_FLAG_ORIENTATION_VERTICAL
+          : TEMPLATE_FLAG_ORIENTATION_HORIZONTAL;
+        if (orientationSelect.value !== nextOrientation) {
+          orientationSelect.value = nextOrientation;
+          updateStripeControls();
+          updateActionState();
+        }
+        return nextOrientation;
+      };
+      const setPreviewZoom = (value) => {
+        const numericValue = Number(value);
+        if (!Number.isFinite(numericValue)) {
+          previewZoomValue = TEMPLATE_TEXT_PREVIEW_ZOOM_DEFAULT;
+          return previewZoomValue;
+        }
+        previewZoomValue = Math.max(
+          TEMPLATE_FLAG_PREVIEW_ZOOM_MIN,
+          Math.min(TEMPLATE_FLAG_PREVIEW_ZOOM_MAX, numericValue)
+        );
+        return previewZoomValue;
+      };
+      const getPreviewZoom = () => previewZoomValue;
+      const clampPreviewPan = (value, maxPan) => clampNumber(value, -maxPan, maxPan, 0);
       const syncStripeColorInputs = () => {
         stripeColorKeys = normalizeFlagStripeColorKeys(stripeColorKeys, styleSelect.value);
         stripeColorInputs.forEach((entry, index) => {
@@ -1271,12 +1387,25 @@ export const createTemplateCreationUi = (deps = {}) => {
         });
         return stripeColorKeys;
       };
+      const syncStripeWeightInputs = () => {
+        stripeWeights = normalizeFlagStripeWeights(stripeWeights);
+        stripeWeightInputs.forEach((entry, index) => {
+          entry.input.value = String(stripeWeights[index] || 1);
+        });
+        return stripeWeights;
+      };
       const readStripeColorKeysFromInputs = () => {
         stripeColorKeys = normalizeFlagStripeColorKeys(
           stripeColorInputs.map((entry) => entry.select.value),
           styleSelect.value
         );
         return stripeColorKeys;
+      };
+      const readStripeWeightsFromInputs = () => {
+        stripeWeights = normalizeFlagStripeWeights(
+          stripeWeightInputs.map((entry) => entry.input.value)
+        );
+        return syncStripeWeightInputs();
       };
       const getFirstStripeColorName = () => {
         const keys = readStripeColorKeysFromInputs();
@@ -1307,6 +1436,9 @@ export const createTemplateCreationUi = (deps = {}) => {
         stripeColorInputs.forEach((entry, index) => {
           entry.label.textContent = labels[index] || tt('dialog.flag.stripeNumber', 'Stripe {index}', { index: index + 1 });
         });
+        stripeWeightInputs.forEach((entry, index) => {
+          entry.label.textContent = labels[index] || tt('dialog.flag.stripeNumber', 'Stripe {index}', { index: index + 1 });
+        });
       };
       const updateVerticalOrderLabels = () => {
         const firstColorName = getFirstStripeColorName();
@@ -1315,8 +1447,15 @@ export const createTemplateCreationUi = (deps = {}) => {
       };
       const updateStripeControls = () => {
         readStripeColorKeysFromInputs();
+        readStripeWeightsFromInputs();
         updateVerticalOrderLabels();
         updateStripeColorSlotLabels();
+      };
+      const updateIgnoreModeLabels = () => {
+        const ignoreMode = getIgnoreMode();
+        protectedLabel.textContent = ignoreMode === TEMPLATE_FLAG_IGNORE_MODE_ONLY_SELECTED
+          ? tt('dialog.flag.selectedColorsIgnored', 'Colors Ignored')
+          : tt('dialog.flag.selectedColorsNotIgnored', 'Colors Not Ignored');
       };
       const getProtectedColorKeys = () => [...protectedColorKeys].filter((key) => templateTextPaletteMap.has(key));
       const getMaskCoordsText = (rect = null) => {
@@ -1345,14 +1484,19 @@ export const createTemplateCreationUi = (deps = {}) => {
         protectedColorSelect.disabled = disableProtectedControls;
         addProtectedColorButton.disabled = disableProtectedControls;
         resetProtectedColorButton.disabled = disableProtectedControls;
+        ignoreModeSelect.disabled = disableProtectedControls;
         protectedList.style.opacity = disableProtectedControls ? '0.55' : '1';
         const verticalDisabled = createBusy || getStripeOrientation() !== TEMPLATE_FLAG_ORIENTATION_VERTICAL;
         verticalOrderSelect.disabled = verticalDisabled;
         verticalOrderGroup.style.opacity = verticalDisabled ? '0.55' : '1';
       };
-      const resizePreviewCanvas = () => {
+      const getPreviewViewportSize = () => {
         const width = Math.max(TEMPLATE_TEXT_PREVIEW_MIN_W, Math.floor(previewWrap.clientWidth || TEMPLATE_TEXT_PREVIEW_MIN_W));
         const height = Math.max(TEMPLATE_TEXT_PREVIEW_MIN_H, Math.floor(previewWrap.clientHeight || TEMPLATE_TEXT_PREVIEW_MIN_H));
+        return { width, height };
+      };
+      const resizePreviewCanvas = () => {
+        const { width, height } = getPreviewViewportSize();
         const dpr = Math.max(1, window.devicePixelRatio || 1);
         const targetWidth = Math.floor(width * dpr);
         const targetHeight = Math.floor(height * dpr);
@@ -1365,13 +1509,65 @@ export const createTemplateCreationUi = (deps = {}) => {
         const context = previewCanvas.getContext('2d');
         if (context) {
           context.setTransform(dpr, 0, 0, dpr, 0, 0);
+          context.clearRect(0, 0, width, height);
         }
         return { width, height, context };
       };
+      const computePreviewLayout = (
+        width,
+        height,
+        imageData,
+        zoomLevel = previewZoomValue,
+        panX = previewPanX,
+        panY = previewPanY
+      ) => {
+        const imageWidth = Math.max(1, Math.trunc(Number(imageData?.width) || 0));
+        const imageHeight = Math.max(1, Math.trunc(Number(imageData?.height) || 0));
+        if (imageWidth <= 0 || imageHeight <= 0) return null;
+        const fitScale = Math.min(1, width / imageWidth, height / imageHeight);
+        const safeFitScale = Number.isFinite(fitScale) && fitScale > 0 ? fitScale : 1;
+        const scale = safeFitScale * setPreviewZoom(zoomLevel);
+        const drawWidth = imageWidth * scale;
+        const drawHeight = imageHeight * scale;
+        const maxPanX = Math.max(0, (drawWidth - width) / 2);
+        const maxPanY = Math.max(0, (drawHeight - height) / 2);
+        const clampedPanX = clampPreviewPan(panX, maxPanX);
+        const clampedPanY = clampPreviewPan(panY, maxPanY);
+        const baseX = (width - drawWidth) / 2;
+        const baseY = (height - drawHeight) / 2;
+        return {
+          scale,
+          drawWidth,
+          drawHeight,
+          baseX,
+          baseY,
+          drawX: baseX + clampedPanX,
+          drawY: baseY + clampedPanY,
+          panX: clampedPanX,
+          panY: clampedPanY,
+          maxPanX,
+          maxPanY,
+        };
+      };
+      const syncPreviewControls = (layout = null) => {
+        const safeZoom = setPreviewZoom(previewZoomValue);
+        const canPan = Boolean(layout && (layout.maxPanX > 0.5 || layout.maxPanY > 0.5));
+        const isReset = Math.abs(safeZoom - TEMPLATE_FLAG_PREVIEW_ZOOM_MIN) < 0.001
+          && Math.abs(previewPanX) < 0.5
+          && Math.abs(previewPanY) < 0.5;
+        previewZoomValue = safeZoom;
+        previewZoomValueLabel.textContent = formatPreviewZoomText(safeZoom);
+        previewZoomOut.disabled = !previewHasImage || safeZoom <= TEMPLATE_FLAG_PREVIEW_ZOOM_MIN + 0.001;
+        previewZoomIn.disabled = !previewHasImage || safeZoom >= TEMPLATE_FLAG_PREVIEW_ZOOM_MAX - 0.001;
+        previewZoomReset.disabled = !previewHasImage || isReset;
+        previewWrap.style.cursor = previewHasImage
+          ? (dragState ? 'grabbing' : canPan ? 'grab' : 'zoom-in')
+          : 'default';
+      };
       const drawPreviewPlaceholder = (message = tt('dialog.common.preview', 'Preview')) => {
+        previewHasImage = false;
         const { width, height, context } = resizePreviewCanvas();
         if (!context) return;
-        context.clearRect(0, 0, width, height);
         context.fillStyle = 'rgba(0, 0, 0, 0.22)';
         context.fillRect(0, 0, width, height);
         context.fillStyle = 'rgba(255, 255, 255, 0.75)';
@@ -1379,11 +1575,49 @@ export const createTemplateCreationUi = (deps = {}) => {
         context.textAlign = 'center';
         context.textBaseline = 'middle';
         context.fillText(message, width / 2, height / 2);
+        syncPreviewControls(null);
+      };
+      const resetPreviewView = () => {
+        previewZoomValue = TEMPLATE_FLAG_PREVIEW_ZOOM_MIN;
+        previewPanX = 0;
+        previewPanY = 0;
+      };
+      const setPreviewZoomAroundPoint = (nextZoomLevel, originX = null, originY = null, imageData = null) => {
+        const safeZoom = setPreviewZoom(nextZoomLevel);
+        if (!previewHasImage || !imageData) {
+          previewZoomValue = safeZoom;
+          syncPreviewControls(null);
+          return;
+        }
+        const { width, height } = getPreviewViewportSize();
+        const currentLayout = computePreviewLayout(width, height, imageData, previewZoomValue, previewPanX, previewPanY);
+        let nextPanX = previewPanX;
+        let nextPanY = previewPanY;
+        if (
+          currentLayout
+          && Number.isFinite(originX)
+          && Number.isFinite(originY)
+          && currentLayout.scale > 0
+        ) {
+          const sourceX = (originX - currentLayout.drawX) / currentLayout.scale;
+          const sourceY = (originY - currentLayout.drawY) / currentLayout.scale;
+          const nextLayout = computePreviewLayout(width, height, imageData, safeZoom, 0, 0);
+          if (nextLayout) {
+            nextPanX = originX - nextLayout.baseX - sourceX * nextLayout.scale;
+            nextPanY = originY - nextLayout.baseY - sourceY * nextLayout.scale;
+          }
+        } else if (safeZoom <= TEMPLATE_FLAG_PREVIEW_ZOOM_MIN + 0.001) {
+          nextPanX = 0;
+          nextPanY = 0;
+        }
+        previewZoomValue = safeZoom;
+        const nextLayout = computePreviewLayout(width, height, imageData, previewZoomValue, nextPanX, nextPanY);
+        previewPanX = nextLayout?.panX || 0;
+        previewPanY = nextLayout?.panY || 0;
       };
       const drawImageDataPreview = async (imageData, token) => {
         const { width, height, context } = resizePreviewCanvas();
         if (!context) return;
-        context.clearRect(0, 0, width, height);
         const checker = 12;
         for (let y = 0; y < height; y += checker) {
           for (let x = 0; x < width; x += checker) {
@@ -1397,14 +1631,32 @@ export const createTemplateCreationUi = (deps = {}) => {
           bitmap.close?.();
           return;
         }
-        const scale = Math.min(width / imageData.width, height / imageData.height);
-        const drawWidth = Math.max(1, Math.round(imageData.width * scale));
-        const drawHeight = Math.max(1, Math.round(imageData.height * scale));
-        const drawX = Math.round((width - drawWidth) / 2);
-        const drawY = Math.round((height - drawHeight) / 2);
+        previewHasImage = true;
+        const layout = computePreviewLayout(width, height, imageData, previewZoomValue, previewPanX, previewPanY);
+        if (!layout) {
+          bitmap.close?.();
+          drawPreviewPlaceholder();
+          return;
+        }
+        previewPanX = layout.panX;
+        previewPanY = layout.panY;
         context.imageSmoothingEnabled = false;
-        context.drawImage(bitmap, drawX, drawY, drawWidth, drawHeight);
+        context.drawImage(bitmap, layout.drawX, layout.drawY, layout.drawWidth, layout.drawHeight);
         bitmap.close?.();
+        syncPreviewControls(layout);
+      };
+      const queuePreviewViewportDraw = () => {
+        if (previewViewportRedrawQueued || closed) return;
+        previewViewportRedrawQueued = true;
+        window.requestAnimationFrame(() => {
+          previewViewportRedrawQueued = false;
+          if (closed) return;
+          if (lastRenderResult?.imageData) {
+            void drawImageDataPreview(lastRenderResult.imageData, previewRenderToken);
+          } else {
+            drawPreviewPlaceholder(tt('dialog.common.previewUnavailable', 'Preview unavailable'));
+          }
+        });
       };
       const renderProtectedList = () => {
         const sortedKeys = [...protectedColorKeys]
@@ -1414,7 +1666,7 @@ export const createTemplateCreationUi = (deps = {}) => {
         if (!sortedKeys.length) {
           const empty = document.createElement('small');
           empty.style.opacity = '0.85';
-          empty.textContent = tt('dialog.flag.noProtectedColors', 'No protected colors selected.');
+          empty.textContent = tt('dialog.flag.noSelectedColors', 'No colors selected.');
           protectedList.appendChild(empty);
         } else {
           sortedKeys.forEach((key) => {
@@ -1422,7 +1674,7 @@ export const createTemplateCreationUi = (deps = {}) => {
             if (!option) return;
             const item = document.createElement('button');
             item.type = 'button';
-            item.title = tt('dialog.flag.removeProtectedColor', 'Remove from protected colors');
+            item.title = tt('dialog.flag.removeSelectedColor', 'Remove from selected colors');
             item.style.display = 'inline-flex';
             item.style.alignItems = 'center';
             item.style.gap = '5px';
@@ -1465,7 +1717,9 @@ export const createTemplateCreationUi = (deps = {}) => {
         const style = getSelectedStyle();
         const stripeOrientation = getStripeOrientation();
         const verticalOrder = getVerticalOrder();
+        const ignoreMode = getIgnoreMode();
         const stripeKeys = readStripeColorKeysFromInputs();
+        const stripeWidthRatios = readStripeWeightsFromInputs();
         errorOutput.textContent = '';
         try {
           const rect = getCurrentRect();
@@ -1510,7 +1764,9 @@ export const createTemplateCreationUi = (deps = {}) => {
             stripeOrientation,
             verticalOrder,
             stripeColorKeys: stripeKeys,
+            stripeWeights: stripeWidthRatios,
             ignoreArts: ignoreToggle.checked,
+            ignoreMode,
             ignoreProtectedColorKeys: getProtectedColorKeys(),
             mapRegion,
           });
@@ -1540,16 +1796,24 @@ export const createTemplateCreationUi = (deps = {}) => {
               )
             : '';
           const styleLabel = getFlagStyleLabel(style);
+          const zoomLabel = formatPreviewZoomText(getPreviewZoom());
+          const stripeWidthsLabel = result.stripeWeights.join(':');
+          const ignoreModeLabel = result.ignoreMode === TEMPLATE_FLAG_IGNORE_MODE_ONLY_SELECTED
+            ? tt('dialog.flag.ignoreMode.onlySelected', 'Only selected colors')
+            : tt('dialog.flag.ignoreMode.allExceptSelected', 'All art except selected');
           previewMeta.textContent = ignoreToggle.checked
             ? tt(
                 'dialog.flag.preview.summaryIgnored',
-                '{style} • {orientation}{verticalOrder} • {width}x{height}px • ignored {ignored} px ({ratio}) • {coords}{background}',
+                '{style} • {orientation}{verticalOrder} • {width}x{height}px • stripes {stripes} • {ignoreMode} • zoom {zoom} • ignored {ignored} px ({ratio}) • {coords}{background}',
                 {
                   style: styleLabel,
                   orientation: orientationLabel,
                   verticalOrder: verticalOrderLabel,
                   width,
                   height,
+                  stripes: stripeWidthsLabel,
+                  ignoreMode: ignoreModeLabel,
+                  zoom: zoomLabel,
                   ignored: result.ignoredPixelCount.toLocaleString(),
                   ratio: ignoredRatio,
                   coords: getMaskCoordsText(rect),
@@ -1560,13 +1824,15 @@ export const createTemplateCreationUi = (deps = {}) => {
               )
             : tt(
                 'dialog.flag.preview.summary',
-                '{style} • {orientation}{verticalOrder} • {width}x{height}px • {coords}',
+                '{style} • {orientation}{verticalOrder} • {width}x{height}px • stripes {stripes} • zoom {zoom} • {coords}',
                 {
                   style: styleLabel,
                   orientation: orientationLabel,
                   verticalOrder: verticalOrderLabel,
                   width,
                   height,
+                  stripes: stripeWidthsLabel,
+                  zoom: zoomLabel,
                   coords: getMaskCoordsText(rect),
                 }
               );
@@ -1577,6 +1843,8 @@ export const createTemplateCreationUi = (deps = {}) => {
             stripeOrientation: result.orientation,
             verticalOrder: result.verticalOrder,
             stripeColorKeys: result.stripeColorKeys,
+            stripeWeights: result.stripeWeights,
+            ignoreMode: result.ignoreMode,
             protectedColorKeys: getProtectedColorKeys(),
           };
           return lastRenderResult;
@@ -1588,11 +1856,12 @@ export const createTemplateCreationUi = (deps = {}) => {
             const { width, height } = readDimensions();
             previewMeta.textContent = tt(
               'dialog.flag.preview.fallback',
-              '{style} • {width}x{height}px',
+              '{style} • {width}x{height}px • zoom {zoom}',
               {
                 style: getFlagStyleLabel(style),
                 width,
                 height,
+                zoom: formatPreviewZoomText(getPreviewZoom()),
               }
             );
           }
@@ -1623,6 +1892,14 @@ export const createTemplateCreationUi = (deps = {}) => {
           upHandler = null;
         }
         dragState = null;
+        syncPreviewControls(lastRenderResult ? computePreviewLayout(
+          getPreviewViewportSize().width,
+          getPreviewViewportSize().height,
+          lastRenderResult.imageData,
+          previewZoomValue,
+          previewPanX,
+          previewPanY
+        ) : null);
       };
       const close = (result = null) => {
         if (closed) return;
@@ -1700,6 +1977,64 @@ export const createTemplateCreationUi = (deps = {}) => {
         updateStripeControls();
         queuePreviewRender();
       });
+      ignoreModeSelect.addEventListener('change', () => {
+        updateIgnoreModeLabels();
+        updateActionState();
+        queuePreviewRender();
+      });
+      previewZoomOut.addEventListener('click', () => {
+        setPreviewZoomAroundPoint(previewZoomValue / 1.2, null, null, lastRenderResult?.imageData || null);
+        queuePreviewViewportDraw();
+      });
+      previewZoomIn.addEventListener('click', () => {
+        setPreviewZoomAroundPoint(previewZoomValue * 1.2, null, null, lastRenderResult?.imageData || null);
+        queuePreviewViewportDraw();
+      });
+      previewZoomReset.addEventListener('click', () => {
+        resetPreviewView();
+        queuePreviewViewportDraw();
+      });
+      previewWrap.addEventListener('wheel', (event) => {
+        if (!previewHasImage || !lastRenderResult?.imageData) return;
+        event.preventDefault();
+        const factor = event.shiftKey ? 1.35 : 1.15;
+        const nextZoom = event.deltaY < 0
+          ? previewZoomValue * factor
+          : previewZoomValue / factor;
+        const bounds = previewWrap.getBoundingClientRect();
+        setPreviewZoomAroundPoint(
+          nextZoom,
+          event.clientX - bounds.left,
+          event.clientY - bounds.top,
+          lastRenderResult.imageData
+        );
+        queuePreviewViewportDraw();
+      }, { passive: false });
+      previewWrap.addEventListener('mousedown', (event) => {
+        if (event.button !== 0 || !previewHasImage || !lastRenderResult?.imageData) return;
+        const { width, height } = getPreviewViewportSize();
+        const layout = computePreviewLayout(width, height, lastRenderResult.imageData, previewZoomValue, previewPanX, previewPanY);
+        if (!layout || (layout.maxPanX <= 0.5 && layout.maxPanY <= 0.5)) return;
+        event.preventDefault();
+        dragState = {
+          startX: event.clientX,
+          startY: event.clientY,
+          panX: previewPanX,
+          panY: previewPanY,
+        };
+        moveHandler = (moveEvent) => {
+          if (!dragState) return;
+          previewPanX = dragState.panX + (moveEvent.clientX - dragState.startX);
+          previewPanY = dragState.panY + (moveEvent.clientY - dragState.startY);
+          queuePreviewViewportDraw();
+        };
+        upHandler = () => {
+          cleanupDragHandlers();
+        };
+        window.addEventListener('mousemove', moveHandler);
+        window.addEventListener('mouseup', upHandler);
+        syncPreviewControls(layout);
+      });
       stripeColorInputs.forEach((entry, index) => {
         entry.select.addEventListener('change', () => {
           const selected = normalizeTemplatePaletteKey(entry.select.value);
@@ -1708,6 +2043,22 @@ export const createTemplateCreationUi = (deps = {}) => {
           }
           syncStripeColorInputs();
           updateStripeControls();
+          queuePreviewRender();
+        });
+      });
+      stripeWeightInputs.forEach((entry, index) => {
+        entry.input.addEventListener('input', () => {
+          const nextWeights = stripeWeights.slice(0, 3);
+          nextWeights[index] = entry.input.value;
+          stripeWeights = normalizeFlagStripeWeights(nextWeights);
+          syncStripeWeightInputs();
+          queuePreviewRender();
+        });
+        entry.input.addEventListener('change', () => {
+          const nextWeights = stripeWeights.slice(0, 3);
+          nextWeights[index] = entry.input.value;
+          stripeWeights = normalizeFlagStripeWeights(nextWeights);
+          syncStripeWeightInputs();
           queuePreviewRender();
         });
       });
@@ -1782,6 +2133,8 @@ export const createTemplateCreationUi = (deps = {}) => {
             stripeOrientation: rendered.orientation,
             verticalOrder: rendered.verticalOrder,
             stripeColorKeys: rendered.stripeColorKeys || [],
+            stripeWeights: rendered.stripeWeights || [],
+            ignoreMode: rendered.ignoreMode,
             width: rendered.width,
             height: rendered.height,
             ignoreArts: Boolean(ignoreToggle.checked),
@@ -1844,8 +2197,11 @@ export const createTemplateCreationUi = (deps = {}) => {
         resizeObserver = new ResizeObserver(() => queuePreviewRender());
         resizeObserver.observe(previewWrap);
       }
+      resetPreviewView();
       syncStripeColorInputs();
+      syncStripeWeightInputs();
       updateStripeControls();
+      updateIgnoreModeLabels();
       renderProtectedList();
       syncRectFromPoints({ canonicalize: true });
       updateActionState();
