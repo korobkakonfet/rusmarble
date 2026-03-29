@@ -136,16 +136,18 @@ const TEMPLATE_ARCHIVE_BASE_URL = 'https://wplace.eralyon.net';
 const TEMPLATE_ARCHIVE_PREVIEW_MAX_DIMENSION = 360;
 const TEMPLATE_ARCHIVE_PREVIEW_MAX_TILE_REQUESTS = 256;
 const TEMPLATE_ARCHIVE_PREVIEW_DOWNLOAD_CONCURRENCY = 10;
-const TEMPLATE_FLAG_WINDOW_DEFAULT_W = 460;
-const TEMPLATE_FLAG_WINDOW_DEFAULT_H = 520;
-const TEMPLATE_FLAG_WINDOW_MIN_W = 340;
-const TEMPLATE_FLAG_WINDOW_MIN_H = 380;
+const TEMPLATE_FLAG_WINDOW_DEFAULT_W = 620;
+const TEMPLATE_FLAG_WINDOW_DEFAULT_H = 720;
+const TEMPLATE_FLAG_WINDOW_MIN_W = 420;
+const TEMPLATE_FLAG_WINDOW_MIN_H = 520;
 const TEMPLATE_FLAG_DIMENSION_MIN = 3;
 const TEMPLATE_FLAG_DIMENSION_MAX = 3000;
 const TEMPLATE_FLAG_DEFAULT_W = 300;
 const TEMPLATE_FLAG_DEFAULT_H = 200;
 const TEMPLATE_FLAG_IGNORE_BACKGROUND_COLOR_COUNT = 4;
 const TEMPLATE_FLAG_IGNORE_MAX_TILE_REQUESTS = 64;
+const TEMPLATE_FLAG_IGNORE_MODE_ALL_EXCEPT_SELECTED = 'all-except-selected';
+const TEMPLATE_FLAG_IGNORE_MODE_ONLY_SELECTED = 'only-selected';
 const TEMPLATE_FLAG_ORIENTATION_HORIZONTAL = 'horizontal';
 const TEMPLATE_FLAG_ORIENTATION_VERTICAL = 'vertical';
 const TEMPLATE_FLAG_VERTICAL_ORDER_FIRST_LEFT = 'first-left';
@@ -538,17 +540,46 @@ const normalizeFlagStripeColorKeys = (keys, styleKey) => {
     return defaults[index];
   });
 };
+const normalizeFlagStripeWeights = (weights) => [0, 1, 2].map((index) => {
+  const numeric = Math.round(Number(Array.isArray(weights) ? weights[index] : 1));
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : 1;
+});
+const computeFlagStripeSpans = (total, weights) => {
+  const safeTotal = Math.max(3, Math.trunc(Number(total) || 0));
+  const normalizedWeights = normalizeFlagStripeWeights(weights);
+  const baseSpans = [1, 1, 1];
+  const remaining = Math.max(0, safeTotal - baseSpans.length);
+  if (remaining < 1) return baseSpans;
+  const weightSum = normalizedWeights.reduce((sum, value) => sum + value, 0) || 3;
+  const rawExtras = normalizedWeights.map((value) => (remaining * value) / weightSum);
+  const extraSpans = rawExtras.map((value) => Math.floor(value));
+  let leftover = remaining - extraSpans.reduce((sum, value) => sum + value, 0);
+  const rankedIndexes = [0, 1, 2].sort((a, b) => {
+    const diff = (rawExtras[b] - extraSpans[b]) - (rawExtras[a] - extraSpans[a]);
+    return diff || (normalizedWeights[b] - normalizedWeights[a]) || (a - b);
+  });
+  for (let i = 0; i < leftover; i++) {
+    extraSpans[rankedIndexes[i % rankedIndexes.length]] += 1;
+  }
+  return baseSpans.map((value, index) => value + extraSpans[index]);
+};
 const normalizeFlagStripeOrientation = (value) => {
   const mode = String(value || '').trim().toLowerCase();
   return mode === TEMPLATE_FLAG_ORIENTATION_VERTICAL
     ? TEMPLATE_FLAG_ORIENTATION_VERTICAL
     : TEMPLATE_FLAG_ORIENTATION_HORIZONTAL;
 };
+const normalizeFlagIgnoreMode = (value) => {
+  const mode = String(value || '').trim().toLowerCase();
+  return mode === TEMPLATE_FLAG_IGNORE_MODE_ONLY_SELECTED
+    ? TEMPLATE_FLAG_IGNORE_MODE_ONLY_SELECTED
+    : TEMPLATE_FLAG_IGNORE_MODE_ALL_EXCEPT_SELECTED;
+};
 const normalizeFlagVerticalOrder = (value) => {
   const mode = String(value || '').trim().toLowerCase();
-  return mode === TEMPLATE_FLAG_VERTICAL_ORDER_FIRST_RIGHT
-    ? TEMPLATE_FLAG_VERTICAL_ORDER_FIRST_RIGHT
-    : TEMPLATE_FLAG_VERTICAL_ORDER_FIRST_LEFT;
+  return mode === TEMPLATE_FLAG_VERTICAL_ORDER_FIRST_LEFT
+    ? TEMPLATE_FLAG_VERTICAL_ORDER_FIRST_LEFT
+    : TEMPLATE_FLAG_VERTICAL_ORDER_FIRST_RIGHT;
 };
 const normalizeFlagTemplateDimension = (value, fallback) => {
   const numeric = Number(value);
@@ -918,19 +949,28 @@ const loadLiveRegionImageDataForFlagMask = async ({
 
   const imageData = regionContext.getImageData(0, 0, safeWidth, safeHeight);
   const colorCounts = new Map();
+  const borderColorCounts = new Map();
   const sample = imageData.data;
   for (let i = 0; i < sample.length; i += 4) {
     if (sample[i + 3] < 1) continue;
     const key = `${sample[i]},${sample[i + 1]},${sample[i + 2]}`;
     colorCounts.set(key, (colorCounts.get(key) || 0) + 1);
+    const pixelIndex = i >> 2;
+    const y = Math.floor(pixelIndex / safeWidth);
+    const x = pixelIndex - y * safeWidth;
+    if (x === 0 || y === 0 || x === safeWidth - 1 || y === safeHeight - 1) {
+      borderColorCounts.set(key, (borderColorCounts.get(key) || 0) + 1);
+    }
   }
   cleanUpCanvas(regionCanvas);
   regionCanvas = null;
   const sortedColorCounts = [...colorCounts.entries()].sort((a, b) => b[1] - a[1]);
+  const sortedBorderColorCounts = [...borderColorCounts.entries()].sort((a, b) => b[1] - a[1]);
   return {
     imageData,
     tileCount,
     sortedColorCounts,
+    sortedBorderColorCounts,
   };
 };
 const buildRussianFlagTemplateImageData = ({
@@ -938,9 +978,11 @@ const buildRussianFlagTemplateImageData = ({
   width = TEMPLATE_FLAG_DEFAULT_W,
   height = TEMPLATE_FLAG_DEFAULT_H,
   stripeOrientation = TEMPLATE_FLAG_ORIENTATION_HORIZONTAL,
-  verticalOrder = TEMPLATE_FLAG_VERTICAL_ORDER_FIRST_LEFT,
+  verticalOrder = TEMPLATE_FLAG_VERTICAL_ORDER_FIRST_RIGHT,
   stripeColorKeys = null,
+  stripeWeights = null,
   ignoreArts = false,
+  ignoreMode = TEMPLATE_FLAG_IGNORE_MODE_ALL_EXCEPT_SELECTED,
   ignoreProtectedColorKeys = [],
   mapRegion = null,
 } = {}) => {
@@ -950,6 +992,15 @@ const buildRussianFlagTemplateImageData = ({
   const orientation = normalizeFlagStripeOrientation(stripeOrientation);
   const normalizedVerticalOrder = normalizeFlagVerticalOrder(verticalOrder);
   const normalizedStripeColorKeys = normalizeFlagStripeColorKeys(stripeColorKeys, style.key);
+  const normalizedStripeWeights = normalizeFlagStripeWeights(stripeWeights);
+  const normalizedIgnoreMode = normalizeFlagIgnoreMode(ignoreMode);
+  const verticalStripeSpans = computeFlagStripeSpans(safeWidth, normalizedStripeWeights);
+  const horizontalStripeSpans = computeFlagStripeSpans(safeHeight, normalizedStripeWeights);
+  const resolveStripeIndex = (offset, spans) => (
+    offset < spans[0]
+      ? 0
+      : (offset < spans[0] + spans[1] ? 1 : 2)
+  );
   const data = new Uint8ClampedArray(safeWidth * safeHeight * 4);
   const stripeColors = normalizedStripeColorKeys.map((key, index) => {
     const option = templateTextPaletteMap.get(key);
@@ -963,14 +1014,13 @@ const buildRussianFlagTemplateImageData = ({
   for (let y = 0; y < safeHeight; y++) {
     const rowOffset = y * safeWidth * 4;
     for (let x = 0; x < safeWidth; x++) {
-      const baseVerticalIndex = Math.min(2, Math.floor((x * 3) / safeWidth));
       const stripeIndex = orientation === TEMPLATE_FLAG_ORIENTATION_VERTICAL
         ? (
           normalizedVerticalOrder === TEMPLATE_FLAG_VERTICAL_ORDER_FIRST_RIGHT
-            ? 2 - baseVerticalIndex
-            : baseVerticalIndex
+            ? 2 - resolveStripeIndex(x, verticalStripeSpans)
+            : resolveStripeIndex(x, verticalStripeSpans)
         )
-        : Math.min(2, Math.floor((y * 3) / safeHeight));
+        : resolveStripeIndex(y, horizontalStripeSpans);
       const stripe = stripeColors[stripeIndex] || stripeColors[0] || { rgb: [0, 0, 0] };
       const r = stripe.rgb[0] ?? 0;
       const g = stripe.rgb[1] ?? 0;
@@ -990,10 +1040,11 @@ const buildRussianFlagTemplateImageData = ({
     if (!(mapPixels instanceof Uint8ClampedArray) || mapPixels.length !== data.length) {
       throw new Error('Ignore-arts map data is unavailable. Try previewing again.');
     }
+    const sortedBorderColorCounts = Array.isArray(mapRegion?.sortedBorderColorCounts) ? mapRegion.sortedBorderColorCounts : [];
     const sortedColorCounts = Array.isArray(mapRegion?.sortedColorCounts) ? mapRegion.sortedColorCounts : [];
-    backgroundEntries = sortedColorCounts.slice(0, TEMPLATE_FLAG_IGNORE_BACKGROUND_COLOR_COUNT);
+    backgroundEntries = (sortedBorderColorCounts.length ? sortedBorderColorCounts : sortedColorCounts)
+      .slice(0, TEMPLATE_FLAG_IGNORE_BACKGROUND_COLOR_COUNT);
     const backgroundKeys = new Set(backgroundEntries.map(([key]) => normalizeTemplatePaletteKey(key)).filter(Boolean));
-    const stripeColorKeysSet = new Set(normalizedStripeColorKeys.filter(Boolean));
     const protectedKeys = new Set(
       (Array.isArray(ignoreProtectedColorKeys) ? ignoreProtectedColorKeys.map(normalizeTemplatePaletteKey) : [])
         .filter(Boolean)
@@ -1001,28 +1052,13 @@ const buildRussianFlagTemplateImageData = ({
     for (let i = 0; i < data.length; i += 4) {
       if (data[i + 3] < 1) continue;
       const mapKey = normalizeTemplatePaletteKey(`${mapPixels[i]},${mapPixels[i + 1]},${mapPixels[i + 2]}`);
-      const pixelIndex = i >> 2;
-      const y = Math.floor(pixelIndex / safeWidth);
-      const x = pixelIndex - y * safeWidth;
-      const baseVerticalIndex = Math.min(2, Math.floor((x * 3) / safeWidth));
-      const stripeIndex = orientation === TEMPLATE_FLAG_ORIENTATION_VERTICAL
-        ? (
-          normalizedVerticalOrder === TEMPLATE_FLAG_VERTICAL_ORDER_FIRST_RIGHT
-            ? 2 - baseVerticalIndex
-            : baseVerticalIndex
-        )
-        : Math.min(2, Math.floor((y * 3) / safeHeight));
-      const expectedStripeKey = normalizedStripeColorKeys[stripeIndex] || '';
-      if (mapKey === expectedStripeKey) continue;
-
-      // Keep stripe colors only on their corresponding stripe; wrong stripe is ignored.
-      if (stripeColorKeysSet.has(mapKey)) {
-        data[i + 3] = 0;
-        ignoredPixelCount++;
-        continue;
-      }
       if (!mapKey || backgroundKeys.has(mapKey)) continue;
-      if (protectedKeys.has(mapKey)) continue;
+      const isSelectedColor = protectedKeys.has(mapKey);
+      const shouldIgnore = normalizedIgnoreMode === TEMPLATE_FLAG_IGNORE_MODE_ONLY_SELECTED
+        ? isSelectedColor
+        : !isSelectedColor;
+      if (!shouldIgnore) continue;
+
       data[i + 3] = 0;
       ignoredPixelCount++;
     }
@@ -1034,6 +1070,8 @@ const buildRussianFlagTemplateImageData = ({
     orientation,
     verticalOrder: normalizedVerticalOrder,
     stripeColorKeys: normalizedStripeColorKeys,
+    stripeWeights: normalizedStripeWeights,
+    ignoreMode: normalizedIgnoreMode,
     width: safeWidth,
     height: safeHeight,
     ignoredPixelCount,
@@ -4016,14 +4054,18 @@ const {
   TEMPLATE_FLAG_DEFAULT_W,
   TEMPLATE_FLAG_DEFAULT_H,
   TEMPLATE_FLAG_IGNORE_BACKGROUND_COLOR_COUNT,
+  TEMPLATE_FLAG_IGNORE_MODE_ALL_EXCEPT_SELECTED,
+  TEMPLATE_FLAG_IGNORE_MODE_ONLY_SELECTED,
   TEMPLATE_FLAG_ORIENTATION_HORIZONTAL,
   TEMPLATE_FLAG_ORIENTATION_VERTICAL,
   TEMPLATE_FLAG_VERTICAL_ORDER_FIRST_LEFT,
   TEMPLATE_FLAG_VERTICAL_ORDER_FIRST_RIGHT,
   normalizeRussianFlagStyleKey,
+  normalizeFlagIgnoreMode,
   normalizeFlagStripeOrientation,
   normalizeFlagVerticalOrder,
   normalizeFlagStripeColorKeys,
+  normalizeFlagStripeWeights,
   normalizeFlagTemplateDimension,
   normalizeFlagPointCoords,
   computeFlagTemplateEndFromStartAndSize,

@@ -1325,6 +1325,11 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   max-height: 80vh;
 }
 
+#bm-flag-template-window {
+  max-width: min(96vw, 900px);
+  max-height: 88vh;
+}
+
 .bm-text-template-window-head {
   display: flex;
   align-items: center;
@@ -1462,6 +1467,11 @@ span.bm-templatename:hover, a.bm-templatename:focus {
     var(--bm-subtle-bg);
 }
 
+.bm-flag-template-window-preview {
+  overflow: hidden;
+  min-height: 260px;
+}
+
 .bm-text-template-window-preview::before {
   content: "Live preview";
   position: absolute;
@@ -1481,6 +1491,27 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.12);
+}
+
+.bm-flag-template-window-preview-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.bm-flag-template-window-preview-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bm-flag-template-window-preview-zoom-value {
+  min-width: 52px;
+  font-size: 11px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 .bm-text-template-window-error {
