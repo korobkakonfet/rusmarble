@@ -384,16 +384,25 @@ export default class ApiManager {
       '.flex.gap-1\\.5.px-3 > button.btn-circle[aria-label="Close"]',
       '.flex.gap-2.px-3 > button.btn-circle[aria-label="Close"]'
     ];
-    for (const selector of selectors) {
-      const closeButton = document.querySelector(selector);
-      if (closeButton) return closeButton;
-    }
-
-    const candidates = Array.from(
+    const prioritizedCandidates = selectors.flatMap((selector, selectorIndex) => (
+      Array.from(document.querySelectorAll(selector))
+        .filter(button => button instanceof HTMLElement)
+        .map(button => ({ button, selectorIndex }))
+    ));
+    const genericCandidates = Array.from(
       document.querySelectorAll('.rounded-t-box button.btn-circle, dialog.modal button.btn-circle, dialog button.btn-circle, .modal button.btn-circle')
-    );
+    )
+      .filter(button => button instanceof HTMLElement)
+      .map(button => ({ button, selectorIndex: selectors.length }));
+    const seenButtons = new Set();
+    const candidates = [...prioritizedCandidates, ...genericCandidates]
+      .filter(({ button }) => {
+        if (seenButtons.has(button)) return false;
+        seenButtons.add(button);
+        return true;
+      });
     const scoredCandidates = candidates
-      .map(button => {
+      .map(({ button, selectorIndex }) => {
         const label = [
           button.getAttribute('aria-label') || '',
           button.title || '',
@@ -405,10 +414,11 @@ export default class ApiManager {
         if (this.#isVisibleElement(button)) score += 4;
         if (root && this.#hasPixelInfoContent(root)) score += 3;
         if (button.parentElement?.lastElementChild === button) score += 1;
+        score += Math.max(0, selectors.length - selectorIndex);
         return { button, score };
       })
       .sort((left, right) => right.score - left.score);
-    return scoredCandidates.find(candidate => candidate.score > 0)?.button || candidates[0] || null;
+    return scoredCandidates.find(candidate => candidate.score > 0)?.button || candidates[0]?.button || null;
   }
 
   /** Get the root element of the current pixel info panel.

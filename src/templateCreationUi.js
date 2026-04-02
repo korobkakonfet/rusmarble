@@ -178,6 +178,8 @@ export const createTemplateCreationUi = (deps = {}) => {
       backdrop.style.justifyContent = 'center';
       backdrop.style.padding = '12px';
       backdrop.style.background = 'rgba(0, 0, 0, 0.45)';
+      backdrop.style.backdropFilter = 'blur(16px) saturate(140%)';
+      backdrop.style.webkitBackdropFilter = 'blur(16px) saturate(140%)';
       backdrop.style.zIndex = '10050';
 
       const panel = document.createElement('section');
@@ -188,9 +190,11 @@ export const createTemplateCreationUi = (deps = {}) => {
       panel.style.overflow = 'auto';
       panel.style.background = 'var(--bm-panel-bg, rgba(20, 20, 20, 0.95))';
       panel.style.color = 'var(--bm-fg, #fff)';
-      panel.style.border = '1px solid var(--bm-border-strong, rgba(255, 255, 255, 0.25))';
+      panel.style.border = '1px solid var(--bm-glass-border, var(--bm-border-strong, rgba(255, 255, 255, 0.25)))';
       panel.style.borderRadius = '10px';
-      panel.style.boxShadow = '0 10px 30px rgba(0, 0, 0, 0.35)';
+      panel.style.boxShadow = 'var(--bm-glass-shadow, 0 10px 30px rgba(0, 0, 0, 0.35)), var(--bm-glass-inner-shadow, inset 0 1px 0 rgba(255, 255, 255, 0))';
+      panel.style.backdropFilter = 'blur(var(--bm-glass-blur, 18px)) saturate(var(--bm-glass-saturate, 160%))';
+      panel.style.webkitBackdropFilter = 'blur(var(--bm-glass-blur, 18px)) saturate(var(--bm-glass-saturate, 160%))';
       panel.style.padding = '12px';
       panel.style.display = 'flex';
       panel.style.flexDirection = 'column';
