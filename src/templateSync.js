@@ -677,6 +677,7 @@ export function createTemplateSync({
     buildColorFilterList: buildColorFilterListOverride,
     force = true,
     refreshUi = true,
+    replaceExistingMatches = false,
   } = {}) => {
     const statusHandler = typeof onStatus === 'function' ? onStatus : autoSyncOnStatus;
     const trimmedName = String(templateName ?? '').trim();
@@ -803,7 +804,8 @@ export function createTemplateSync({
         }
       }
 
-      for (const template of matchingRemoteTemplates) {
+      const templatesToReplace = replaceExistingMatches ? matchingTemplates : matchingRemoteTemplates;
+      for (const template of templatesToReplace) {
         if (template?.storageKey) {
           await templateManager.deleteTemplate(template.storageKey, {
             deferPersist: true,
@@ -843,6 +845,9 @@ export function createTemplateSync({
     buildTemplateFilterList: buildTemplateFilterListOverride,
     buildColorFilterList: buildColorFilterListOverride,
     refreshUi = true,
+    syncExisting = false,
+    remoteManual = false,
+    replaceExistingMatches = false,
   } = {}) => {
     const statusHandler = typeof onStatus === 'function' ? onStatus : autoSyncOnStatus;
     const trimmedName = String(templateName ?? '').trim();
@@ -856,6 +861,42 @@ export function createTemplateSync({
     try {
       let payload = null;
       const streams = getConfiguredStreams();
+      if (syncExisting) {
+        let syncedTemplate = null;
+        let syncedStream = null;
+        for (const stream of streams) {
+          try {
+            syncedTemplate = await syncTemplateByName({
+              templateName: trimmedName,
+              remoteStream: stream,
+              onStatus,
+              onError,
+              defaultEnabled,
+              remoteManual,
+              syncToggleList,
+              buildTemplateFilterList: buildTemplateFilterListOverride,
+              buildColorFilterList: buildColorFilterListOverride,
+              force: true,
+              refreshUi,
+              replaceExistingMatches,
+            });
+            syncedStream = stream;
+            break;
+          } catch (err) {
+            if (/HTTP 404/.test(String(err?.message || ''))) {
+              continue;
+            }
+            throw err;
+          }
+        }
+        if (!syncedTemplate) {
+          throw new Error(`Template "${trimmedName}" was not found in configured streams: ${streams.join(', ')}.`);
+        }
+        if (typeof statusHandler === 'function') {
+          statusHandler(`Synced "${trimmedName}" from stream "${syncedStream}" as a tracked template.`);
+        }
+        return syncedTemplate;
+      }
       for (const stream of streams) {
         try {
           payload = await readTemplatePayloadFromStream({
@@ -875,6 +916,27 @@ export function createTemplateSync({
         throw new Error(`Template "${trimmedName}" was not found in configured streams: ${streams.join(', ')}.`);
       }
 
+      const matchingTemplates = replaceExistingMatches
+        ? (templateManager.templatesArray ?? []).filter((template) => {
+          if (!template) return false;
+          const store = template.storageKey
+            ? templateManager.templatesJSON?.templates?.[template.storageKey]
+            : null;
+          return (
+            template.displayName === trimmedName
+            || template.remoteName === trimmedName
+            || store?.name === trimmedName
+            || store?.remoteName === trimmedName
+          );
+        })
+        : [];
+      const preferredTemplate = matchingTemplates.find((template) => template?.enabled) ?? matchingTemplates[0] ?? null;
+      const preferredStore = preferredTemplate?.storageKey
+        ? templateManager.templatesJSON?.templates?.[preferredTemplate.storageKey]
+        : null;
+      const existingPalette = preferredTemplate?.colorPalette ? { ...preferredTemplate.colorPalette } : null;
+      const nextEnabled = preferredTemplate?.enabled ?? preferredStore?.enabled ?? defaultEnabled;
+
       const created = await templateManager.createTemplate(
         payload.file,
         trimmedName,
@@ -883,10 +945,35 @@ export function createTemplateSync({
         {
           convertToPalette: true,
           normalizeSamplesToPalette: true,
-          enabled: defaultEnabled,
+          enabled: nextEnabled,
         }
       );
+      if (created && existingPalette) {
+        Object.entries(existingPalette).forEach(([rgb, metaValue]) => {
+          if (created.colorPalette?.[rgb]) {
+            created.colorPalette[rgb].enabled = !!metaValue?.enabled;
+          }
+        });
+        const createdStore = created?.storageKey
+          ? templateManager.templatesJSON?.templates?.[created.storageKey]
+          : null;
+        if (createdStore) {
+          createdStore.palette = created.colorPalette;
+        }
+      }
+      for (const template of matchingTemplates) {
+        if (template?.storageKey) {
+          await templateManager.deleteTemplate(template.storageKey, {
+            deferPersist: true,
+            deferListRebuild: true,
+            suppressStatus: true,
+          });
+        }
+      }
       if (refreshUi) {
+        if (matchingTemplates.length > 0) {
+          await templateManager.storeTemplates();
+        }
         safeCall(syncToggleList);
         safeCall(buildTemplateFilterListOverride ?? buildTemplateFilterList);
         safeCall(buildColorFilterListOverride ?? autoSyncBuildColorFilterList);

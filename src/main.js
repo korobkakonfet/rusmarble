@@ -4371,13 +4371,13 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
     if (!animationFrameId) {
       animationFrameId = requestAnimationFrame(panLoop);
     }
-  });
+  }, true);
 
   document.addEventListener('keyup', (event) => {
     const key = event.key.toLowerCase();
     keysPressed.delete(key);
     // The loop will stop itself on the next frame if no keys are pressed
-  });
+  }, true);
 
   apiManager.spontaneousResponseListener(overlayMain); // Reads spontaneous fetch responces
 
@@ -4750,7 +4750,31 @@ function scoreCloseLikeControl(control) {
 function clickElementLikeUser(element) {
   if (!(element instanceof HTMLElement)) return false;
   try {
-    element.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 }));
+    if (typeof element.focus === 'function') {
+      try {
+        element.focus({ preventScroll: true });
+      } catch (_) {
+        element.focus();
+      }
+    }
+    if (typeof PointerEvent === 'function') {
+      element.dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        pointerId: 1,
+        pointerType: 'mouse',
+        isPrimary: true,
+      }));
+      element.dispatchEvent(new PointerEvent('pointerup', {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        pointerId: 1,
+        pointerType: 'mouse',
+        isPrimary: true,
+      }));
+    }
     element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
     element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, button: 0 }));
     element.click();
@@ -4761,6 +4785,35 @@ function clickElementLikeUser(element) {
 }
 
 function closePixelInfoWindows() {
+  let closedAny = false;
+  try {
+    const directCloseButton = apiManager?.getCloseButton?.();
+    if (directCloseButton && clickElementLikeUser(directCloseButton)) {
+      closedAny = true;
+    }
+  } catch (_) {}
+
+  const directCloseCandidates = Array.from(document.querySelectorAll(
+    '.rounded-t-box button[aria-label="Close"], dialog.modal button[aria-label="Close"], dialog button[aria-label="Close"], .modal button[aria-label="Close"]'
+  ))
+    .filter((button) => button instanceof HTMLElement)
+    .filter((button) => isElementActuallyVisible(button))
+    .map((button) => {
+      const container = button.closest('.rounded-t-box, dialog.modal, dialog, .modal');
+      const text = getNormalizedElementText(container);
+      let score = scoreCloseLikeControl(button);
+      if (container && isElementActuallyVisible(container)) score += 4;
+      if (/\bpaint\b/.test(text) || /\bshare\b/.test(text)) score += 6;
+      if (/\bnot painted\b/.test(text) || /\bpainted by\b/.test(text) || /\bno alliance\b/.test(text)) score += 4;
+      if (/#\s*\d+\b/.test(text)) score += 2;
+      return { button, score };
+    })
+    .sort((left, right) => right.score - left.score);
+  for (const { button, score } of directCloseCandidates) {
+    if (score <= 0) continue;
+    closedAny = clickElementLikeUser(button) || closedAny;
+  }
+
   const visitedContainers = new Set();
   const headings = Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, h6, [role="heading"]'))
     .filter((heading) => heading instanceof HTMLElement)
@@ -4775,13 +4828,27 @@ function closePixelInfoWindows() {
         .sort((left, right) => scoreCloseLikeControl(right) - scoreCloseLikeControl(left));
       if (closeControls.length > 0) {
         visitedContainers.add(container);
-        clickElementLikeUser(closeControls[0]);
+        closedAny = clickElementLikeUser(closeControls[0]) || closedAny;
         break;
       }
       container = container.parentElement;
       depth += 1;
     }
   }
+  return closedAny;
+}
+
+function schedulePixelInfoCloseBurst() {
+  closePixelInfoWindows();
+  requestAnimationFrame(() => {
+    closePixelInfoWindows();
+  });
+  window.setTimeout(() => {
+    closePixelInfoWindows();
+  }, 80);
+  window.setTimeout(() => {
+    closePixelInfoWindows();
+  }, 220);
 }
 
 function normalizeTemplateJumpOriginMode(value) {
@@ -5007,7 +5074,7 @@ async function jumpToNextUnpaintedTemplatePixel(options = null) {
   try {
     const originMode = normalizeTemplateJumpOriginMode(options?.originMode);
     const originLabel = getTemplateJumpOriginLabel(originMode);
-    closePixelInfoWindows();
+    schedulePixelInfoCloseBurst();
     const activeTemplates = (templateManager.templatesArray ?? []).filter((template) => template?.enabled);
     if (!activeTemplates.length) {
       overlayMain.handleDisplayStatus('No active templates enabled.');
@@ -5114,7 +5181,7 @@ async function jumpToNextUnpaintedTemplatePixel(options = null) {
     await teleportToTileCoords(bestCandidate.coords.slice(0, 2), bestCandidate.coords.slice(2, 4), {
       revealPixelInfo: false,
     });
-    closePixelInfoWindows();
+    schedulePixelInfoCloseBurst();
     applyIntegerZoomLevel(NEXT_TEMPLATE_PIXEL_ZOOM_LEVEL);
     const templateLabel = bestCandidate.templateName ? ` in "${bestCandidate.templateName}"` : '';
     const originSuffix = originMode === 'center' ? '' : ` from ${originLabel}`;
@@ -8141,6 +8208,16 @@ async function buildOverlayMain() {
             info.origin ?? info.point ?? info.corner ?? info.from ?? 'center'
           )}`,
         };
+      case 'close-pixel-info':
+      case 'close-pixel-info-window':
+      case 'close-pixel-info-panel':
+      case 'pixel-info-close':
+      case 'close-info':
+        return {
+          kind: 'close-pixel-info',
+          buttonText: 'Close',
+          label: info.label ?? 'Close pixel info',
+        };
       default:
         return null;
     }
@@ -8162,6 +8239,26 @@ async function buildOverlayMain() {
     return Object.entries(data);
   };
 
+  const getRusMarbleTemplateList = () => (
+    (templateManager.templatesArray ?? []).map((template, index) => {
+      const store = template?.storageKey
+        ? (templateManager.templatesJSON?.templates?.[template.storageKey] ?? {})
+        : {};
+      const isRemote = template?.isRemote === true || store?.remote === true;
+      return {
+        index,
+        storageKey: template?.storageKey ?? null,
+        displayName: template?.displayName ?? store?.name ?? null,
+        remoteName: template?.remoteName ?? store?.remoteName ?? null,
+        enabled: template?.enabled ?? store?.enabled ?? true,
+        isRemote,
+        remoteStream: isRemote ? (template?.remoteStream ?? store?.remoteStream ?? null) : null,
+        coords: Array.isArray(template?.coords) ? [...template.coords] : null,
+        sortID: template?.sortID ?? null,
+      };
+    })
+  );
+
   const executeRusMarbleControlAction = async (controlAction) => {
     if (!controlAction) return;
     switch (controlAction.kind) {
@@ -8174,13 +8271,14 @@ async function buildOverlayMain() {
           buildTemplateFilterList: () => window.buildTemplateFilterList?.(),
           buildColorFilterList: () => window.buildColorFilterList?.(),
           defaultEnabled: true,
+          replaceExistingMatches: true,
         });
         if (createdTemplate) {
-          const statusMessage = `Template "${controlAction.templateName}" imported from event control.`;
+          const statusMessage = `Template "${controlAction.templateName}" added or updated as a local template from event control.`;
           overlayMain.handleDisplayStatus(statusMessage);
           return statusMessage;
         }
-        return `Template "${controlAction.templateName}" import requested.`;
+        return `Template "${controlAction.templateName}" add/update requested.`;
       }
       case 'set-template-enabled': {
         const { matches, missing } = findTemplatesByNames(controlAction.templateNames);
@@ -8211,6 +8309,12 @@ async function buildOverlayMain() {
       case 'jump-next-template-pixel':
         await jumpToNextUnpaintedTemplatePixel({ originMode: controlAction.originMode });
         return `Jump requested from ${getTemplateJumpOriginLabel(controlAction.originMode)}.`;
+      case 'close-pixel-info': {
+        schedulePixelInfoCloseBurst();
+        const statusMessage = 'Close pixel info requested.';
+        overlayMain.handleDisplayStatus(statusMessage);
+        return statusMessage;
+      }
       default:
         throw new Error('Unsupported RusMarble control action.');
     }
@@ -8251,6 +8355,10 @@ async function buildOverlayMain() {
           buildTemplateFilterList();
           dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: 'Template list rebuild requested.' });
           return;
+        case 'get-template-list':
+        case 'list-templates':
+          dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: getRusMarbleTemplateList() });
+          return;
         case 'build-color-filter-list':
           buildColorFilterList();
           dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: 'Color list rebuild requested.' });
@@ -8281,7 +8389,7 @@ async function buildOverlayMain() {
     const script = document.createElement('script');
     script.textContent = `
       (() => {
-        if (window.bmControl && window.buildEventList && window.buildTemplateFilterList && window.buildColorFilterList) {
+        if (window.bmControl && window.buildEventList && window.buildTemplateFilterList && window.buildColorFilterList && window.getTemplateList) {
           return;
         }
         const requestEventName = ${JSON.stringify(BM_CONSOLE_REQUEST_EVENT)};
@@ -8326,6 +8434,7 @@ async function buildOverlayMain() {
         window.bmControl = (payload) => sendRusMarbleCommand('control', payload);
         window.buildEventList = () => sendRusMarbleCommand('build-event-list');
         window.buildTemplateFilterList = () => sendRusMarbleCommand('build-template-filter-list');
+        window.getTemplateList = () => sendRusMarbleCommand('get-template-list');
         window.buildColorFilterList = () => sendRusMarbleCommand('build-color-filter-list');
         window.syncToggleList = () => sendRusMarbleCommand('sync-toggle-list');
       })();

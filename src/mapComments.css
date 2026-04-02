@@ -4,10 +4,14 @@
   --bm-comment-text-subtle: rgba(255, 255, 255, 0.88);
   --bm-comment-close-bg: rgba(255, 255, 255, 0.22);
   --bm-comment-close-bg-hover: rgba(255, 255, 255, 0.35);
+  --bm-comment-border: rgba(255, 255, 255, 0.18);
   --bm-comment-caret-width: 18px;
   --bm-comment-caret-height: 12px;
   --bm-comment-shadow-a: rgba(0, 0, 0, 0.1);
   --bm-comment-shadow-b: rgba(0, 0, 0, 0.2);
+  --bm-comment-shadow: 0 12px 28px rgba(0, 0, 0, 0.2);
+  --bm-comment-blur: 0px;
+  --bm-comment-saturate: 100%;
   position: absolute;
   inset: 0;
   pointer-events: none;
@@ -32,12 +36,13 @@ html[data-theme="halloween"] .bm-map-comment-layer {
   top: 0;
   transform: translate(-50%, calc(-100% - 20px));
   pointer-events: auto;
-  border: 0;
   margin: 0;
   padding: 8px 12px;
   max-width: 260px;
   border-radius: 12px;
-  background: var(--bm-comment-bg);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.04)),
+    var(--bm-comment-bg);
   color: var(--bm-comment-color);
   font-size: 12px;
   font-weight: 600;
@@ -46,6 +51,10 @@ html[data-theme="halloween"] .bm-map-comment-layer {
   word-break: break-word;
   overflow: visible;
   cursor: pointer;
+  border: 1px solid var(--bm-comment-border);
+  box-shadow: var(--bm-comment-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.26);
+  backdrop-filter: blur(var(--bm-comment-blur)) saturate(var(--bm-comment-saturate));
+  -webkit-backdrop-filter: blur(var(--bm-comment-blur)) saturate(var(--bm-comment-saturate));
   filter:
     drop-shadow(-1px -1px 2px var(--bm-comment-shadow-a))
     drop-shadow(1px 2px 2px var(--bm-comment-shadow-b));
@@ -95,8 +104,14 @@ html[data-theme="halloween"] .bm-map-comment-layer {
   max-width: 340px;
   padding: 12px 14px 13px;
   border-radius: 12px;
-  background: var(--bm-comment-bg);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.04)),
+    var(--bm-comment-bg);
   color: var(--bm-comment-color);
+  border: 1px solid var(--bm-comment-border);
+  box-shadow: var(--bm-comment-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.26);
+  backdrop-filter: blur(var(--bm-comment-blur)) saturate(var(--bm-comment-saturate));
+  -webkit-backdrop-filter: blur(var(--bm-comment-blur)) saturate(var(--bm-comment-saturate));
   filter:
     drop-shadow(-1px -1px 2px var(--bm-comment-shadow-a))
     drop-shadow(1px 2px 2px var(--bm-comment-shadow-b));

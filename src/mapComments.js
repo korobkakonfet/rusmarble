@@ -391,6 +391,7 @@ class MapCommentManagerImpl {
     const overlayRoot = document.getElementById('bm-overlay');
     if (!overlayRoot) return;
     const computed = getComputedStyle(overlayRoot);
+    const commentBg = computed.getPropertyValue('--bm-comment-bg').trim();
     const panelBg = computed.getPropertyValue('--bm-panel-bg').trim();
     const fg = computed.getPropertyValue('--bm-fg').trim();
     const muted = computed.getPropertyValue('--bm-muted').trim();
@@ -399,8 +400,12 @@ class MapCommentManagerImpl {
     const btnActive = computed.getPropertyValue('--bm-btn-active').trim();
     const borderStrong = computed.getPropertyValue('--bm-border-strong').trim();
     const subtleBg = computed.getPropertyValue('--bm-subtle-bg').trim();
+    const glassBlur = computed.getPropertyValue('--bm-glass-blur').trim();
+    const glassSaturate = computed.getPropertyValue('--bm-glass-saturate').trim();
+    const glassShadow = computed.getPropertyValue('--bm-glass-shadow').trim();
+    const glassBorder = computed.getPropertyValue('--bm-glass-border').trim();
 
-    if (panelBg) this.layer.style.setProperty('--bm-comment-bg', panelBg);
+    if (commentBg || panelBg) this.layer.style.setProperty('--bm-comment-bg', commentBg || panelBg);
     if (fg) this.layer.style.setProperty('--bm-comment-color', fg);
     if (muted) this.layer.style.setProperty('--bm-comment-text-subtle', muted);
     if (btn) this.layer.style.setProperty('--bm-comment-toggle-bg', btn);
@@ -408,6 +413,10 @@ class MapCommentManagerImpl {
     if (btnActive) this.layer.style.setProperty('--bm-comment-toggle-bg-off', btnActive);
     if (subtleBg) this.layer.style.setProperty('--bm-comment-close-bg', subtleBg);
     if (borderStrong) this.layer.style.setProperty('--bm-comment-close-bg-hover', borderStrong);
+    if (glassBlur) this.layer.style.setProperty('--bm-comment-blur', glassBlur);
+    if (glassSaturate) this.layer.style.setProperty('--bm-comment-saturate', glassSaturate);
+    if (glassShadow) this.layer.style.setProperty('--bm-comment-shadow', glassShadow);
+    if (glassBorder || borderStrong) this.layer.style.setProperty('--bm-comment-border', glassBorder || borderStrong);
   }
 
   installThemeObserver() {
