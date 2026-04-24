@@ -225,7 +225,7 @@ export default class ApiManager {
   #askServerForMe() {
     const allianceOrRankingButton = document.querySelector(".flex>.btn.btn-square.relative.shadow-md");
     const logoutButton = document.querySelector(".relative>.dropdown>.dropdown-content>section>button.btn");
-    if (allianceOrRankingButton !== undefined && logoutButton !== undefined) {
+    if (allianceOrRankingButton !== null && logoutButton !== null) {
       // logged in and not in painting mode
       // knock at the @me endpoint (only once per 10 seconds)
       const currentTime = Date.now();
@@ -243,7 +243,7 @@ export default class ApiManager {
           }
           consoleLog("Fetched user data", dataJSON);
           this.#applyUserData(dataJSON, Date.now());
-        });
+        }).catch(() => {});
         this.lastFetchedTime = currentTime;
       }
     }

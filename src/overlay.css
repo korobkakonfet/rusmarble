@@ -1687,6 +1687,52 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   color: var(--bm-danger);
 }
 
+.bm-remote-autocomplete-wrap {
+  position: relative;
+}
+
+.bm-remote-autocomplete-list {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 9110;
+  margin: 2px 0 0;
+  padding: 3px 0;
+  list-style: none;
+  background: var(--bm-panel-bg);
+  border: 1px solid var(--bm-glass-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(calc(var(--bm-glass-blur) * 0.8)) saturate(var(--bm-glass-saturate));
+  -webkit-backdrop-filter: blur(calc(var(--bm-glass-blur) * 0.8)) saturate(var(--bm-glass-saturate));
+  max-height: 180px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--bm-border-strong) transparent;
+}
+
+.bm-remote-autocomplete-list--open {
+  display: block;
+}
+
+.bm-remote-autocomplete-item {
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--bm-fg);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bm-remote-autocomplete-item:hover,
+.bm-remote-autocomplete-item--active {
+  background: var(--bm-subtle-bg);
+  color: var(--bm-fg);
+}
+
 .bm-text-template-window-actions {
   display: flex;
   justify-content: flex-end;
