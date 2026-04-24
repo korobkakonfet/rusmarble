@@ -181,7 +181,7 @@ export function base64ToUint8(base64) {
  * @since 0.74.0
  */
 export function selectAllCoordinateInputs(document) {
-  coords = [];
+  const coords = [];
 
   coords.push(document.querySelector('#bm-input-tx'));
   coords.push(document.querySelector('#bm-input-ty'));

@@ -4470,17 +4470,17 @@ function observeBlack() {
       if (!move) {
         move = document.createElement('button');
         move.id = 'bm-button-move';
-        move.textContent = 'Move â†‘';
+        move.textContent = 'Move Up';
         move.className = 'btn btn-soft';
         move.onclick = function() {
           const roundedBox = this.parentNode.parentNode.parentNode.parentNode; // Obtains the rounded box
-          const shouldMoveUp = (this.textContent == 'Move â†‘');
+          const shouldMoveUp = (this.textContent === 'Move Up');
           roundedBox.parentNode.className = roundedBox.parentNode.className.replace(shouldMoveUp ? 'bottom' : 'top', shouldMoveUp ? 'top' : 'bottom'); // Moves the rounded box to the top
           roundedBox.style.borderTopLeftRadius = shouldMoveUp ? '0px' : 'var(--radius-box)';
           roundedBox.style.borderTopRightRadius = shouldMoveUp ? '0px' : 'var(--radius-box)';
           roundedBox.style.borderBottomLeftRadius = shouldMoveUp ? 'var(--radius-box)' : '0px';
           roundedBox.style.borderBottomRightRadius = shouldMoveUp ? 'var(--radius-box)' : '0px';
-          this.textContent = shouldMoveUp ? 'Move â†“' : 'Move â†‘';
+          this.textContent = shouldMoveUp ? 'Move Down' : 'Move Up';
         }
 
         // Attempts to find the "Paint Pixel" element for anchoring
@@ -4909,6 +4909,70 @@ function clickElementLikeUser(element) {
   } catch (_) {
     return false;
   }
+}
+
+function getPaintPaletteRoot() {
+  const headings = Array.from(document.querySelectorAll('h1, h2, h3, [role="heading"]'))
+    .filter((heading) => heading instanceof HTMLElement)
+    .filter((heading) => isElementActuallyVisible(heading))
+    .filter((heading) => getNormalizedElementText(heading).startsWith('paint pixel'));
+  for (const heading of headings) {
+    const root = heading.closest('.rounded-t-box');
+    if (root instanceof HTMLElement && isElementActuallyVisible(root)) {
+      return root;
+    }
+  }
+  return null;
+}
+
+function isExtendedPaintPaletteOpen(root = getPaintPaletteRoot()) {
+  if (!(root instanceof HTMLElement)) return false;
+  return ['color-32', 'color-33', 'color-34', 'color-35', 'color-63']
+    .some((id) => {
+      const swatch = root.querySelector(`#${id}`);
+      return swatch instanceof HTMLElement && isElementActuallyVisible(swatch);
+    });
+}
+
+function getPaintPaletteExpandButton(root = getPaintPaletteRoot()) {
+  if (!(root instanceof HTMLElement)) return null;
+  const footerRow = Array.from(root.querySelectorAll('div.relative.h-12'))
+    .find((row) => row instanceof HTMLElement && isElementActuallyVisible(row));
+  if (!(footerRow instanceof HTMLElement)) return null;
+  const candidates = Array.from(footerRow.querySelectorAll('button'))
+    .filter((button) => button instanceof HTMLButtonElement)
+    .filter((button) => isElementActuallyVisible(button))
+    .filter((button) => !button.disabled)
+    .map((button) => {
+      const rect = button.getBoundingClientRect();
+      let score = 0;
+      if (button.classList.contains('btn-square')) score += 4;
+      if (button.classList.contains('shadow-md')) score += 2;
+      if (button.closest('.absolute.bottom-0.left-0')) score += 8;
+      if (getNormalizedElementText(button).includes('eraser')) score -= 20;
+      score -= rect.left / 1000;
+      return { button, score };
+    })
+    .sort((left, right) => right.score - left.score);
+  return candidates[0]?.button ?? null;
+}
+
+function ensureExtendedPaintPalette() {
+  const paletteRoot = getPaintPaletteRoot();
+  if (!(paletteRoot instanceof HTMLElement)) {
+    throw new Error('Paint palette is not open.');
+  }
+  if (isExtendedPaintPaletteOpen(paletteRoot)) {
+    return 'Paint palette is already extended.';
+  }
+  const expandButton = getPaintPaletteExpandButton(paletteRoot);
+  if (!(expandButton instanceof HTMLElement)) {
+    throw new Error('Paint palette expand button was not found.');
+  }
+  if (!clickElementLikeUser(expandButton)) {
+    throw new Error('Failed to click the paint palette expand button.');
+  }
+  return 'Paint palette expansion requested.';
 }
 
 function closePixelInfoWindows() {
@@ -6739,6 +6803,7 @@ async function buildOverlayMain() {
                 if (createMode === TEMPLATE_CREATE_MODE_REMOTE_NAME) {
                   const remoteTemplateConfig = await openRemoteTemplateBuilder({
                     configuredStreams: templateManager.getTemplateSyncStreams?.() ?? [DEFAULT_REMOTE_TEMPLATE_STREAM],
+                    fetchSuggestedNames: () => templateSync.fetchRemoteTemplateNames(),
                   });
                   if (!remoteTemplateConfig?.templateName) {
                     return;
@@ -8211,6 +8276,142 @@ async function buildOverlayMain() {
     return { matches, missing };
   };
 
+  const getRusMarbleColorEntries = (progressSnapshot = null, options = {}) => {
+    const visibleOnly = options?.visibleOnly === true;
+    const toggleStatus = templateManager.getPaletteToggledStatus();
+    const hideCompleted = templateManager.areCompletedColorsHidden();
+    const hideLocked = templateManager.areLockedColorsHidden();
+    const { paletteSum, combinedProgress } = progressSnapshot ?? templateManager.getOverallPerColorProgress();
+    const sortBy = templateManager.getSortBy();
+    const sortByParts = sortBy.split('-');
+    const keyFunction = sortByOptions[sortByParts[0]];
+    const compareFunction = (
+      sortByParts[1] === 'asc'
+        ? (a, b) => keyFunction(a) - keyFunction(b)
+        : (a, b) => keyFunction(b) - keyFunction(a)
+    );
+    const paletteSumSorted = Object.entries(paletteSum)
+      .map(([rgb, count]) => [rgb, combinedProgress[rgb]?.paintedAndEnabled ?? 0, count])
+      .sort(compareFunction);
+    const entries = [];
+    for (const [rgb, paintedCount, totalCount] of paletteSumSorted) {
+      const remainingCount = Math.max(0, totalCount - paintedCount);
+      const examplesEnabledCount = combinedProgress[rgb]?.examplesEnabled?.length ?? 0;
+      const meta = (
+        rgb === '#deface'
+          ? (rgbToMeta.get('222,250,206') ?? { id: 0, premium: false, name: 'Transparent' })
+          : rgbToMeta.get(rgb)
+      );
+      const rgbValue = rgb === '#deface'
+        ? [222, 250, 206]
+        : (/^\d{1,3},\d{1,3},\d{1,3}$/.test(rgb) ? rgb.split(',').map((channel) => Number(channel)) : null);
+      const colorId = typeof meta?.id === 'number' ? meta.id : null;
+      const colorName = rgb === 'other'
+        ? t('colors.other')
+        : (rgb === '#deface'
+          ? t('colors.transparent')
+          : (meta?.name || rgb));
+      const isUnlocked = colorId === null ? null : templateManager.isColorUnlocked(colorId);
+      const visibleInColorList = (() => {
+        if (hideLocked && rgb === 'other') return false;
+        if (hideCompleted && paintedCount === totalCount) return false;
+        if (hideLocked && colorId !== null && !isUnlocked) return false;
+        if (remainingCount > 0 && examplesEnabledCount === 0 && rgb !== 'other') return false;
+        return true;
+      })();
+      if (visibleOnly && !visibleInColorList) continue;
+      entries.push({
+        key: rgb,
+        rgb: rgbValue,
+        rgbText: Array.isArray(rgbValue) ? rgbValue.join(',') : null,
+        name: colorName,
+        id: colorId,
+        premium: meta?.premium === true,
+        enabled: toggleStatus[rgb] ?? true,
+        unlocked: isUnlocked,
+        totalCount,
+        paintedCount,
+        remainingCount,
+        examplesEnabledCount,
+        visibleInColorList,
+      });
+    }
+    return entries;
+  };
+
+  const getRusMarbleColorTargetsFromInfo = (info) => {
+    if (!info || typeof info !== 'object') return [];
+    const rawTargets = [
+      ...(Array.isArray(info.colors) ? info.colors : []),
+      ...(Array.isArray(info.colorNames) ? info.colorNames : []),
+      ...(Array.isArray(info.colorIds) ? info.colorIds : []),
+      ...(Array.isArray(info.rgbValues) ? info.rgbValues : []),
+    ];
+    if (rawTargets.length === 0) {
+      rawTargets.push(
+        info.color
+        ?? info.colorName
+        ?? info.colorId
+        ?? info.rgb
+        ?? info.name
+        ?? ''
+      );
+    }
+    return [...new Set(
+      rawTargets
+        .map((target) => String(target ?? '').trim())
+        .filter(Boolean)
+    )];
+  };
+
+  const getRusMarbleColorLookupTokens = (entry) => {
+    const tokens = new Set();
+    const addToken = (value) => {
+      const token = String(value ?? '').trim().toLowerCase();
+      if (token) tokens.add(token);
+    };
+    addToken(entry?.key);
+    addToken(entry?.name);
+    addToken(entry?.rgbText);
+    if (typeof entry?.id === 'number') addToken(entry.id);
+    if (entry?.key === '#deface') {
+      addToken('transparent');
+      addToken('#deface');
+      addToken('222,250,206');
+      addToken(0);
+    }
+    if (entry?.key === 'other') {
+      addToken('other');
+    }
+    return tokens;
+  };
+
+  const findColorsByTargets = (colorTargets) => {
+    const safeTargets = Array.isArray(colorTargets) ? colorTargets : [];
+    const uniqueTargets = [...new Set(
+      safeTargets
+        .map((colorTarget) => String(colorTarget ?? '').trim())
+        .filter(Boolean)
+    )];
+    const availableColors = getRusMarbleColorEntries();
+    const matches = [];
+    const missing = [];
+    uniqueTargets.forEach((colorTarget) => {
+      const lookup = colorTarget.toLowerCase();
+      const foundColors = availableColors.filter((entry) => getRusMarbleColorLookupTokens(entry).has(lookup));
+      if (!foundColors.length) {
+        missing.push(colorTarget);
+        return;
+      }
+      foundColors.forEach((entry) => {
+        if (!matches.some((match) => match?.key === entry.key)) {
+          matches.push(entry);
+        }
+      });
+    });
+    return { matches, missing };
+  };
+
   const setMatchedTemplatesEnabledState = async (matchedTemplates, enabled) => {
     const safeTemplates = Array.isArray(matchedTemplates) ? matchedTemplates.filter(Boolean) : [];
     let changedCount = 0;
@@ -8237,6 +8438,36 @@ async function buildOverlayMain() {
     return { matched: safeTemplates.length, changed: changedCount };
   };
 
+  const setMatchedColorsEnabledState = async (matchedColors, enabled) => {
+    const colorKeys = [...new Set(
+      (Array.isArray(matchedColors) ? matchedColors : [])
+        .map((entry) => String(entry?.key ?? '').trim())
+        .filter(Boolean)
+    )];
+    let changedCount = 0;
+    for (const template of (templateManager.templatesArray ?? [])) {
+      if (!template?.colorPalette) continue;
+      for (const colorKey of colorKeys) {
+        const paletteEntry = template.colorPalette[colorKey];
+        if (!paletteEntry) continue;
+        const nextEnabled = Boolean(enabled);
+        if (paletteEntry.enabled === nextEnabled) continue;
+        paletteEntry.enabled = nextEnabled;
+        changedCount += 1;
+      }
+    }
+    if (!changedCount) {
+      return { matched: colorKeys.length, changed: 0 };
+    }
+    syncToggleList();
+    buildColorFilterList();
+    await templateManager.createOverlayOnMapVisibleFirst();
+    if (templateManager.isErrorMapShown() && templateManager.isErrorMapOnlyEnabledColorsShown()) {
+      forceRefreshTiles();
+    }
+    return { matched: colorKeys.length, changed: changedCount };
+  };
+
   const normalizeRusMarbleControlAction = (info) => {
     if (!info || typeof info !== 'object') return null;
     const rawAction = String(
@@ -8250,6 +8481,7 @@ async function buildOverlayMain() {
     const templateNames = Array.isArray(info.templateNames)
       ? info.templateNames.map((entry) => String(entry ?? '').trim()).filter(Boolean)
       : (singleTemplateName ? [singleTemplateName] : []);
+    const colorTargets = getRusMarbleColorTargetsFromInfo(info);
     const enabledValue = parseBooleanLike(info.enabled ?? info.value ?? null);
     switch (rawAction) {
       case 'add-template':
@@ -8315,6 +8547,57 @@ async function buildOverlayMain() {
           buttonText: 'Enable All',
           label: info.label ?? 'Enable all templates',
         };
+      case 'enable-color':
+      case 'enable-colors':
+      case 'color-enable':
+        if (!colorTargets.length) return null;
+        return {
+          kind: 'set-color-enabled',
+          enabled: true,
+          colorTargets,
+          buttonText: 'Enable Colors',
+          label: info.label ?? `Enable color${colorTargets.length === 1 ? '' : 's'}: ${colorTargets.join(', ')}`,
+        };
+      case 'disable-color':
+      case 'disable-colors':
+      case 'color-disable':
+        if (!colorTargets.length) return null;
+        return {
+          kind: 'set-color-enabled',
+          enabled: false,
+          colorTargets,
+          buttonText: 'Disable Colors',
+          label: info.label ?? `Disable color${colorTargets.length === 1 ? '' : 's'}: ${colorTargets.join(', ')}`,
+        };
+      case 'toggle-color':
+      case 'toggle-colors':
+      case 'color-toggle':
+        if (!colorTargets.length || enabledValue === null) return null;
+        return {
+          kind: 'set-color-enabled',
+          enabled: enabledValue,
+          colorTargets,
+          buttonText: enabledValue ? 'Enable Colors' : 'Disable Colors',
+          label: info.label ?? `${enabledValue ? 'Enable' : 'Disable'} color${colorTargets.length === 1 ? '' : 's'}: ${colorTargets.join(', ')}`,
+        };
+      case 'disable-all-colors':
+      case 'colors-disable-all':
+      case 'color-disable-all':
+        return {
+          kind: 'set-all-colors-enabled',
+          enabled: false,
+          buttonText: 'Disable All Colors',
+          label: info.label ?? 'Disable all colors',
+        };
+      case 'enable-all-colors':
+      case 'colors-enable-all':
+      case 'color-enable-all':
+        return {
+          kind: 'set-all-colors-enabled',
+          enabled: true,
+          buttonText: 'Enable All Colors',
+          label: info.label ?? 'Enable all colors',
+        };
       case 'jump':
       case 'j':
       case 'jump-next-template-pixel':
@@ -8344,6 +8627,19 @@ async function buildOverlayMain() {
           kind: 'close-pixel-info',
           buttonText: 'Close',
           label: info.label ?? 'Close pixel info',
+        };
+      case 'open-extended-palette':
+      case 'open-extended-paint-palette':
+      case 'extend-palette':
+      case 'extend-paint-palette':
+      case 'palette-extend':
+      case 'palette-expand':
+      case 'expand-palette':
+      case 'expand-paint-palette':
+        return {
+          kind: 'open-extended-palette',
+          buttonText: 'Palette',
+          label: info.label ?? 'Open extended palette',
         };
       default:
         return null;
@@ -8385,6 +8681,8 @@ async function buildOverlayMain() {
       };
     })
   );
+
+  const getRusMarbleColorList = () => getRusMarbleColorEntries();
 
   const executeRusMarbleControlAction = async (controlAction) => {
     if (!controlAction) return;
@@ -8433,12 +8731,43 @@ async function buildOverlayMain() {
         overlayMain.handleDisplayStatus(statusMessage);
         return statusMessage;
       }
+      case 'set-color-enabled': {
+        const { matches, missing } = findColorsByTargets(controlAction.colorTargets);
+        if (!matches.length) {
+          throw new Error(`Color${controlAction.colorTargets.length === 1 ? '' : 's'} not found: ${controlAction.colorTargets.join(', ')}.`);
+        }
+        const result = await setMatchedColorsEnabledState(matches, controlAction.enabled);
+        const actionLabel = controlAction.enabled ? 'Enabled' : 'Disabled';
+        let statusMessage = `${actionLabel} ${result.changed || result.matched} color${(result.changed || result.matched) === 1 ? '' : 's'}.`;
+        if (missing.length) {
+          statusMessage += ` Missing: ${missing.join(', ')}.`;
+        }
+        overlayMain.handleDisplayStatus(statusMessage);
+        return statusMessage;
+      }
+      case 'set-all-colors-enabled': {
+        const colors = getRusMarbleColorEntries();
+        if (!colors.length) {
+          throw new Error('No colors are available.');
+        }
+        const result = await setMatchedColorsEnabledState(colors, controlAction.enabled);
+        const statusMessage = (
+          `${controlAction.enabled ? 'Enabled' : 'Disabled'} all colors${result.changed ? ` (${result.changed} changed)` : ''}.`
+        );
+        overlayMain.handleDisplayStatus(statusMessage);
+        return statusMessage;
+      }
       case 'jump-next-template-pixel':
         await jumpToNextUnpaintedTemplatePixel({ originMode: controlAction.originMode });
         return `Jump requested from ${getTemplateJumpOriginLabel(controlAction.originMode)}.`;
       case 'close-pixel-info': {
         schedulePixelInfoCloseBurst();
         const statusMessage = 'Close pixel info requested.';
+        overlayMain.handleDisplayStatus(statusMessage);
+        return statusMessage;
+      }
+      case 'open-extended-palette': {
+        const statusMessage = ensureExtendedPaintPalette();
         overlayMain.handleDisplayStatus(statusMessage);
         return statusMessage;
       }
@@ -8486,6 +8815,10 @@ async function buildOverlayMain() {
         case 'list-templates':
           dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: getRusMarbleTemplateList() });
           return;
+        case 'get-color-list':
+        case 'list-colors':
+          dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: getRusMarbleColorList() });
+          return;
         case 'build-color-filter-list':
           buildColorFilterList();
           dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: 'Color list rebuild requested.' });
@@ -8516,7 +8849,7 @@ async function buildOverlayMain() {
     const script = document.createElement('script');
     script.textContent = `
       (() => {
-        if (window.bmControl && window.buildEventList && window.buildTemplateFilterList && window.buildColorFilterList && window.getTemplateList) {
+        if (window.bmControl && window.buildEventList && window.buildTemplateFilterList && window.buildColorFilterList && window.getTemplateList && window.getColorList) {
           return;
         }
         const requestEventName = ${JSON.stringify(BM_CONSOLE_REQUEST_EVENT)};
@@ -8562,6 +8895,7 @@ async function buildOverlayMain() {
         window.buildEventList = () => sendRusMarbleCommand('build-event-list');
         window.buildTemplateFilterList = () => sendRusMarbleCommand('build-template-filter-list');
         window.getTemplateList = () => sendRusMarbleCommand('get-template-list');
+        window.getColorList = () => sendRusMarbleCommand('get-color-list');
         window.buildColorFilterList = () => sendRusMarbleCommand('build-color-filter-list');
         window.syncToggleList = () => sendRusMarbleCommand('sync-toggle-list');
       })();

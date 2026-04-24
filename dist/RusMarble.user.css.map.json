@@ -332,5 +332,11 @@
   "bm-help": "bm-5a",
   "bm-link": "bm-5b",
   "bm-fg": "bm-5c",
-  "bm-bg": "bm-5d"
+  "bm-bg": "bm-5d",
+  "bm-remote-template-namelist": "bm-6d",
+  "bm-remote-autocomplete-item--active": "bm-5p",
+  "bm-remote-autocomplete-list--open": "bm-5u",
+  "bm-remote-autocomplete-wrap": "bm-6d",
+  "bm-remote-autocomplete-list": "bm-6e",
+  "bm-remote-autocomplete-item": "bm-6f"
 }
