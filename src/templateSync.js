@@ -1066,9 +1066,21 @@ export function createTemplateSync({
     }
   };
 
+  const fetchRemoteTemplateNames = async () => {
+    const url = `${templateSyncBaseUrl}/templates?stream=all`;
+    const response = await gmRequestWithTimeout(url, 'json', 'Autocomplete');
+    assertResponseOk(response, 'Autocomplete');
+    const data = getResponseData(response, 'Autocomplete') ?? {};
+    const items = Array.isArray(data) ? data : (Array.isArray(data?.['templates']) ? data['templates'] : []);
+    return items
+      .map((entry) => parseTemplateEntry(entry, DEFAULT_TEMPLATE_STREAM).templateName)
+      .filter((name) => !!name);
+  };
+
   return {
     checkTemplateUpdates,
     importTemplateByName,
+    fetchRemoteTemplateNames,
     startTemplateUpdatePolling,
     stopTemplateUpdatePolling,
     resetTemplateUpdateBadge,

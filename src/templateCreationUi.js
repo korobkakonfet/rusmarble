@@ -642,6 +642,7 @@ export const createTemplateCreationUi = (deps = {}) => {
       return unique.length ? unique : ['root'];
     })();
     const initialTemplateName = String(options?.initialTemplateName ?? '').trim();
+    const fetchSuggestedNames = typeof options?.fetchSuggestedNames === 'function' ? options.fetchSuggestedNames : null;
     return new Promise((resolve) => {
       const panel = document.createElement('section');
       panel.id = 'bm-remote-template-window';
@@ -679,10 +680,20 @@ export const createTemplateCreationUi = (deps = {}) => {
       const nameInput = document.createElement('input');
       nameInput.type = 'text';
       nameInput.className = 'bm-text-template-window-number';
+      nameInput.setAttribute('autocomplete', 'off');
       nameInput.placeholder = tt('dialog.remote.templateNamePlaceholder', 'Enter remote template name...');
       nameInput.value = initialTemplateName;
+
+      const nameInputWrap = document.createElement('div');
+      nameInputWrap.className = 'bm-remote-autocomplete-wrap';
+      nameInputWrap.appendChild(nameInput);
+
+      const nameDropdown = document.createElement('ul');
+      nameDropdown.className = 'bm-remote-autocomplete-list';
+      nameInputWrap.appendChild(nameDropdown);
+
       nameGroup.appendChild(nameLabel);
-      nameGroup.appendChild(nameInput);
+      nameGroup.appendChild(nameInputWrap);
       body.appendChild(nameGroup);
 
       const controls = document.createElement('div');
@@ -806,10 +817,6 @@ export const createTemplateCreationUi = (deps = {}) => {
       });
       cancelBtn.addEventListener('click', () => close(null));
       importBtn.addEventListener('click', () => submit());
-      nameInput.addEventListener('input', () => {
-        errorOutput.textContent = '';
-        syncImportState();
-      });
 
       head.addEventListener('mousedown', (event) => {
         if (event.button !== 0) return;
@@ -847,6 +854,90 @@ export const createTemplateCreationUi = (deps = {}) => {
       syncImportState();
       nameInput.focus();
       nameInput.select();
+
+      let allSuggestedNames = [];
+      let activeIndex = -1;
+
+      const closeDropdown = () => {
+        nameDropdown.innerHTML = '';
+        nameDropdown.classList.remove('bm-remote-autocomplete-list--open');
+        activeIndex = -1;
+      };
+
+      const renderDropdown = (names) => {
+        nameDropdown.innerHTML = '';
+        activeIndex = -1;
+        if (!names.length) { closeDropdown(); return; }
+        names.forEach((name, i) => {
+          const li = document.createElement('li');
+          li.className = 'bm-remote-autocomplete-item';
+          li.textContent = name;
+          li.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            nameInput.value = name;
+            errorOutput.textContent = '';
+            syncImportState();
+            closeDropdown();
+          });
+          nameDropdown.appendChild(li);
+        });
+        nameDropdown.classList.add('bm-remote-autocomplete-list--open');
+      };
+
+      const setActive = (index) => {
+        const items = nameDropdown.querySelectorAll('.bm-remote-autocomplete-item');
+        items.forEach((el, i) => el.classList.toggle('bm-remote-autocomplete-item--active', i === index));
+        activeIndex = index;
+        if (index >= 0 && items[index]) items[index].scrollIntoView({ block: 'nearest' });
+      };
+
+      const filterAndShow = () => {
+        const query = nameInput.value.trim().toLowerCase();
+        if (!query) { closeDropdown(); return; }
+        const filtered = allSuggestedNames.filter((n) => n.toLowerCase().includes(query));
+        renderDropdown(filtered.slice(0, 50));
+      };
+
+      nameInput.addEventListener('input', () => {
+        errorOutput.textContent = '';
+        syncImportState();
+        filterAndShow();
+      });
+
+      nameInput.addEventListener('focus', () => {
+        if (nameInput.value.trim()) filterAndShow();
+      });
+
+      nameInput.addEventListener('blur', () => {
+        setTimeout(closeDropdown, 120);
+      });
+
+      nameInput.addEventListener('keydown', (e) => {
+        if (!nameDropdown.classList.contains('bm-remote-autocomplete-list--open')) return;
+        const items = nameDropdown.querySelectorAll('.bm-remote-autocomplete-item');
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          setActive(Math.min(activeIndex + 1, items.length - 1));
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          setActive(Math.max(activeIndex - 1, 0));
+        } else if (e.key === 'Enter' && activeIndex >= 0) {
+          e.stopImmediatePropagation();
+          nameInput.value = items[activeIndex].textContent;
+          syncImportState();
+          closeDropdown();
+        } else if (e.key === 'Escape') {
+          closeDropdown();
+        }
+      }, true);
+
+      if (fetchSuggestedNames) {
+        fetchSuggestedNames().then((names) => {
+          if (closed || !Array.isArray(names)) return;
+          allSuggestedNames = names;
+          if (nameInput.value.trim()) filterAndShow();
+        }).catch(() => {});
+      }
     });
   };
 

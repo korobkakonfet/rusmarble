@@ -1328,9 +1328,9 @@ export default class TemplateManager {
   getCompletedColors() {
     this.getOverallPerColorProgress();
     const result = new Set();
-    for (let colorId = 0, mask = 1; colorId < 64; colorId++, mask <<= 1) {
-      if (this.completedColorsBitmap & mask) result.add(colorId);
-    };
+    for (let colorId = 0; colorId < 64; colorId++) {
+      if (this.isColorCompleted(colorId)) result.add(colorId);
+    }
     return result;
   }
 

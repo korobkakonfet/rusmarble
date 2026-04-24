@@ -653,7 +653,7 @@ export default class Overlay {
   */
   handleDrag(moveMe, iMoveThings) {
     let isDragging = false;
-    let offsetX, offsetY = 0;
+    let offsetX = 0, offsetY = 0;
     let animationFrame = null;
     let currentX = 0;
     let currentY = 0;
