@@ -26,6 +26,7 @@ const parsePackedRgbKey = (key) => {
   }
   return packRgb(red, green, blue);
 };
+const _numberFormat = new Intl.NumberFormat();
 const knownPalettePackedColors = (() => {
   const packedSet = new Set();
   for (const key of rgbToMeta.keys()) {
@@ -194,6 +195,7 @@ export default class TemplateManager {
     this.hideLockedColors = false; 
     this.largestSeenSortID = 0; // Even a safer approach: recording the largest storage Keys that have been used in this session. Don't remove anything here.
     this.importPromise = Promise.resolve();
+    this._visiblePrefixCache = null; // { key: string, result: Set }
   }
 
   /** Retrieves the pixel art canvas.
@@ -401,7 +403,7 @@ export default class TemplateManager {
     // ==================== PIXEL COUNT DISPLAY SYSTEM ====================
     // Display pixel count statistics with internationalized number formatting
     // This provides immediate feedback to users about template complexity and size
-    const pixelCountFormatted = new Intl.NumberFormat().format(template.pixelCount);
+    const pixelCountFormatted = _numberFormat.format(template.pixelCount);
     if (!suppressStatus) {
       this.overlay.handleDisplayStatus(`Template created at ${coords.join(', ')}! Total pixels: ${pixelCountFormatted}`);
     }
@@ -694,9 +696,9 @@ export default class TemplateManager {
     const totalRequired = this.templatesArray.reduce((sum, template) =>
       sum + (template.enabled ? (template.requiredPixelCount || template.pixelCount || 0) : 0), 0);
 
-    const paintedStr = new Intl.NumberFormat().format(aggPainted);
-    const requiredStr = new Intl.NumberFormat().format(totalRequired);
-    const wrongStr = new Intl.NumberFormat().format(totalRequired - aggPainted);
+    const paintedStr = _numberFormat.format(aggPainted);
+    const requiredStr = _numberFormat.format(totalRequired);
+    const wrongStr = _numberFormat.format(totalRequired - aggPainted);
 
     this.overlay.handleDisplayStatus(
       `Displaying ${enabledTemplateCount} template${enabledTemplateCount == 1 ? '' : 's'}.\nPainted ${paintedStr} / ${requiredStr} • Wrong ${wrongStr}`
@@ -858,7 +860,8 @@ export default class TemplateManager {
     const currentMemorySavingMode = this.isMemorySavingModeOn(); // To make sure that we do not free the object if it is stored due to race conditions.
     const templates = (this.templatesArray ?? []).filter(t => t.enabled && (sortID === null || t.sortID == sortID));
     // Keep color visibility consistent across all templates rendered in this pass.
-    const displayedColors = this.getDisplayedColorsSorted();
+    const _paletteToggledStatus = this.getPaletteToggledStatus();
+    const displayedColors = this.getDisplayedColorsSorted(_paletteToggledStatus);
     const displayedColorSet = new Set(displayedColors);
     const displayedColorPackedSet = new Set();
     let displayOtherColor = false;
@@ -872,8 +875,13 @@ export default class TemplateManager {
         displayedColorPackedSet.add(packedColor);
       }
     }
-    const hasColorDisabled = displayedColors.length !== Object.keys(this.getPaletteToggledStatus()).length;
+    const hasColorDisabled = displayedColors.length !== Object.keys(_paletteToggledStatus).length;
     const allColorsDisabled = displayedColors.length === 0; // Check if every color is disabled
+
+    const displayMode = this.getTemplateDisplayMode();
+    const drawMultResult = this.getTemplateDrawSize(displayMode);
+    const maskPoints = this.getTemplateMaskPoints(displayMode, drawMultResult, templates[0] ?? null);
+    const maskRowSpans = buildMaskRowSpans(maskPoints, drawMultResult);
 
     for (const template of templates) {
       await yieldUi();
@@ -883,10 +891,6 @@ export default class TemplateManager {
         removeLayer("overlay", template.sortID);
         continue;
       };
-      const displayMode = this.getTemplateDisplayMode();
-      const drawMultResult = this.getTemplateDrawSize(displayMode);
-      const maskPoints = this.getTemplateMaskPoints(displayMode, drawMultResult, template);
-      const maskRowSpans = buildMaskRowSpans(maskPoints, drawMultResult);
       const tileKeys = this._getTemplateTileKeys(template, tilePrefixSet);
       if (!tileKeys.length) {
         continue;
@@ -1293,10 +1297,10 @@ export default class TemplateManager {
    * @returns {string[]}
    * @since 0.85.30
    */
-  getDisplayedColorsSorted() {
+  getDisplayedColorsSorted(toggledStatus = null) {
     const currentOnly = this.isOnlyCurrentColorShown();
     const hideLocked = this.extraColorsBitmap !== -1 && this.areLockedColorsHidden(); // If -1 then all colors are unlocked, skip the hide color check
-    const toggledStatus = this.getPaletteToggledStatus();
+    toggledStatus = toggledStatus ?? this.getPaletteToggledStatus();
     const hideCompleted = this.areCompletedColorsHidden();
     const colors = [];
     if (currentOnly) {
@@ -1388,6 +1392,9 @@ export default class TemplateManager {
     const [tileNE] = coordsGeoCoordsToTileCoords(ne[0], ne[1], true);
     if (!tileSW || !tileNE) return null;
 
+    const cacheKey = `${pad},${tileSW[0]},${tileSW[1]},${tileNE[0]},${tileNE[1]},${sw[1]},${ne[1]}`;
+    if (this._visiblePrefixCache?.key === cacheKey) return this._visiblePrefixCache.result;
+
     let minY = Math.min(tileSW[1], tileNE[1]);
     let maxY = Math.max(tileSW[1], tileNE[1]);
     minY = Math.max(0, minY - pad);
@@ -1426,6 +1433,7 @@ export default class TemplateManager {
         }
       }
     }
+    this._visiblePrefixCache = { key: cacheKey, result };
     return result;
   }
 
