@@ -304,33 +304,37 @@ export const createChunkSampleData = (width, height, count, native = true) => ({
   native,
 });
 
+// Columnar format v1: header bytes[1] has 0x80 set as version flag.
+// Layout after 8-byte header: x[count*2] | y[count*2] | flags[count] | r[count] | g[count] | b[count] | a[count]
+// x/y use native-endian Uint16; total size identical to interleaved (8 + 9*count bytes).
 export const encodeChunkSampleBytes = (sampleData) => {
   const width = Math.max(0, Math.trunc(Number(sampleData?.width) || 0));
   const height = Math.max(0, Math.trunc(Number(sampleData?.height) || 0));
   const count = Math.max(0, Math.trunc(Number(sampleData?.count) || 0));
   const bytes = new Uint8Array(TEMPLATE_CHUNK_SAMPLE_HEADER_BYTES + count * TEMPLATE_CHUNK_SAMPLE_RECORD_BYTES);
   bytes[0] = width & 255;
-  bytes[1] = (width >> 8) & 255;
+  bytes[1] = 0x80 | ((width >> 8) & 0x0F); // 0x80 = columnar format marker
   bytes[2] = height & 255;
   bytes[3] = (height >> 8) & 255;
   bytes[4] = count & 255;
   bytes[5] = (count >> 8) & 255;
   bytes[6] = (count >> 16) & 255;
   bytes[7] = (count >> 24) & 255;
-  let offset = TEMPLATE_CHUNK_SAMPLE_HEADER_BYTES;
-  for (let index = 0; index < count; index++) {
-    const x = sampleData.x[index] || 0;
-    const y = sampleData.y[index] || 0;
-    bytes[offset] = x & 255;
-    bytes[offset + 1] = (x >> 8) & 255;
-    bytes[offset + 2] = y & 255;
-    bytes[offset + 3] = (y >> 8) & 255;
-    bytes[offset + 4] = sampleData.flags[index] || 0;
-    bytes[offset + 5] = sampleData.r[index] || 0;
-    bytes[offset + 6] = sampleData.g[index] || 0;
-    bytes[offset + 7] = sampleData.b[index] || 0;
-    bytes[offset + 8] = sampleData.a[index] || 0;
-    offset += TEMPLATE_CHUNK_SAMPLE_RECORD_BYTES;
+  if (count > 0) {
+    const xOffset = TEMPLATE_CHUNK_SAMPLE_HEADER_BYTES;
+    const yOffset = xOffset + count * 2;
+    const flagsOffset = yOffset + count * 2;
+    const rOffset = flagsOffset + count;
+    const gOffset = rOffset + count;
+    const bOffset = gOffset + count;
+    const aOffset = bOffset + count;
+    new Uint16Array(bytes.buffer, xOffset, count).set(sampleData.x.subarray(0, count));
+    new Uint16Array(bytes.buffer, yOffset, count).set(sampleData.y.subarray(0, count));
+    bytes.set(sampleData.flags.subarray(0, count), flagsOffset);
+    bytes.set(sampleData.r.subarray(0, count), rOffset);
+    bytes.set(sampleData.g.subarray(0, count), gOffset);
+    bytes.set(sampleData.b.subarray(0, count), bOffset);
+    bytes.set(sampleData.a.subarray(0, count), aOffset);
   }
   return bytes;
 };
@@ -345,29 +349,44 @@ export const decodeChunkSampleBuffer = (bufferValue) => {
   if (!(bytes instanceof Uint8Array) || bytes.length < TEMPLATE_CHUNK_SAMPLE_HEADER_BYTES) {
     return null;
   }
-  const width = bytes[0] | (bytes[1] << 8);
+  const isColumnar = (bytes[1] & 0x80) !== 0;
+  const width = isColumnar ? (bytes[0] | ((bytes[1] & 0x0F) << 8)) : (bytes[0] | (bytes[1] << 8));
   const height = bytes[2] | (bytes[3] << 8);
-  const count = (
-    bytes[4]
-    | (bytes[5] << 8)
-    | (bytes[6] << 16)
-    | (bytes[7] << 24)
-  ) >>> 0;
+  const count = (bytes[4] | (bytes[5] << 8) | (bytes[6] << 16) | (bytes[7] << 24)) >>> 0;
   const expectedLength = TEMPLATE_CHUNK_SAMPLE_HEADER_BYTES + count * TEMPLATE_CHUNK_SAMPLE_RECORD_BYTES;
   if (bytes.length < expectedLength) {
     return null;
   }
   const sampleData = createChunkSampleData(width, height, count, true);
-  let offset = TEMPLATE_CHUNK_SAMPLE_HEADER_BYTES;
-  for (let index = 0; index < count; index++) {
-    sampleData.x[index] = bytes[offset] | (bytes[offset + 1] << 8);
-    sampleData.y[index] = bytes[offset + 2] | (bytes[offset + 3] << 8);
-    sampleData.flags[index] = bytes[offset + 4];
-    sampleData.r[index] = bytes[offset + 5];
-    sampleData.g[index] = bytes[offset + 6];
-    sampleData.b[index] = bytes[offset + 7];
-    sampleData.a[index] = bytes[offset + 8];
-    offset += TEMPLATE_CHUNK_SAMPLE_RECORD_BYTES;
+  if (count > 0) {
+    if (isColumnar) {
+      const xOffset = TEMPLATE_CHUNK_SAMPLE_HEADER_BYTES;
+      const yOffset = xOffset + count * 2;
+      const flagsOffset = yOffset + count * 2;
+      const rOffset = flagsOffset + count;
+      const gOffset = rOffset + count;
+      const bOffset = gOffset + count;
+      const aOffset = bOffset + count;
+      sampleData.x.set(new Uint16Array(bytes.buffer, bytes.byteOffset + xOffset, count));
+      sampleData.y.set(new Uint16Array(bytes.buffer, bytes.byteOffset + yOffset, count));
+      sampleData.flags.set(bytes.subarray(flagsOffset, flagsOffset + count));
+      sampleData.r.set(bytes.subarray(rOffset, rOffset + count));
+      sampleData.g.set(bytes.subarray(gOffset, gOffset + count));
+      sampleData.b.set(bytes.subarray(bOffset, bOffset + count));
+      sampleData.a.set(bytes.subarray(aOffset, aOffset + count));
+    } else {
+      let offset = TEMPLATE_CHUNK_SAMPLE_HEADER_BYTES;
+      for (let index = 0; index < count; index++) {
+        sampleData.x[index] = bytes[offset] | (bytes[offset + 1] << 8);
+        sampleData.y[index] = bytes[offset + 2] | (bytes[offset + 3] << 8);
+        sampleData.flags[index] = bytes[offset + 4];
+        sampleData.r[index] = bytes[offset + 5];
+        sampleData.g[index] = bytes[offset + 6];
+        sampleData.b[index] = bytes[offset + 7];
+        sampleData.a[index] = bytes[offset + 8];
+        offset += TEMPLATE_CHUNK_SAMPLE_RECORD_BYTES;
+      }
+    }
   }
   return sampleData;
 };
@@ -580,6 +599,26 @@ export const addTemplateExampleToReservoir = (target, example, exampleMax, rando
   }
 };
 
+// Variant of addTemplateExampleToReservoir for the pixel-scan hot path.
+// Accepts primitive coords and only allocates the example arrays when the reservoir actually accepts the sample.
+const addPixelExampleToReservoir = (target, tileCoords, pixelX, pixelY, exampleMax, randomFn) => {
+  if (!target || !Array.isArray(target.examplesEnabled) || exampleMax <= 0) {
+    return;
+  }
+  target._exampleSeenCount = Math.max(
+    Number(target._exampleSeenCount) || 0,
+    target.examplesEnabled.length
+  );
+  target._exampleSeenCount++;
+  if (target.examplesEnabled.length < exampleMax) {
+    target.examplesEnabled.push([tileCoords, [pixelX, pixelY]]);
+    return;
+  }
+  if (randomFn() * target._exampleSeenCount < exampleMax) {
+    target.examplesEnabled[Math.floor(randomFn() * exampleMax)] = [tileCoords, [pixelX, pixelY]];
+  }
+};
+
 export const mergeTemplateExampleReservoir = (target, incoming, exampleMax, randomFn = Math.random) => {
   if (!target || !Array.isArray(incoming) || incoming.length === 0 || exampleMax <= 0) {
     return;
@@ -736,12 +775,7 @@ export const collectTemplateProgressFromSamples = ({
       }
       paletteEntry.missing++;
       if (templateEnabled) {
-        addTemplateExampleToReservoir(
-          paletteEntry,
-          [tileCoords, [pixelX, pixelY]],
-          exampleMax,
-          randomFn
-        );
+        addPixelExampleToReservoir(paletteEntry, tileCoords, pixelX, pixelY, exampleMax, randomFn);
       }
     }
   }
