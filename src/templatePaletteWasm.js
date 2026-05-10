@@ -6,38 +6,23 @@ const WASM_DISTANCE_MODE = Object.freeze({
   weighted: 1,
 });
 
-let wasmPaletteState;
+let wasmPaletteState = null;
 
-const getTemplatePaletteWasmState = () => {
-  if (wasmPaletteState !== undefined) {
-    return wasmPaletteState;
-  }
-  try {
-    if (
-      typeof WebAssembly === 'undefined'
-      || !(templatePaletteWasmBytes instanceof Uint8Array)
-      || templatePaletteWasmBytes.length === 0
-    ) {
-      wasmPaletteState = null;
-      return wasmPaletteState;
-    }
-    const module = new WebAssembly.Module(templatePaletteWasmBytes);
-    const instance = new WebAssembly.Instance(module, {});
+if (
+  typeof WebAssembly !== 'undefined'
+  && templatePaletteWasmBytes instanceof Uint8Array
+  && templatePaletteWasmBytes.length > 0
+) {
+  WebAssembly.instantiate(templatePaletteWasmBytes, {}).then(({ instance }) => {
     const convertPixels = instance.exports?.convert_pixels;
     const memory = instance.exports?.memory;
-    if (!(memory instanceof WebAssembly.Memory) || typeof convertPixels !== 'function') {
-      wasmPaletteState = null;
-      return wasmPaletteState;
+    if (memory instanceof WebAssembly.Memory && typeof convertPixels === 'function') {
+      wasmPaletteState = { memory, convertPixels };
     }
-    wasmPaletteState = {
-      memory,
-      convertPixels,
-    };
-  } catch (_) {
-    wasmPaletteState = null;
-  }
-  return wasmPaletteState;
-};
+  }).catch(() => {});
+}
+
+const getTemplatePaletteWasmState = () => wasmPaletteState;
 
 const ensureMemoryCapacity = (memory, requiredBytes) => {
   const currentBytes = memory.buffer.byteLength;

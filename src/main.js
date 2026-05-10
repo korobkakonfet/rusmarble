@@ -6,14 +6,15 @@ import Overlay from './Overlay.js';
 // import Observers from './observers.js';
 import ApiManager from './apiManager.js';
 import TemplateManager from './templateManager.js';
-import { convertImageDataToWplacePalette, normalizeTemplatePaletteConversionOptions, templatePaletteConversionDefaults } from './Template.js';
+import { normalizeTemplatePaletteConversionOptions, templatePaletteConversionDefaults } from './Template.js';
+import { templateWorkerManager } from './templateWorkerManager.js';
 import { buildUserSettingsSection } from './userSettings.js';
 import { createTemplateSync, normalizeRemoteOrder } from './templateSync.js';
 import { createMapCommentManager } from './mapComments.js';
 import { createTemplateCreationUi } from './templateCreationUi.js';
 import { createArchiveTemplateUi } from './archiveTemplateUi.js';
 import { layoutLanguageOptions, normalizeLayoutLanguage, translateLayout, getLayoutThemeLabel as getLocalizedLayoutThemeLabel, getTemplateDisplayLabel as getLocalizedTemplateDisplayLabel, getTemplateCreateModeLabel, getChatBanTypeLabel, getColorSortLabel } from './layoutI18n.js';
-import { findNearestUnpaintedSamplePixel } from './templateChunkUtils.js';
+import { encodeChunkSampleBytes } from './templateChunkUtils.js';
 import { consoleLog, consoleWarn, isDebugLoggingEnabled, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels } from './utils.js';
 import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getCurrentTileSize, setForcedTileRefreshSuppressed} from './utilsMaptiler.js';
 // import { getCenterGeoCoords, addTemplate } from './utilsMaptiler.js';
@@ -209,23 +210,17 @@ const detectTemplateImageOtherColors = async (sourceFile) => {
   context.drawImage(bitmap, 0, 0);
   bitmap.close?.();
 
-  const imageData = context.getImageData(0, 0, bitmap.width, bitmap.height);
-  const pixels = imageData.data;
-  const otherColorKeys = new Set();
-  let otherPixelCount = 0;
-  for (let i = 0; i < pixels.length; i += 4) {
-    if (pixels[i + 3] === 0) continue;
-    const key = `${pixels[i]},${pixels[i + 1]},${pixels[i + 2]}`;
-    if (rgbToMeta.has(key)) continue;
-    otherPixelCount++;
-    otherColorKeys.add(key);
-  }
-
+  const pixelData = new Uint8ClampedArray(
+    context.getImageData(0, 0, bitmap.width, bitmap.height).data
+  );
   canvas.width = 0;
   canvas.height = 0;
+  const workerResult = await templateWorkerManager.runTask('countNonPalettePixels', {
+    pixelData,
+  }, { transferList: [pixelData.buffer] }).catch(() => null);
   return {
-    otherPixelCount,
-    otherColorCount: otherColorKeys.size,
+    otherPixelCount: Number(workerResult?.otherPixelCount) || 0,
+    otherColorCount: Number(workerResult?.otherColorCount) || 0,
     skipped: false,
     pixelCount,
   };
@@ -250,8 +245,16 @@ const convertTemplateImageFileToPaletteBlob = async (sourceFile, options = {}) =
   bitmap.close?.();
 
   const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-  const conversion = convertImageDataToWplacePalette(imageData, normalizedOptions);
-  context.putImageData(conversion.imageData, 0, 0);
+  const pixelData = new Uint8ClampedArray(imageData.data);
+  const workerResult = await templateWorkerManager.runTask('convertImageData', {
+    pixelData,
+    width: canvas.width,
+    height: canvas.height,
+    options: normalizedOptions,
+  }, { transferList: [pixelData.buffer] }).catch(() => null);
+  if (workerResult?.pixelData instanceof Uint8ClampedArray) {
+    context.putImageData(new ImageData(workerResult.pixelData, canvas.width, canvas.height), 0, 0);
+  }
   const blob = await canvas.convertToBlob({ type: 'image/png' });
   cleanUpCanvas(canvas);
   canvas = null;
@@ -763,26 +766,20 @@ const createTextTemplateBlob = async (rawText, options = {}) => {
     context.fillText(line || ' ', TEMPLATE_TEXT_PADDING, TEMPLATE_TEXT_PADDING + index * lineHeight);
   });
   // Convert antialiased font edges into hard pixels for pixel-art templates.
-  const imageData = context.getImageData(0, 0, width, height);
-  const pixels = imageData.data;
-  const colorR = colorRgb[0];
-  const colorG = colorRgb[1];
-  const colorB = colorRgb[2];
   const hardEdgeThreshold = isSmallFont
     ? (isPixelFont ? TEMPLATE_TEXT_HARD_EDGE_ALPHA_THRESHOLD_SMALL_PIXEL : TEMPLATE_TEXT_HARD_EDGE_ALPHA_THRESHOLD_SMALL)
     : TEMPLATE_TEXT_HARD_EDGE_ALPHA_THRESHOLD;
-  for (let i = 0; i < pixels.length; i += 4) {
-    const alpha = pixels[i + 3];
-    if (alpha < hardEdgeThreshold) {
-      pixels[i + 3] = 0;
-      continue;
-    }
-    pixels[i] = colorR;
-    pixels[i + 1] = colorG;
-    pixels[i + 2] = colorB;
-    pixels[i + 3] = 255;
+  const rawPixelData = new Uint8ClampedArray(context.getImageData(0, 0, width, height).data);
+  const hardEdgeResult = await templateWorkerManager.runTask('applyHardEdgeThreshold', {
+    pixelData: rawPixelData,
+    colorR: colorRgb[0],
+    colorG: colorRgb[1],
+    colorB: colorRgb[2],
+    threshold: hardEdgeThreshold,
+  }, { transferList: [rawPixelData.buffer] }).catch(() => null);
+  if (hardEdgeResult?.pixelData instanceof Uint8ClampedArray) {
+    context.putImageData(new ImageData(hardEdgeResult.pixelData, width, height), 0, 0);
   }
-  context.putImageData(imageData, 0, 0);
 
   const blob = await new Promise((resolve, reject) => {
     canvas.toBlob((encodedBlob) => {
@@ -947,33 +944,23 @@ const loadLiveRegionImageDataForFlagMask = async ({
     );
   }
 
-  const imageData = regionContext.getImageData(0, 0, safeWidth, safeHeight);
-  const colorCounts = new Map();
-  const borderColorCounts = new Map();
-  const sample = imageData.data;
-  for (let i = 0; i < sample.length; i += 4) {
-    if (sample[i + 3] < 1) continue;
-    const key = `${sample[i]},${sample[i + 1]},${sample[i + 2]}`;
-    colorCounts.set(key, (colorCounts.get(key) || 0) + 1);
-    const pixelIndex = i >> 2;
-    const y = Math.floor(pixelIndex / safeWidth);
-    const x = pixelIndex - y * safeWidth;
-    if (x === 0 || y === 0 || x === safeWidth - 1 || y === safeHeight - 1) {
-      borderColorCounts.set(key, (borderColorCounts.get(key) || 0) + 1);
-    }
-  }
+  const regionImageData = regionContext.getImageData(0, 0, safeWidth, safeHeight);
+  const regionPixelData = new Uint8ClampedArray(regionImageData.data);
   cleanUpCanvas(regionCanvas);
   regionCanvas = null;
-  const sortedColorCounts = [...colorCounts.entries()].sort((a, b) => b[1] - a[1]);
-  const sortedBorderColorCounts = [...borderColorCounts.entries()].sort((a, b) => b[1] - a[1]);
+  const colorResult = await templateWorkerManager.runTask('countRegionColors', {
+    pixelData: regionPixelData,
+    width: safeWidth,
+    height: safeHeight,
+  }, { transferList: [regionPixelData.buffer] }).catch(() => ({ sortedColorCounts: [], sortedBorderColorCounts: [] }));
   return {
-    imageData,
+    imageData: regionImageData,
     tileCount,
-    sortedColorCounts,
-    sortedBorderColorCounts,
+    sortedColorCounts: colorResult.sortedColorCounts,
+    sortedBorderColorCounts: colorResult.sortedBorderColorCounts,
   };
 };
-const buildRussianFlagTemplateImageData = ({
+const buildRussianFlagTemplateImageData = async ({
   styleKey = templateFlagStyleTricolor.key,
   width = TEMPLATE_FLAG_DEFAULT_W,
   height = TEMPLATE_FLAG_DEFAULT_H,
@@ -1044,23 +1031,29 @@ const buildRussianFlagTemplateImageData = ({
     const sortedColorCounts = Array.isArray(mapRegion?.sortedColorCounts) ? mapRegion.sortedColorCounts : [];
     backgroundEntries = (sortedBorderColorCounts.length ? sortedBorderColorCounts : sortedColorCounts)
       .slice(0, TEMPLATE_FLAG_IGNORE_BACKGROUND_COLOR_COUNT);
-    const backgroundKeys = new Set(backgroundEntries.map(([key]) => normalizeTemplatePaletteKey(key)).filter(Boolean));
-    const protectedKeys = new Set(
-      (Array.isArray(ignoreProtectedColorKeys) ? ignoreProtectedColorKeys.map(normalizeTemplatePaletteKey) : [])
-        .filter(Boolean)
+    const keyToPacked = (key) => {
+      const m = String(key || '').match(/^(\d+),(\d+),(\d+)$/);
+      return m ? (((m[1] | 0) << 16) | ((m[2] | 0) << 8) | (m[3] | 0)) >>> 0 : null;
+    };
+    const backgroundColorsPacked = Uint32Array.from(
+      backgroundEntries.map(([key]) => keyToPacked(normalizeTemplatePaletteKey(key))).filter((v) => v !== null)
     );
-    for (let i = 0; i < data.length; i += 4) {
-      if (data[i + 3] < 1) continue;
-      const mapKey = normalizeTemplatePaletteKey(`${mapPixels[i]},${mapPixels[i + 1]},${mapPixels[i + 2]}`);
-      if (!mapKey || backgroundKeys.has(mapKey)) continue;
-      const isSelectedColor = protectedKeys.has(mapKey);
-      const shouldIgnore = normalizedIgnoreMode === TEMPLATE_FLAG_IGNORE_MODE_ONLY_SELECTED
-        ? isSelectedColor
-        : !isSelectedColor;
-      if (!shouldIgnore) continue;
-
-      data[i + 3] = 0;
-      ignoredPixelCount++;
+    const protectedColorsPacked = Uint32Array.from(
+      (Array.isArray(ignoreProtectedColorKeys) ? ignoreProtectedColorKeys : [])
+        .map((key) => keyToPacked(normalizeTemplatePaletteKey(key))).filter((v) => v !== null)
+    );
+    const flagData = new Uint8ClampedArray(data);
+    const mapData = new Uint8ClampedArray(mapPixels);
+    const maskResult = await templateWorkerManager.runTask('applyFlagMask', {
+      pixelData: flagData,
+      mapPixels: mapData,
+      backgroundColorsPacked,
+      protectedColorsPacked,
+      ignoreMode: normalizedIgnoreMode,
+    }, { transferList: [flagData.buffer, mapData.buffer] }).catch(() => null);
+    if (maskResult?.pixelData instanceof Uint8ClampedArray) {
+      data.set(maskResult.pixelData);
+      ignoredPixelCount = maskResult.ignoredPixelCount | 0;
     }
   }
 
@@ -1280,34 +1273,24 @@ const createTemplateImageBlob = async (templateOrStorageKey) => {
         chunkContext.imageSmoothingEnabled = false;
         chunkContext.clearRect(0, 0, chunkBitmap.width, chunkBitmap.height);
         chunkContext.drawImage(chunkBitmap, 0, 0);
-        const sourceData = chunkContext.getImageData(0, 0, chunkBitmap.width, chunkBitmap.height).data;
-        const chunkImageData = chunkContext.createImageData(chunkWidth, chunkHeight);
-
-        for (let y = 0; y < chunkHeight; y++) {
-          for (let x = 0; x < chunkWidth; x++) {
-            const sourceX = Math.min(chunkBitmap.width - 1, x * shreadSize + shreadCenter);
-            const sourceY = Math.min(chunkBitmap.height - 1, y * shreadSize + shreadCenter);
-            const sourceIndex = (sourceY * chunkBitmap.width + sourceX) * 4;
-            const targetIndex = (y * chunkWidth + x) * 4;
-            let red = sourceData[sourceIndex];
-            let green = sourceData[sourceIndex + 1];
-            let blue = sourceData[sourceIndex + 2];
-            let alpha = sourceData[sourceIndex + 3];
-            if (alpha <= 32 && (red === 0 || red === 255) && green === red && blue === red) {
-              alpha = 0;
-            }
-            chunkImageData.data[targetIndex] = red;
-            chunkImageData.data[targetIndex + 1] = green;
-            chunkImageData.data[targetIndex + 2] = blue;
-            chunkImageData.data[targetIndex + 3] = alpha;
-          }
-        }
+        const sourceData = new Uint8ClampedArray(chunkContext.getImageData(0, 0, chunkBitmap.width, chunkBitmap.height).data);
+        const downsampleResult = await templateWorkerManager.runTask('downsampleChunk', {
+          sourceData,
+          sourceWidth: chunkBitmap.width,
+          sourceHeight: chunkBitmap.height,
+          chunkWidth,
+          chunkHeight,
+          shreadSize,
+          shreadCenter,
+        }, { transferList: [sourceData.buffer] }).catch(() => null);
 
         const chunkWorldX = coords[0] * TEMPLATE_TILE_SIZE + coords[2];
         const chunkWorldY = coords[1] * TEMPLATE_TILE_SIZE + coords[3];
         const offsetX = ((chunkWorldX - topLeftWorldX) % templateWorldWidth + templateWorldWidth) % templateWorldWidth;
         const offsetY = chunkWorldY - topLeftWorldY;
-        resultContext.putImageData(chunkImageData, offsetX, offsetY);
+        if (downsampleResult?.pixelData instanceof Uint8ClampedArray) {
+          resultContext.putImageData(new ImageData(downsampleResult.pixelData, chunkWidth, chunkHeight), offsetX, offsetY);
+        }
       } finally {
         if (shouldCloseBitmap) {
           chunkBitmap?.close?.();
@@ -4012,7 +3995,6 @@ const {
   normalizeTemplatePaletteConversionOptions,
   templatePaletteConversionDefaults,
   convertTemplateImageFileToPaletteBlob,
-  convertImageDataToWplacePalette,
   cleanUpCanvas,
   consoleWarn,
   TEMPLATE_PALETTE_PREVIEW_MAX_DIMENSION,
@@ -5233,24 +5215,35 @@ async function getLiveTilePixels(tileX, tileY) {
 }
 
 async function findNearestTemplatePixelInTile(tileCandidate, liveTilePixels, originPoint, displayedColorSet, excludedCoordsKeys, memorySavingMode) {
+  const displayedColorsPacked = Uint32Array.from(
+    typeof displayedColorSet?.values === 'function' ? displayedColorSet : []
+  );
+  const excludedCoordsKeySet = excludedCoordsKeys instanceof Set
+    ? [...excludedCoordsKeys]
+    : (Array.isArray(excludedCoordsKeys) ? excludedCoordsKeys : []);
+  const liveTilePixelsClone = new Uint8ClampedArray(liveTilePixels);
+
   let bestCandidate = null;
   for (const entry of tileCandidate.entries) {
     const sampleData = await entry.template.getChunkSamples(entry.tileKey, { memorySaving: memorySavingMode });
     if (!sampleData) continue;
-    const entryBest = findNearestUnpaintedSamplePixel({
-      sampleData,
-      liveTilePixels,
+    const encodedSampleData = encodeChunkSampleBytes(sampleData);
+    const liveTilePixelsCopy = new Uint8ClampedArray(liveTilePixelsClone);
+    const displayedColorsCopy = new Uint32Array(displayedColorsPacked);
+    const entryBest = await templateWorkerManager.runTask('findNearestUnpainted', {
+      sampleData: encodedSampleData,
+      liveTilePixels: liveTilePixelsCopy,
       tileSize: TEMPLATE_TILE_SIZE,
       offsetX: entry.offsetX,
       offsetY: entry.offsetY,
       tileX: tileCandidate.tileX,
       tileY: tileCandidate.tileY,
       originPoint,
-      displayedColorSet,
-      excludedCoordsKeySet: excludedCoordsKeys,
+      displayedColorsPacked: displayedColorsCopy,
+      excludedCoordsKeySet,
       templateName: entry.template.displayName,
-      distanceSqFn: getTilePixelDistanceSq,
-    });
+      mapWorldWidthPx: MAP_WORLD_WIDTH_PX,
+    }, { transferList: [encodedSampleData.buffer, liveTilePixelsCopy.buffer, displayedColorsCopy.buffer] }).catch(() => null);
     if (entryBest && (!bestCandidate || entryBest.distanceSq < bestCandidate.distanceSq)) {
       bestCandidate = entryBest;
     }
@@ -7930,29 +7923,18 @@ async function buildOverlayMain() {
           phantomColorKeys.add(rgb);
         }
       });
+      // Use incremental running totals — O(templates) instead of O(tiles × templates).
       const combinedTemplate = {};
-      for (const stats of templateManager.tileProgress.values()) {
-        Object.entries(stats.template).forEach(([storageKey, content]) => {
-          if (templateEnabledState[storageKey] === false) return;
-          if (combinedTemplate[storageKey] === undefined) {
-            const painted = Number(content?.painted) || 0;
-            const palette = {};
-            Object.entries(content?.palette || {}).forEach(([rgb, count]) => {
-              palette[rgb] = Number(count) || 0;
-            });
-            combinedTemplate[storageKey] = { painted, palette };
-          } else {
-            combinedTemplate[storageKey].painted += Number(content?.painted) || 0;
-            if (!combinedTemplate[storageKey].palette || typeof combinedTemplate[storageKey].palette !== 'object') {
-              combinedTemplate[storageKey].palette = {};
-            }
-            Object.entries(content?.palette || {}).forEach(([rgb, count]) => {
-              combinedTemplate[storageKey].palette[rgb] = (
-                Number(combinedTemplate[storageKey].palette[rgb]) || 0
-              ) + (Number(count) || 0);
-            });
-          }
-        });
+      const runningTemplate = templateManager._runningTemplate;
+      for (const storageKey in runningTemplate) {
+        if (templateEnabledState[storageKey] === false) continue;
+        const data = runningTemplate[storageKey];
+        const palette = {};
+        for (const rgb in data.palette) {
+          const v = Number(data.palette[rgb]) || 0;
+          if (v !== 0) palette[rgb] = v;
+        }
+        combinedTemplate[storageKey] = { painted: Math.max(0, data.painted), palette };
       }
 
       for (const entry of entriesToRender) {
