@@ -681,8 +681,11 @@ export const createArchiveTemplateUi = (deps = {}) => {
         }
         previewPanX = layout.panX;
         previewPanY = layout.panY;
-        context.imageSmoothingEnabled = false;
+        const displayNeedsSmoothing = layout.scale < 1;
+        context.imageSmoothingEnabled = displayNeedsSmoothing;
+        if (displayNeedsSmoothing) context.imageSmoothingQuality = 'high';
         context.drawImage(previewImageCanvas, layout.drawX, layout.drawY, layout.drawWidth, layout.drawHeight);
+        context.imageSmoothingEnabled = false;
         syncPreviewControls(layout);
       };
       const queuePreviewViewportDraw = () => {
@@ -927,6 +930,14 @@ export const createArchiveTemplateUi = (deps = {}) => {
         return orderedVersions;
       };
       const getActivePreviewVersionEntries = () => {
+        const selectedEntry = selectedVersionValue ? previewEntries.get(selectedVersionValue) : null;
+        if (
+          selectedEntry
+          && selectedEntry.status !== 'error'
+          && selectedEntry.nextTaskIndex < selectedEntry.totalTiles
+        ) {
+          return [selectedEntry];
+        }
         const entries = [];
         for (const version of buildPreviewPriorityOrder()) {
           const entry = previewEntries.get(version);
@@ -1051,6 +1062,11 @@ export const createArchiveTemplateUi = (deps = {}) => {
         const dstY = (intersectTop - rect.top) * entry.scale;
         const dstWidth = intersectWidth * entry.scale;
         const dstHeight = intersectHeight * entry.scale;
+        const needsSmoothing = entry.scale < 1;
+        if (needsSmoothing) {
+          entry.context.imageSmoothingEnabled = true;
+          entry.context.imageSmoothingQuality = 'high';
+        }
         entry.context.drawImage(
           image,
           srcX,
@@ -1062,21 +1078,24 @@ export const createArchiveTemplateUi = (deps = {}) => {
           dstWidth,
           dstHeight
         );
+        if (needsSmoothing) {
+          entry.context.imageSmoothingEnabled = false;
+        }
       };
       const pickNextPreviewTask = () => {
         if (closed || previewPrefetchSuspended || !previewSupported) return null;
         const activeEntries = getActivePreviewVersionEntries();
         for (const entry of activeEntries) {
-          if (entry.activeTasks > 0 || entry.nextTaskIndex >= entry.totalTiles) {
-            continue;
-          }
+          const isSelected = entry.version === selectedVersionValue;
+          if (!isSelected && entry.activeTasks > 0) continue;
+          if (entry.nextTaskIndex >= entry.totalTiles) continue;
           const task = previewTileCoords[entry.nextTaskIndex];
           if (!task) {
             entry.nextTaskIndex = entry.totalTiles;
             continue;
           }
           entry.nextTaskIndex++;
-          entry.activeTasks = 1;
+          entry.activeTasks++;
           if (entry.status === 'idle') {
             entry.status = 'loading';
           }
