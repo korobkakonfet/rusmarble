@@ -1,366 +1,44 @@
-import { base64ToUint8, cleanUpCanvas, colorpalette, testCanvasSize, createBitmapPreservingPixels } from "./utils.js";
+import { base64ToUint8, cleanUpCanvas, testCanvasSize, createBitmapPreservingPixels } from "./utils.js";
 import {
   buildMaskRowSpans,
+  cloneMaskRowSpans,
   createChunkSampleData,
-  encodeChunkSampleBytes,
   decodeChunkSampleBuffer,
+  encodeChunkSampleBytes,
+  getMaskRowSpansTransferList,
   inspectSourceImagePalette,
   createPaletteStatsAccumulator,
   finalizePaletteStatsAccumulator,
   buildChunkSampleDataFromSource,
+  mergePaletteStatsAccumulator,
   renderSampleDataToImage,
   TEMPLATE_DEFACE_RGB,
 } from "./templateChunkUtils.js";
-import { convertImageDataToPaletteWithWasm, isTemplatePaletteWasmAvailable } from "./templatePaletteWasm.js";
+import {
+  templatePalettePackedSet,
+  templatePaletteConversionDefaults,
+  normalizeTemplatePaletteConversionOptions,
+  convertImageDataToWplacePalette,
+} from './templatePaletteConversion.js';
+export { templatePaletteConversionDefaults, normalizeTemplatePaletteConversionOptions, convertImageDataToWplacePalette };
+import { templateWorkerManager } from './templateWorkerManager.js';
 
-const clampByte = (value) => Math.max(0, Math.min(255, Math.round(Number(value) || 0)));
-const clampUnit = (value) => Math.max(0, Math.min(1, Number(value) || 0));
-const normalizeDistanceMode = (value) => String(value || '').toLowerCase() === 'euclidean' ? 'euclidean' : 'weighted';
-const normalizeDitherMode = (value) => String(value || '').toLowerCase() === 'floyd-steinberg' ? 'floyd-steinberg' : 'none';
 const packRgb = (r, g, b) => ((r << 16) | (g << 8) | b) >>> 0;
 const TEMPLATE_DEFACE_PACKED = packRgb(TEMPLATE_DEFACE_RGB[0], TEMPLATE_DEFACE_RGB[1], TEMPLATE_DEFACE_RGB[2]);
 
-const templatePaletteColors = (() => {
-  const options = [];
-  const seen = new Set();
-  for (const color of colorpalette) {
-    const colorName = String(color?.name || '').trim().toLowerCase();
-    if (!Array.isArray(color?.rgb) || color.rgb.length < 3) continue;
-    if (colorName === 'transparent') continue;
-    const rgb = color.rgb.slice(0, 3).map(clampByte);
-    const key = rgb.join(',');
-    if (seen.has(key)) continue;
-    seen.add(key);
-    options.push({ key, rgb });
-  }
-  if (!options.length) {
-    options.push({ key: '0,0,0', rgb: [0, 0, 0] });
-  }
-  return options;
-})();
-const templatePalettePackedEntries = templatePaletteColors.map((entry) => ({
-  ...entry,
-  packed: packRgb(entry.rgb[0], entry.rgb[1], entry.rgb[2]),
-}));
-const templatePalettePackedSet = new Set(
-  templatePalettePackedEntries.map((entry) => entry.packed)
-);
-const templatePaletteWasmBytes = (() => {
-  const bytes = new Uint8Array(templatePalettePackedEntries.length * 4);
-  for (let index = 0; index < templatePalettePackedEntries.length; index++) {
-    const offset = index << 2;
-    const rgb = templatePalettePackedEntries[index].rgb;
-    bytes[offset] = rgb[0];
-    bytes[offset + 1] = rgb[1];
-    bytes[offset + 2] = rgb[2];
-    bytes[offset + 3] = 0;
-  }
-  return bytes;
-})();
+const TEMPLATE_CHUNK_BATCH_SIZE = 8;
 
-export const templatePaletteConversionDefaults = Object.freeze({
-  ditherMode: 'none',
-  ditherStrength: 1,
-  distanceMode: 'weighted',
-  alphaThreshold: 1,
-  serpentine: true,
-  antiDitherStrength: 0,
-});
-
-export function normalizeTemplatePaletteConversionOptions(options = {}) {
-  const normalized = {
-    ditherMode: normalizeDitherMode(options?.ditherMode ?? templatePaletteConversionDefaults.ditherMode),
-    ditherStrength: clampUnit(options?.ditherStrength ?? templatePaletteConversionDefaults.ditherStrength),
-    distanceMode: normalizeDistanceMode(options?.distanceMode ?? templatePaletteConversionDefaults.distanceMode),
-    alphaThreshold: clampByte(options?.alphaThreshold ?? templatePaletteConversionDefaults.alphaThreshold),
-    serpentine: options?.serpentine !== false,
-    antiDitherStrength: clampUnit(options?.antiDitherStrength ?? templatePaletteConversionDefaults.antiDitherStrength),
-  };
-  if (normalized.ditherMode === 'none') {
-    normalized.ditherStrength = 0;
+const renderPixelsToCanvas = (pixels, width, height) => {
+  let canvas = new OffscreenCanvas(width, height);
+  const context = canvas.getContext('2d');
+  if (!context) {
+    cleanUpCanvas(canvas);
+    canvas = null;
+    throw new Error('Failed to initialize canvas for rendered worker pixels.');
   }
-  return normalized;
-}
-
-const colorDistanceSq = (r, g, b, paletteRgb, distanceMode) => {
-  const dr = r - paletteRgb[0];
-  const dg = g - paletteRgb[1];
-  const db = b - paletteRgb[2];
-  if (distanceMode === 'euclidean') {
-    return dr * dr + dg * dg + db * db;
-  }
-  // A weighted RGB distance that better reflects perceived luminance.
-  return dr * dr * 0.2126 + dg * dg * 0.7152 + db * db * 0.0722;
+  context.putImageData(new ImageData(pixels, width, height), 0, 0);
+  return canvas;
 };
-
-const getNearestPaletteColor = (r, g, b, options, cache) => {
-  const cacheKey = packRgb(
-    clampByte(r),
-    clampByte(g),
-    clampByte(b)
-  );
-  if (cache.has(cacheKey)) {
-    return cache.get(cacheKey);
-  }
-  let nearest = templatePalettePackedEntries[0];
-  let nearestDistance = Infinity;
-  for (const entry of templatePalettePackedEntries) {
-    const distance = colorDistanceSq(r, g, b, entry.rgb, options.distanceMode);
-    if (distance < nearestDistance) {
-      nearest = entry;
-      nearestDistance = distance;
-      if (distance === 0) break;
-    }
-  }
-  cache.set(cacheKey, nearest);
-  return nearest;
-};
-
-export function convertImageDataToWplacePalette(imageData, options = {}) {
-  if (!imageData || !imageData.data || !Number.isFinite(imageData.width) || !Number.isFinite(imageData.height)) {
-    return {
-      imageData,
-      options: normalizeTemplatePaletteConversionOptions(options),
-      stats: {
-        nonPalettePixels: 0,
-        nonPaletteColorCount: 0,
-        convertedPixels: 0,
-        convertedColorCount: 0,
-        remainingOtherPixels: 0,
-      },
-    };
-  }
-
-  const normalizedOptions = normalizeTemplatePaletteConversionOptions(options);
-  const allowWasm = options?.useWasm !== false;
-  const width = Math.max(1, Math.trunc(imageData.width));
-  const height = Math.max(1, Math.trunc(imageData.height));
-  const data = imageData.data;
-  const pixelCount = width * height;
-  const original = new Uint8ClampedArray(data);
-  const alphaPass = new Uint8Array(pixelCount);
-  const nonPalettePackedColors = new Set();
-
-  let nonPalettePixels = 0;
-  for (let i = 0; i < pixelCount; i++) {
-    const base = i * 4;
-    const alpha = original[base + 3];
-    if (alpha < normalizedOptions.alphaThreshold) {
-      data[base + 3] = 0;
-      continue;
-    }
-    alphaPass[i] = 1;
-    const packed = packRgb(original[base], original[base + 1], original[base + 2]);
-    if (!templatePalettePackedSet.has(packed)) {
-      nonPalettePixels++;
-      nonPalettePackedColors.add(packed);
-    }
-  }
-
-  const nearestCache = new Map();
-  const canUseWasm = (
-    allowWasm
-    && nonPalettePixels > 0
-    && normalizedOptions.ditherMode === 'none'
-    && normalizedOptions.antiDitherStrength <= 0
-    && isTemplatePaletteWasmAvailable()
-  );
-  if (normalizedOptions.ditherMode === 'floyd-steinberg' && normalizedOptions.ditherStrength > 0) {
-    const workingR = new Float32Array(pixelCount);
-    const workingG = new Float32Array(pixelCount);
-    const workingB = new Float32Array(pixelCount);
-    for (let i = 0; i < pixelCount; i++) {
-      const base = i * 4;
-      workingR[i] = original[base];
-      workingG[i] = original[base + 1];
-      workingB[i] = original[base + 2];
-    }
-    const addError = (x, y, errR, errG, errB, factor) => {
-      if (x < 0 || y < 0 || x >= width || y >= height) return;
-      const idx = y * width + x;
-      if (!alphaPass[idx]) return;
-      workingR[idx] += errR * factor;
-      workingG[idx] += errG * factor;
-      workingB[idx] += errB * factor;
-    };
-
-    for (let y = 0; y < height; y++) {
-      const reverse = normalizedOptions.serpentine && (y % 2 === 1);
-      const xStart = reverse ? width - 1 : 0;
-      const xEnd = reverse ? -1 : width;
-      const xStep = reverse ? -1 : 1;
-      for (let x = xStart; x !== xEnd; x += xStep) {
-        const idx = y * width + x;
-        const base = idx * 4;
-        if (!alphaPass[idx]) {
-          data[base + 3] = 0;
-          continue;
-        }
-        const originalPacked = packRgb(original[base], original[base + 1], original[base + 2]);
-        if (templatePalettePackedSet.has(originalPacked)) {
-          data[base] = original[base];
-          data[base + 1] = original[base + 1];
-          data[base + 2] = original[base + 2];
-          data[base + 3] = original[base + 3];
-          continue;
-        }
-
-        const sourceR = clampByte(workingR[idx]);
-        const sourceG = clampByte(workingG[idx]);
-        const sourceB = clampByte(workingB[idx]);
-        const nearest = getNearestPaletteColor(sourceR, sourceG, sourceB, normalizedOptions, nearestCache);
-        data[base] = nearest.rgb[0];
-        data[base + 1] = nearest.rgb[1];
-        data[base + 2] = nearest.rgb[2];
-        data[base + 3] = original[base + 3];
-
-        const errR = (workingR[idx] - nearest.rgb[0]) * normalizedOptions.ditherStrength;
-        const errG = (workingG[idx] - nearest.rgb[1]) * normalizedOptions.ditherStrength;
-        const errB = (workingB[idx] - nearest.rgb[2]) * normalizedOptions.ditherStrength;
-
-        if (!reverse) {
-          addError(x + 1, y, errR, errG, errB, 7 / 16);
-          addError(x - 1, y + 1, errR, errG, errB, 3 / 16);
-          addError(x, y + 1, errR, errG, errB, 5 / 16);
-          addError(x + 1, y + 1, errR, errG, errB, 1 / 16);
-        } else {
-          addError(x - 1, y, errR, errG, errB, 7 / 16);
-          addError(x + 1, y + 1, errR, errG, errB, 3 / 16);
-          addError(x, y + 1, errR, errG, errB, 5 / 16);
-          addError(x - 1, y + 1, errR, errG, errB, 1 / 16);
-        }
-      }
-    }
-  } else if (canUseWasm) {
-    convertImageDataToPaletteWithWasm({
-      data,
-      paletteBytes: templatePaletteWasmBytes,
-      alphaThreshold: normalizedOptions.alphaThreshold,
-      distanceMode: normalizedOptions.distanceMode,
-    });
-  } else {
-    for (let i = 0; i < pixelCount; i++) {
-      const base = i * 4;
-      if (!alphaPass[i]) {
-        data[base + 3] = 0;
-        continue;
-      }
-      const originalPacked = packRgb(original[base], original[base + 1], original[base + 2]);
-      if (templatePalettePackedSet.has(originalPacked)) {
-        data[base] = original[base];
-        data[base + 1] = original[base + 1];
-        data[base + 2] = original[base + 2];
-        data[base + 3] = original[base + 3];
-        continue;
-      }
-      const nearest = getNearestPaletteColor(original[base], original[base + 1], original[base + 2], normalizedOptions, nearestCache);
-      data[base] = nearest.rgb[0];
-      data[base + 1] = nearest.rgb[1];
-      data[base + 2] = nearest.rgb[2];
-      data[base + 3] = original[base + 3];
-    }
-  }
-
-  if (normalizedOptions.antiDitherStrength > 0) {
-    const applyAntiDither = () => {
-      const strength = normalizedOptions.antiDitherStrength;
-      const minDominance = 0.75 - 0.4 * strength; // 0.75 -> 0.35
-      const passes = Math.max(1, Math.round(strength * 3)); // 1..3
-      let src = new Uint8ClampedArray(data);
-      let dst = new Uint8ClampedArray(src.length);
-      const neighborOffsets = [
-        [-1, -1], [0, -1], [1, -1],
-        [-1, 0],  [0, 0],  [1, 0],
-        [-1, 1],  [0, 1],  [1, 1],
-      ];
-      for (let pass = 0; pass < passes; pass++) {
-        for (let y = 0; y < height; y++) {
-          for (let x = 0; x < width; x++) {
-            const idx = y * width + x;
-            const base = idx * 4;
-            const alpha = src[base + 3];
-            if (alpha < normalizedOptions.alphaThreshold) {
-              dst[base] = src[base];
-              dst[base + 1] = src[base + 1];
-              dst[base + 2] = src[base + 2];
-              dst[base + 3] = 0;
-              continue;
-            }
-
-            let total = 0;
-            let bestKey = (src[base] << 16) | (src[base + 1] << 8) | src[base + 2];
-            let bestCount = 0;
-            const counts = new Map();
-
-            for (const [ox, oy] of neighborOffsets) {
-              const nx = x + ox;
-              const ny = y + oy;
-              if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
-              const nidx = ny * width + nx;
-              const nbase = nidx * 4;
-              if (src[nbase + 3] < normalizedOptions.alphaThreshold) continue;
-              const key = (src[nbase] << 16) | (src[nbase + 1] << 8) | src[nbase + 2];
-              const count = (counts.get(key) || 0) + 1;
-              counts.set(key, count);
-              total++;
-              if (count > bestCount) {
-                bestCount = count;
-                bestKey = key;
-              }
-            }
-
-            const dominance = total > 0 ? bestCount / total : 0;
-            const outKey = dominance >= minDominance
-              ? bestKey
-              : ((src[base] << 16) | (src[base + 1] << 8) | src[base + 2]);
-            dst[base] = (outKey >> 16) & 255;
-            dst[base + 1] = (outKey >> 8) & 255;
-            dst[base + 2] = outKey & 255;
-            dst[base + 3] = src[base + 3];
-          }
-        }
-        const temp = src;
-        src = dst;
-        dst = temp;
-      }
-      data.set(src);
-    };
-    applyAntiDither();
-  }
-
-  const convertedColorPacks = new Set();
-  let convertedPixels = 0;
-  let remainingOtherPixels = 0;
-  for (let i = 0; i < pixelCount; i++) {
-    const base = i * 4;
-    if (data[base + 3] === 0) continue;
-    const outputPacked = packRgb(data[base], data[base + 1], data[base + 2]);
-    if (!templatePalettePackedSet.has(outputPacked)) {
-      remainingOtherPixels++;
-    }
-    if (
-      original[base] !== data[base] ||
-      original[base + 1] !== data[base + 1] ||
-      original[base + 2] !== data[base + 2] ||
-      original[base + 3] !== data[base + 3]
-    ) {
-      convertedPixels++;
-      convertedColorPacks.add(packRgb(original[base], original[base + 1], original[base + 2]));
-    }
-  }
-
-  return {
-    imageData,
-    options: normalizedOptions,
-    stats: {
-      nonPalettePixels,
-      nonPaletteColorCount: nonPalettePackedColors.size,
-      convertedPixels,
-      convertedColorCount: convertedColorPacks.size,
-      remainingOtherPixels,
-    },
-  };
-}
 
 /** An instance of a template.
  * Handles all mathematics, manipulation, and analysis regarding a single template.
@@ -478,14 +156,22 @@ export default class Template {
     conversionCtx.clearRect(0, 0, bitmap.width, bitmap.height);
     conversionCtx.drawImage(bitmap, 0, 0);
     const sourceImageData = conversionCtx.getImageData(0, 0, bitmap.width, bitmap.height);
-    const conversion = convertImageDataToWplacePalette(sourceImageData, this.paletteConversionOptions);
-    const changed = Number(conversion?.stats?.convertedPixels) || 0;
+    const pixelData = new Uint8ClampedArray(sourceImageData.data);
+    const workerResult = await templateWorkerManager.runTask('convertImageData', {
+      pixelData,
+      width: bitmap.width,
+      height: bitmap.height,
+      options: this.paletteConversionOptions,
+    }, { transferList: [pixelData.buffer] }).catch(() => null);
+    const changed = Number(workerResult?.stats?.convertedPixels) || 0;
     if (changed <= 0) {
       cleanUpCanvas(conversionCanvas);
       conversionCanvas = null;
       return bitmap;
     }
-    conversionCtx.putImageData(conversion.imageData, 0, 0);
+    if (workerResult.pixelData instanceof Uint8ClampedArray) {
+      conversionCtx.putImageData(new ImageData(workerResult.pixelData, bitmap.width, bitmap.height), 0, 0);
+    }
     const convertedBitmap = await createImageBitmap(conversionCanvas);
     bitmap.close?.();
     cleanUpCanvas(conversionCanvas);
@@ -515,7 +201,7 @@ export default class Template {
     return inspectSourceImagePalette(inspectData, bitmap.width, bitmap.height);
   }
 
-  normalizeSourceImageDataForSamples(imageData) {
+  async normalizeSourceImageDataForSamples(imageData) {
     if (
       !this.sampleNormalizeToPalette
       || this.forcePaletteConversion
@@ -552,7 +238,16 @@ export default class Template {
       alphaThreshold: 1,
       useWasm: true,
     };
-    const conversion = convertImageDataToWplacePalette(imageData, options);
+    const pixelData = new Uint8ClampedArray(data);
+    const workerResult = await templateWorkerManager.runTask('convertImageData', {
+      pixelData,
+      width: imageData.width,
+      height: imageData.height,
+      options,
+    }, { transferList: [pixelData.buffer] }).catch(() => null);
+    if (workerResult?.pixelData instanceof Uint8ClampedArray) {
+      data.set(workerResult.pixelData);
+    }
     if (defaceOffsets.length > 0) {
       for (let index = 0; index < defaceOffsets.length; index++) {
         const base = defaceOffsets[index];
@@ -561,7 +256,7 @@ export default class Template {
         data[base + 2] = TEMPLATE_DEFACE_RGB[2];
       }
     }
-    return conversion?.imageData || imageData;
+    return imageData;
   }
 
   getChunkKeys() {
@@ -717,12 +412,24 @@ export default class Template {
     if (!(bitmap instanceof ImageBitmap)) {
       return null;
     }
-    const sampleData = this.extractChunkSamplesFromBitmap(bitmap);
+    const shreadSize = Math.max(1, Math.trunc(Number(this.shreadSize) || 1));
+    let sampleData = null;
+    if (templateWorkerManager.canUseWorkers()) {
+      const workerResult = await templateWorkerManager.runTask('extractChunkSamples', {
+        bitmap,
+        shreadSize,
+      }, { transferList: [bitmap] }).catch(() => null);
+      if (workerResult?.sampleData) {
+        sampleData = { ...workerResult.sampleData, native: true };
+      }
+    } else {
+      sampleData = this.extractChunkSamplesFromBitmap(bitmap);
+      if (memorySaving) {
+        bitmap.close?.();
+      }
+    }
     if (sampleData) {
       this.chunkedSamples[tileKey] = sampleData;
-    }
-    if (memorySaving) {
-      bitmap.close?.();
     }
     return sampleData;
   }
@@ -797,7 +504,7 @@ export default class Template {
       sourceContext.drawImage(bitmap, 0, 0);
       const sourceImageData = sourceContext.getImageData(0, 0, imageWidth, imageHeight);
       if (this.sampleNormalizeToPalette) {
-        this.normalizeSourceImageDataForSamples(sourceImageData);
+        await this.normalizeSourceImageDataForSamples(sourceImageData);
       }
       sourceData = sourceImageData.data;
       if (needsChunkSamples) {
@@ -818,8 +525,14 @@ export default class Template {
     const templateTileKeys = [];
     const templateMaskPoints = this.customMaskPoints(shreadSize);
     const templateMaskRowSpans = buildMaskRowSpans(templateMaskPoints, shreadSize);
+    const useWorkerChunkBuild = !!(
+      sourceData
+      && needsChunkSamples
+      && templateWorkerManager.canUseWorkers()
+    );
     let canvas = null;
     let context = null;
+    const chunkDescriptors = [];
 
     // For every tile...
     for (let pixelY = this.coords[3]; pixelY < imageHeight + this.coords[3]; ) {
@@ -865,18 +578,107 @@ export default class Template {
 
         const sourceX = pixelX - this.coords[2];
         const sourceY = pixelY - this.coords[3];
+        // Record tile prefix for fast lookup later
+        this.tilePrefixes.add(templateTileName.split(',').slice(0,2).join(','));
+        chunkDescriptors.push({
+          tileKey: templateTileName,
+          sourceX,
+          sourceY,
+          drawSizeX,
+          drawSizeY,
+          pixelX,
+          pixelY,
+        });
+
+        pixelX += drawSizeX;
+      }
+
+      pixelY += drawSizeY;
+    }
+    let workerChunkBuildFailed = false;
+    if (useWorkerChunkBuild) {
+      for (let index = 0; index < chunkDescriptors.length; index += TEMPLATE_CHUNK_BATCH_SIZE) {
+        const batchChunks = chunkDescriptors.slice(index, index + TEMPLATE_CHUNK_BATCH_SIZE);
+        const serializedMaskRowSpans = cloneMaskRowSpans(templateMaskRowSpans);
+        const workerSourceData = sourceData.slice();
+        const workerResult = await templateWorkerManager.runTask('buildTemplateChunkBatch', {
+          sourceData: workerSourceData,
+          imageWidth,
+          chunks: batchChunks.map((chunk) => ({
+            tileKey: chunk.tileKey,
+            sourceX: chunk.sourceX,
+            sourceY: chunk.sourceY,
+            drawSizeX: chunk.drawSizeX,
+            drawSizeY: chunk.drawSizeY,
+          })),
+          shreadSize,
+          maskPoints: templateMaskPoints,
+          maskRowSpans: serializedMaskRowSpans,
+          renderChunks: persistBitmapTiles || keepBitmapTilesInMemory,
+        }, {
+          transferList: [
+            workerSourceData.buffer,
+            ...getMaskRowSpansTransferList(serializedMaskRowSpans),
+          ],
+        });
+        if (!workerResult) {
+          workerChunkBuildFailed = true;
+          break;
+        }
+        mergePaletteStatsAccumulator(paletteStatsAccumulator, workerResult.paletteStats);
+        for (const entry of (workerResult.chunkResults || [])) {
+          const sampleData = decodeChunkSampleBuffer(entry.sampleBytes);
+          if (sampleData) {
+            sampleData.native = true;
+            if (keepChunkSamplesInMemory) {
+              templateChunkSamples[entry.tileKey] = sampleData;
+            }
+            if (persistChunkSamples && !lazyPersistChunkSamples) {
+              templateChunkSampleBuffers[entry.tileKey] = entry.sampleBytes;
+            }
+          }
+          if ((persistBitmapTiles || keepBitmapTilesInMemory) && entry.renderedPixels instanceof Uint8ClampedArray) {
+            let renderedCanvas = null;
+            try {
+              renderedCanvas = renderPixelsToCanvas(entry.renderedPixels, entry.renderedWidth, entry.renderedHeight);
+              if (keepBitmapTilesInMemory) {
+                templateTiles[entry.tileKey] = await createBitmapPreservingPixels(renderedCanvas);
+              }
+              if (persistBitmapTiles) {
+                const canvasBlob = await renderedCanvas.convertToBlob();
+                const canvasBuffer = await canvasBlob.arrayBuffer();
+                templateTilesBuffers[entry.tileKey] = new Uint8Array(canvasBuffer);
+              }
+            } finally {
+              if (renderedCanvas) {
+                cleanUpCanvas(renderedCanvas);
+              }
+            }
+          }
+        }
+      }
+    }
+    if (workerChunkBuildFailed) {
+      Object.keys(templateTiles).forEach((key) => { delete templateTiles[key]; });
+      Object.keys(templateTilesBuffers).forEach((key) => { delete templateTilesBuffers[key]; });
+      Object.keys(templateChunkSamples).forEach((key) => { delete templateChunkSamples[key]; });
+      Object.keys(templateChunkSampleBuffers).forEach((key) => { delete templateChunkSampleBuffers[key]; });
+      paletteStatsAccumulator = createPaletteStatsAccumulator();
+    }
+    if (!useWorkerChunkBuild || workerChunkBuildFailed) {
+      for (const chunk of chunkDescriptors) {
         const useSampleBasedChunking = !!(sourceData && needsChunkSamples);
         const sampleData = useSampleBasedChunking
           ? buildChunkSampleDataFromSource(
             sourceData,
             imageWidth,
-            sourceX,
-            sourceY,
-            drawSizeX,
-            drawSizeY,
+            chunk.sourceX,
+            chunk.sourceY,
+            chunk.drawSizeX,
+            chunk.drawSizeY,
             paletteStatsAccumulator,
           )
-          : (sourceData ? null : createChunkSampleData(drawSizeX, drawSizeY, 0, true));
+          : (sourceData ? null : createChunkSampleData(chunk.drawSizeX, chunk.drawSizeY, 0, true));
 
         if (sourceData ? (persistBitmapTiles || keepBitmapTilesInMemory) : true) {
           if (!canvas) {
@@ -887,8 +689,8 @@ export default class Template {
             }
             context.imageSmoothingEnabled = false;
           }
-          const canvasWidth = drawSizeX * shreadSize;
-          const canvasHeight = drawSizeY * shreadSize;
+          const canvasWidth = chunk.drawSizeX * shreadSize;
+          const canvasHeight = chunk.drawSizeY * shreadSize;
           canvas.width = canvasWidth;
           canvas.height = canvasHeight;
           context.imageSmoothingEnabled = false;
@@ -908,14 +710,14 @@ export default class Template {
           } else {
             context.drawImage(
               bitmap,
-              pixelX - this.coords[2],
-              pixelY - this.coords[3],
-              drawSizeX,
-              drawSizeY,
+              chunk.pixelX - this.coords[2],
+              chunk.pixelY - this.coords[3],
+              chunk.drawSizeX,
+              chunk.drawSizeY,
               0,
               0,
-              drawSizeX * shreadSize,
-              drawSizeY * shreadSize
+              chunk.drawSizeX * shreadSize,
+              chunk.drawSizeY * shreadSize
             );
 
             const imageData = context.getImageData(0, 0, canvasWidth, canvasHeight);
@@ -945,27 +747,21 @@ export default class Template {
             context.putImageData(imageData, 0, 0);
           }
           if (keepBitmapTilesInMemory) {
-            templateTiles[templateTileName] = await createBitmapPreservingPixels(canvas);
+            templateTiles[chunk.tileKey] = await createBitmapPreservingPixels(canvas);
           }
           if (persistBitmapTiles) {
             const canvasBlob = await canvas.convertToBlob();
             const canvasBuffer = await canvasBlob.arrayBuffer();
-            templateTilesBuffers[templateTileName] = new Uint8Array(canvasBuffer);
+            templateTilesBuffers[chunk.tileKey] = new Uint8Array(canvasBuffer);
           }
         }
         if (keepChunkSamplesInMemory && sampleData) {
-          templateChunkSamples[templateTileName] = sampleData;
+          templateChunkSamples[chunk.tileKey] = sampleData;
         }
         if (persistChunkSamples && sampleData && !lazyPersistChunkSamples) {
-          templateChunkSampleBuffers[templateTileName] = encodeChunkSampleBytes(sampleData);
+          templateChunkSampleBuffers[chunk.tileKey] = encodeChunkSampleBytes(sampleData);
         }
-        // Record tile prefix for fast lookup later
-        this.tilePrefixes.add(templateTileName.split(',').slice(0,2).join(','));
-
-        pixelX += drawSizeX;
       }
-
-      pixelY += drawSizeY;
     }
     if (paletteStatsAccumulator) {
       const paletteStats = finalizePaletteStatsAccumulator(paletteStatsAccumulator);
