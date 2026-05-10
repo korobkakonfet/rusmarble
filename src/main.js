@@ -134,7 +134,7 @@ const TEMPLATE_CREATE_MODE_TEXT = 'text';
 const TEMPLATE_CREATE_MODE_RUSSIAN_FLAG = 'russian-flag';
 const TEMPLATE_CREATE_MODE_TIME_ARCHIVE = 'time-archive';
 const TEMPLATE_ARCHIVE_BASE_URL = 'https://wplace.eralyon.net';
-const TEMPLATE_ARCHIVE_PREVIEW_MAX_DIMENSION = 360;
+const TEMPLATE_ARCHIVE_PREVIEW_MAX_DIMENSION = 4000;
 const TEMPLATE_ARCHIVE_PREVIEW_MAX_TILE_REQUESTS = 256;
 const TEMPLATE_ARCHIVE_PREVIEW_DOWNLOAD_CONCURRENCY = 10;
 const TEMPLATE_FLAG_WINDOW_DEFAULT_W = 620;
@@ -5499,24 +5499,38 @@ function drawDistanceLineOverlay() {
       const cornerX = x1;
       const cornerY = y0;
 
-      const drawGuideLabel = (text, x, y) => {
+      const canvasW = canvas.width / dpr;
+      const canvasH = canvas.height / dpr;
+      const LABEL_MARGIN = 4;
+      const clampToBounds = (cx, cy, w, h) => ({
+        x: Math.max(w / 2 + LABEL_MARGIN, Math.min(canvasW - w / 2 - LABEL_MARGIN, cx)),
+        y: Math.max(h / 2 + LABEL_MARGIN, Math.min(canvasH - h / 2 - LABEL_MARGIN, cy)),
+      });
+      const rectsOverlap = (ax, ay, aw, ah, bx, by, bw, bh, gap = 4) =>
+        Math.abs(ax - bx) < (aw + bw) / 2 + gap && Math.abs(ay - by) < (ah + bh) / 2 + gap;
+
+      // Returns bounding box { cx, cy, w, h } for later overlap checking.
+      const drawGuideLabel = (text, rawX, rawY) => {
         const padX = 5;
         const padY = 2;
         ctx.font = '600 10px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         const textWidth = ctx.measureText(text).width;
-        const boxWidth = textWidth + padX * 2;
-        const boxHeight = 12 + padY * 2;
-        const boxLeft = x - boxWidth / 2;
-        const boxTop = y - boxHeight / 2;
+        const w = textWidth + padX * 2;
+        const h = 12 + padY * 2;
+        const { x: cx, y: cy } = clampToBounds(rawX, rawY, w, h);
+        const boxLeft = cx - w / 2;
+        const boxTop = cy - h / 2;
+        ctx.setLineDash([]);
         ctx.fillStyle = 'rgba(0, 0, 0, 0.72)';
-        ctx.fillRect(boxLeft, boxTop, boxWidth, boxHeight);
+        ctx.fillRect(boxLeft, boxTop, w, h);
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
         ctx.lineWidth = 1;
-        ctx.strokeRect(boxLeft + 0.5, boxTop + 0.5, boxWidth - 1, boxHeight - 1);
+        ctx.strokeRect(boxLeft + 0.5, boxTop + 0.5, w - 1, h - 1);
         ctx.fillStyle = strokeColor;
-        ctx.fillText(text, x, y);
+        ctx.fillText(text, cx, cy);
+        return { cx, cy, w, h };
       };
 
       const drawGuideSegment = (fromX, fromY, toX, toY) => {
@@ -5546,43 +5560,71 @@ function drawDistanceLineOverlay() {
       ctx.globalAlpha = 0.85;
       const widthLabelOffsetY = y1 >= y0 ? -12 : 12;
       const heightLabelOffsetX = x1 >= x0 ? 12 : -12;
+      let wBox = null;
+      let hBox = null;
       if (metrics.width > 1) {
         drawGuideSegment(x0, y0, cornerX, cornerY);
-        drawGuideLabel(`W: ${metrics.width}px`, (x0 + cornerX) / 2, y0 + widthLabelOffsetY);
+        wBox = drawGuideLabel(`W: ${metrics.width}px`, (x0 + cornerX) / 2, y0 + widthLabelOffsetY);
       }
       if (metrics.height > 1) {
         drawGuideSegment(cornerX, cornerY, x1, y1);
-        drawGuideLabel(`H: ${metrics.height}px`, x1 + heightLabelOffsetX, (cornerY + y1) / 2);
+        hBox = drawGuideLabel(`H: ${metrics.height}px`, x1 + heightLabelOffsetX, (cornerY + y1) / 2);
       }
       ctx.globalAlpha = 1;
 
-      const labelText = `${metrics.euclidean.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} px | area ${metrics.area}`;
+      const labelText = `${metrics.euclidean.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} px | area ${metrics.area.toLocaleString()}`;
       const dxLine = projected.end.x - projected.start.x;
       const dyLine = projected.end.y - projected.start.y;
-      const length = Math.hypot(dxLine, dyLine);
-      const nx = length > 0 ? -dyLine / length : 0;
-      const ny = length > 0 ? dxLine / length : -1;
-      const labelX = (projected.start.x + projected.end.x) / 2 + nx * 12;
-      const labelY = (projected.start.y + projected.end.y) / 2 + ny * 12;
-      const padX = 6;
-      const padY = 3;
+      const lineLen = Math.hypot(dxLine, dyLine);
+      const nx = lineLen > 0 ? -dyLine / lineLen : 0;
+      const ny = lineLen > 0 ? dxLine / lineLen : -1;
+      const midX = (projected.start.x + projected.end.x) / 2;
+      const midY = (projected.start.y + projected.end.y) / 2;
+
+      const hypPadX = 6;
+      const hypPadY = 3;
       ctx.font = '600 11px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      const textWidth = ctx.measureText(labelText).width;
-      const boxWidth = textWidth + padX * 2;
-      const boxHeight = 14 + padY * 2;
-      const boxLeft = labelX - boxWidth / 2;
-      const boxTop = labelY - boxHeight / 2;
+      const hypTextWidth = ctx.measureText(labelText).width;
+      const hypW = hypTextWidth + hypPadX * 2;
+      const hypH = 14 + hypPadY * 2;
+
+      // Try perpendicular offsets on both sides until a non-overlapping position is found.
+      let hypCX = midX;
+      let hypCY = midY;
+      let placed = false;
+      const tryOffsets = [18, 28, 40, 56];
+      const trySides = [1, -1];
+      outer: for (const dist of tryOffsets) {
+        for (const side of trySides) {
+          const { x: cx, y: cy } = clampToBounds(midX + nx * dist * side, midY + ny * dist * side, hypW, hypH);
+          const clearW = !wBox || !rectsOverlap(cx, cy, hypW, hypH, wBox.cx, wBox.cy, wBox.w, wBox.h);
+          const clearH = !hBox || !rectsOverlap(cx, cy, hypW, hypH, hBox.cx, hBox.cy, hBox.w, hBox.h);
+          if (clearW && clearH) {
+            hypCX = cx;
+            hypCY = cy;
+            placed = true;
+            break outer;
+          }
+        }
+      }
+      if (!placed) {
+        const { x: cx, y: cy } = clampToBounds(midX + nx * 18, midY + ny * 18, hypW, hypH);
+        hypCX = cx;
+        hypCY = cy;
+      }
 
       ctx.setLineDash([]);
+      const hypBoxLeft = hypCX - hypW / 2;
+      const hypBoxTop = hypCY - hypH / 2;
       ctx.fillStyle = 'rgba(0, 0, 0, 0.72)';
-      ctx.fillRect(boxLeft, boxTop, boxWidth, boxHeight);
+      ctx.fillRect(hypBoxLeft, hypBoxTop, hypW, hypH);
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
       ctx.lineWidth = 1;
-      ctx.strokeRect(boxLeft + 0.5, boxTop + 0.5, boxWidth - 1, boxHeight - 1);
+      ctx.strokeRect(hypBoxLeft + 0.5, hypBoxTop + 0.5, hypW - 1, hypH - 1);
       ctx.fillStyle = strokeColor;
-      ctx.fillText(labelText, labelX, labelY);
+      ctx.fillText(labelText, hypCX, hypCY);
     }
   }
 
