@@ -18,6 +18,7 @@ import {
 import { convertImageDataToWplacePalette } from '../src/Template.js';
 import { colorpalette, rgbToMeta, uint8ToBase64, base64ToUint8 } from '../src/utils.js';
 import { createTemplateSampleExtractorWithWasm, isTemplateSampleExtractWasmAvailable } from '../src/templateSampleExtractWasm.js';
+import { filterBitmapPixelsWithWasm, isFilterBitmapPixelsWasmAvailable } from '../src/templateFilterWasm.js';
 
 const TEMPLATE_TILE_SIZE = 1000;
 const MAP_WORLD_WIDTH_PX = 2048 * TEMPLATE_TILE_SIZE;
@@ -1691,6 +1692,147 @@ function printTemplateCreationBreakdown(breakdowns) {
   }
 }
 
+// Simulate getOverallPerColorProgress over a large tileProgress map.
+// Compares the old O(tiles × colors × examples) scan vs the new O(colors) running-totals path.
+function buildTileProgressAggregationBenchmarks(sampleData, tilePixels) {
+  const TILE_COUNT = 500;
+  const COLORS_PER_TILE = 12;
+  const EXAMPLES_PER_COLOR = 32;
+  const rng = createRng(0xab000001);
+
+  const mockPaletteKeys = Array.from({ length: COLORS_PER_TILE }, (_, i) => `${(i * 4) & 255},${(i * 7) & 255},${(i * 13) & 255}`);
+
+  // Build a mock tileProgress Map identical to what templateManager holds.
+  const tileProgress = new Map();
+  for (let t = 0; t < TILE_COUNT; t++) {
+    const palette = {};
+    for (const colorKey of mockPaletteKeys) {
+      const examplesEnabled = Array.from({ length: EXAMPLES_PER_COLOR }, (_, j) => (
+        [[t, j], [Math.floor(rng() * 1000), Math.floor(rng() * 1000)]]
+      ));
+      palette[colorKey] = {
+        painted: Math.floor(rng() * 1000),
+        paintedAndEnabled: Math.floor(rng() * 1000),
+        missing: Math.floor(rng() * 1000),
+        examplesEnabled,
+      };
+    }
+    tileProgress.set(`${String(t).padStart(4, '0')},${String(t).padStart(4, '0')}`, {
+      painted: 500, required: 700, wrong: 50, palette, template: {},
+    });
+  }
+
+  // Old approach: full O(tiles × colors × examples) scan on every call.
+  const mergeLegacy = (tileProgress, exampleMax) => {
+    const combinedProgress = {};
+    for (const stats of tileProgress.values()) {
+      for (const [colorKey, content] of Object.entries(stats.palette)) {
+        if (combinedProgress[colorKey] === undefined) {
+          combinedProgress[colorKey] = {
+            painted: content.painted,
+            paintedAndEnabled: content.paintedAndEnabled,
+            missing: content.missing,
+            examplesEnabled: [],
+            _exampleSeenCount: 0,
+          };
+        } else {
+          combinedProgress[colorKey].painted += content.painted;
+          combinedProgress[colorKey].paintedAndEnabled += content.paintedAndEnabled;
+          combinedProgress[colorKey].missing += content.missing;
+        }
+        for (const ex of content.examplesEnabled) {
+          const target = combinedProgress[colorKey];
+          target._exampleSeenCount++;
+          if (target.examplesEnabled.length < exampleMax) {
+            target.examplesEnabled.push(ex);
+          } else if (Math.random() * target._exampleSeenCount < exampleMax) {
+            target.examplesEnabled[Math.floor(Math.random() * exampleMax)] = ex;
+          }
+        }
+      }
+    }
+    for (const v of Object.values(combinedProgress)) delete v._exampleSeenCount;
+    return combinedProgress;
+  };
+
+  // New approach: running totals precomputed, examples rebuilt only when dirty.
+  // Simulate the incremental state.
+  const runningPalette = {};
+  for (const stats of tileProgress.values()) {
+    for (const [colorKey, entry] of Object.entries(stats.palette)) {
+      if (!runningPalette[colorKey]) runningPalette[colorKey] = { painted: 0, paintedAndEnabled: 0, missing: 0 };
+      runningPalette[colorKey].painted += entry.painted;
+      runningPalette[colorKey].paintedAndEnabled += entry.paintedAndEnabled;
+      runningPalette[colorKey].missing += entry.missing;
+    }
+  }
+
+  const mergeFast = (runningPalette, tileProgress, exampleMax, examplesDirty, cachedExamples) => {
+    const combinedProgress = {};
+    for (const colorKey in runningPalette) {
+      const slot = runningPalette[colorKey];
+      combinedProgress[colorKey] = {
+        painted: Math.max(0, slot.painted),
+        paintedAndEnabled: Math.max(0, slot.paintedAndEnabled),
+        missing: Math.max(0, slot.missing),
+        examplesEnabled: [],
+      };
+    }
+    if (examplesDirty) {
+      for (const key in combinedProgress) combinedProgress[key]._exampleSeenCount = 0;
+      for (const stats of tileProgress.values()) {
+        for (const colorKey in stats.palette) {
+          const content = stats.palette[colorKey];
+          if (!content?.examplesEnabled?.length) continue;
+          const entry = combinedProgress[colorKey];
+          if (!entry) continue;
+          for (const ex of content.examplesEnabled) {
+            entry._exampleSeenCount++;
+            if (entry.examplesEnabled.length < exampleMax) {
+              entry.examplesEnabled.push(ex);
+            } else if (Math.random() * entry._exampleSeenCount < exampleMax) {
+              entry.examplesEnabled[Math.floor(Math.random() * exampleMax)] = ex;
+            }
+          }
+        }
+      }
+      for (const key in combinedProgress) delete combinedProgress[key]._exampleSeenCount;
+    } else if (cachedExamples) {
+      for (const colorKey in cachedExamples) {
+        if (combinedProgress[colorKey]) combinedProgress[colorKey].examplesEnabled = cachedExamples[colorKey]?.examplesEnabled ?? [];
+      }
+    }
+    return combinedProgress;
+  };
+
+  const EXAMPLE_MAX = 32;
+  const cachedExamples = mergeFast(runningPalette, tileProgress, EXAMPLE_MAX, true, null);
+  let checksum = 0;
+  const summarize = (cp) => {
+    let s = 0;
+    for (const v of Object.values(cp)) s += v.painted + v.missing + v.examplesEnabled.length;
+    return s;
+  };
+
+  return [
+    runBenchmark(`getOverallPerColorProgress(legacy,${TILE_COUNT}tiles)`, 50, () => {
+      const cp = mergeLegacy(tileProgress, EXAMPLE_MAX);
+      checksum = summarize(cp);
+      return checksum;
+    }),
+    runBenchmark(`getOverallPerColorProgress(fast,dirty,${TILE_COUNT}tiles)`, 50, () => {
+      const cp = mergeFast(runningPalette, tileProgress, EXAMPLE_MAX, true, null);
+      checksum = summarize(cp);
+      return checksum;
+    }),
+    runBenchmark(`getOverallPerColorProgress(fast,cached,${TILE_COUNT}tiles)`, 50, () => {
+      const cp = mergeFast(runningPalette, tileProgress, EXAMPLE_MAX, false, cachedExamples);
+      checksum = summarize(cp);
+      return checksum;
+    }),
+  ];
+}
+
 async function main() {
   const sourceData = buildSourceImageData();
   const nonPaletteSourceData = buildNonPaletteSourceImageData();
@@ -1932,7 +2074,7 @@ async function main() {
       const result = decodeChunkSampleBufferLegacy(encodedSample);
       return (result?.count || 0) + (result?.width || 0) + (result?.height || 0);
     }),
-    runBenchmark('collectTemplateProgressFromSamples', 16, () => {
+    runBenchmark('collectTemplateProgressFromSamples(WASM)', 16, () => {
       const paletteStats = {};
       const templateStats = {};
       const errorData = new Uint8ClampedArray(sampleData.width * sampleData.height * 4);
@@ -1953,6 +2095,36 @@ async function main() {
         errorData,
         errorWidth: sampleData.width,
         randomFn: makeReservoirRng(0xabc00001),
+        useWasm: true,
+      });
+      const exampleCount = Object.values(paletteStats).reduce(
+        (sum, entry) => sum + (entry?.examplesEnabled?.length || 0),
+        0
+      );
+      return result.paintedCount + result.wrongCount + result.requiredCount + exampleCount + Object.keys(templateStats).length;
+    }),
+    runBenchmark('collectTemplateProgressFromSamples(JS)', 16, () => {
+      const paletteStats = {};
+      const templateStats = {};
+      const errorData = new Uint8ClampedArray(sampleData.width * sampleData.height * 4);
+      const result = collectTemplateProgressFromSamples({
+        sampleData,
+        tilePixels,
+        tileSize: TEMPLATE_TILE_SIZE,
+        offsetX: OFFSET_X,
+        offsetY: OFFSET_Y,
+        tileCoords,
+        templateEnabled: true,
+        templateKey: 'bench-template',
+        paletteStats,
+        templateStats,
+        exampleMax: EXAMPLE_LIMIT,
+        errorMapOnlyEnabledColors: true,
+        displayedColors: displayedColorSet,
+        errorData,
+        errorWidth: sampleData.width,
+        randomFn: makeReservoirRng(0xabc00001),
+        useWasm: false,
       });
       const exampleCount = Object.values(paletteStats).reduce(
         (sum, entry) => sum + (entry?.examplesEnabled?.length || 0),
@@ -2099,6 +2271,32 @@ async function main() {
         ...displayedPackedWithOther,
       })
     )),
+    ...(isFilterBitmapPixelsWasmAvailable() ? [
+      runBenchmark('filterBitmapPixels(WASM,no-other)', 6, () => {
+        const knownSorted = Uint32Array.from(KNOWN_PALETTE_PACKED_COLORS).sort();
+        const dispSorted = Uint32Array.from(displayedPackedNoOther.displayedColorPackedSet).sort();
+        const result = filterBitmapPixelsWithWasm({
+          ...colorFilterFixture,
+          drawMultCenter: colorFilterFixture.drawMultCenterTemplate,
+          displayedColorsPacked: dispSorted,
+          knownColorsPacked: knownSorted,
+          displayOther: false,
+        });
+        return result ? result[0] + result[result.length - 1] : 0;
+      }),
+      runBenchmark('filterBitmapPixels(WASM,with-other)', 6, () => {
+        const knownSorted = Uint32Array.from(KNOWN_PALETTE_PACKED_COLORS).sort();
+        const dispSorted = Uint32Array.from(displayedPackedWithOther.displayedColorPackedSet).sort();
+        const result = filterBitmapPixelsWithWasm({
+          ...colorFilterFixture,
+          drawMultCenter: colorFilterFixture.drawMultCenterTemplate,
+          displayedColorsPacked: dispSorted,
+          knownColorsPacked: knownSorted,
+          displayOther: true,
+        });
+        return result ? result[0] + result[result.length - 1] : 0;
+      }),
+    ] : []),
     runBenchmark('overlayTransportLegacySim', 10, () => (
       overlayTransportLegacySim(overlayTransportSource)
     )),
@@ -2111,6 +2309,7 @@ async function main() {
     runBenchmark('hotPathLoggingGuardedOffSim', 12, () => (
       hotPathLoggingGuardedOffSim()
     )),
+    ...buildTileProgressAggregationBenchmarks(sampleData, tilePixels),
   ];
   if (typeof wasmNearestRunner === 'function') {
     results.splice(8, 0, runBenchmark('findNearestUnpaintedSamplePixel(WASM)', 24, () => (

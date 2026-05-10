@@ -4,38 +4,23 @@ const WASM_PAGE_BYTES = 64 * 1024;
 const WASM_RESULT_BYTES = 24;
 const MAP_WORLD_WIDTH_PX = 2048 * 1000;
 
-let wasmNearestState;
+let wasmNearestState = null;
 
-const getNearestWasmState = () => {
-  if (wasmNearestState !== undefined) {
-    return wasmNearestState;
-  }
-  try {
-    if (
-      typeof WebAssembly === 'undefined'
-      || !(findNearestUnpaintedWasmBytes instanceof Uint8Array)
-      || findNearestUnpaintedWasmBytes.length === 0
-    ) {
-      wasmNearestState = null;
-      return wasmNearestState;
-    }
-    const module = new WebAssembly.Module(findNearestUnpaintedWasmBytes);
-    const instance = new WebAssembly.Instance(module, {});
+if (
+  typeof WebAssembly !== 'undefined'
+  && findNearestUnpaintedWasmBytes instanceof Uint8Array
+  && findNearestUnpaintedWasmBytes.length > 0
+) {
+  WebAssembly.instantiate(findNearestUnpaintedWasmBytes, {}).then(({ instance }) => {
     const findNearest = instance.exports?.find_nearest;
     const memory = instance.exports?.memory;
-    if (!(memory instanceof WebAssembly.Memory) || typeof findNearest !== 'function') {
-      wasmNearestState = null;
-      return wasmNearestState;
+    if (memory instanceof WebAssembly.Memory && typeof findNearest === 'function') {
+      wasmNearestState = { memory, findNearest };
     }
-    wasmNearestState = {
-      memory,
-      findNearest,
-    };
-  } catch (_) {
-    wasmNearestState = null;
-  }
-  return wasmNearestState;
-};
+  }).catch(() => {});
+}
+
+const getNearestWasmState = () => wasmNearestState;
 
 const align = (value, alignment) => ((value + alignment - 1) & ~(alignment - 1));
 const ensureMemoryCapacity = (memory, requiredBytes) => {

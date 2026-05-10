@@ -1,5 +1,6 @@
 import { uint8ToBase64, base64ToUint8, rgbToMeta } from './utils.js';
 import { findNearestUnpaintedPixelWithWasm, isTemplateNearestWasmAvailable } from './templateNearestWasm.js';
+import { collectProgressWithWasm, isCollectProgressWasmAvailable } from './templateProgressWasm.js';
 
 export const TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE = 1;
 export const TEMPLATE_CHUNK_SAMPLE_HEADER_BYTES = 8;
@@ -94,6 +95,20 @@ const paintablePaletteColors = [...paintablePackedRgbSet].map((packed) => ({
   g: (packed >> 8) & 255,
   b: packed & 255,
 }));
+// Flat typed arrays for WASM palette lookup (built once, re-used each call)
+const wasmPalettePackedColors = Uint32Array.from(paintablePaletteColors, (c) => c.packed);
+const wasmPaletteRgb = (() => {
+  const n = paintablePaletteColors.length;
+  const r = new Uint8Array(n);
+  const g = new Uint8Array(n);
+  const b = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    r[i] = paintablePaletteColors[i].r;
+    g[i] = paintablePaletteColors[i].g;
+    b[i] = paintablePaletteColors[i].b;
+  }
+  return { r, g, b };
+})();
 const nearestPaintablePackedCache = new Map();
 const cacheNearestPaintablePacked = (packed, nearestPacked) => {
   if (nearestPaintablePackedCache.size >= NEAREST_PAINTABLE_CACHE_MAX) {
@@ -391,6 +406,117 @@ export const decodeChunkSampleBuffer = (bufferValue) => {
   return sampleData;
 };
 
+export const serializeChunkSampleData = (sampleData) => {
+  if (!sampleData || !Number.isFinite(sampleData.count)) {
+    return null;
+  }
+  const count = Math.max(0, Math.trunc(Number(sampleData.count) || 0));
+  return {
+    width: Math.max(0, Math.trunc(Number(sampleData.width) || 0)),
+    height: Math.max(0, Math.trunc(Number(sampleData.height) || 0)),
+    count,
+    native: sampleData.native !== false,
+    x: sampleData.x instanceof Uint16Array ? sampleData.x.slice(0, count) : new Uint16Array(0),
+    y: sampleData.y instanceof Uint16Array ? sampleData.y.slice(0, count) : new Uint16Array(0),
+    r: sampleData.r instanceof Uint8Array ? sampleData.r.slice(0, count) : new Uint8Array(0),
+    g: sampleData.g instanceof Uint8Array ? sampleData.g.slice(0, count) : new Uint8Array(0),
+    b: sampleData.b instanceof Uint8Array ? sampleData.b.slice(0, count) : new Uint8Array(0),
+    a: sampleData.a instanceof Uint8Array ? sampleData.a.slice(0, count) : new Uint8Array(0),
+    flags: sampleData.flags instanceof Uint8Array ? sampleData.flags.slice(0, count) : new Uint8Array(0),
+  };
+};
+
+export const deserializeChunkSampleData = (value) => {
+  if (!value || !Number.isFinite(value.count)) {
+    return null;
+  }
+  const count = Math.max(0, Math.trunc(Number(value.count) || 0));
+  return {
+    width: Math.max(0, Math.trunc(Number(value.width) || 0)),
+    height: Math.max(0, Math.trunc(Number(value.height) || 0)),
+    count,
+    native: value.native !== false,
+    x: value.x instanceof Uint16Array ? value.x : new Uint16Array(value.x || 0),
+    y: value.y instanceof Uint16Array ? value.y : new Uint16Array(value.y || 0),
+    r: value.r instanceof Uint8Array ? value.r : new Uint8Array(value.r || 0),
+    g: value.g instanceof Uint8Array ? value.g : new Uint8Array(value.g || 0),
+    b: value.b instanceof Uint8Array ? value.b : new Uint8Array(value.b || 0),
+    a: value.a instanceof Uint8Array ? value.a : new Uint8Array(value.a || 0),
+    flags: value.flags instanceof Uint8Array ? value.flags : new Uint8Array(value.flags || 0),
+  };
+};
+
+export const getChunkSampleTransferList = (value) => {
+  if (!value || typeof value !== 'object') {
+    return [];
+  }
+  const transferList = [];
+  [value.x, value.y, value.r, value.g, value.b, value.a, value.flags].forEach((entry) => {
+    if (entry?.buffer instanceof ArrayBuffer) {
+      transferList.push(entry.buffer);
+    }
+  });
+  return transferList;
+};
+
+export const cloneMaskRowSpans = (maskRowSpans) => (
+  Array.isArray(maskRowSpans)
+    ? maskRowSpans.map((spans) => Uint16Array.from(Array.isArray(spans) ? spans : []))
+    : []
+);
+
+export const getMaskRowSpansTransferList = (maskRowSpans) => (
+  Array.isArray(maskRowSpans)
+    ? maskRowSpans
+      .filter((spans) => spans?.buffer instanceof ArrayBuffer)
+      .map((spans) => spans.buffer)
+    : []
+);
+
+export const mergeSerializedPaletteProgress = (target, incoming, exampleMax) => {
+  if (!incoming || typeof incoming !== 'object') {
+    return target;
+  }
+  for (const [key, entry] of Object.entries(incoming)) {
+    if (!entry || typeof entry !== 'object') continue;
+    let targetEntry = target[key];
+    if (!targetEntry) {
+      targetEntry = {
+        painted: 0,
+        paintedAndEnabled: 0,
+        missing: 0,
+        examplesEnabled: [],
+      };
+      target[key] = targetEntry;
+    }
+    targetEntry.painted += Math.max(0, Number(entry.painted) || 0);
+    targetEntry.paintedAndEnabled += Math.max(0, Number(entry.paintedAndEnabled) || 0);
+    targetEntry.missing += Math.max(0, Number(entry.missing) || 0);
+    mergeTemplateExampleReservoir(
+      targetEntry,
+      Array.isArray(entry.examplesEnabled) ? entry.examplesEnabled : [],
+      exampleMax
+    );
+  }
+  return target;
+};
+
+export const mergeSerializedTemplateProgress = (target, incoming) => {
+  if (!incoming || typeof incoming !== 'object') {
+    return target;
+  }
+  for (const [templateKey, entry] of Object.entries(incoming)) {
+    if (!entry || typeof entry !== 'object') continue;
+    const targetEntry = target[templateKey] ?? (target[templateKey] = { painted: 0, palette: {} });
+    targetEntry.painted += Math.max(0, Number(entry.painted) || 0);
+    const palette = (entry.palette && typeof entry.palette === 'object') ? entry.palette : {};
+    for (const [colorKey, count] of Object.entries(palette)) {
+      targetEntry.palette[colorKey] = (Number(targetEntry.palette[colorKey]) || 0) + (Number(count) || 0);
+    }
+  }
+  return target;
+};
+
 export const inspectSourceImagePalette = (sourceData, width, height) => {
   if (!sourceData || !Number.isFinite(width) || !Number.isFinite(height)) {
     return { required: 0, deface: 0, paletteMap: new Map() };
@@ -649,11 +775,96 @@ export const collectTemplateProgressFromSamples = ({
   errorData = null,
   errorWidth = 0,
   randomFn = Math.random,
+  useWasm = true,
 }) => {
   if (!sampleData || !tilePixels || !Number.isFinite(tileSize)) {
     return { paintedCount: 0, wrongCount: 0, requiredCount: 0 };
   }
 
+  // --- WASM fast path ---
+  if (useWasm && isCollectProgressWasmAvailable() && tilePixels instanceof Uint8ClampedArray) {
+    const displayedColorPackedArr = errorMapOnlyEnabledColors
+      ? getDisplayedColorPackedArray(displayedColors)
+      : null;
+    const displayOtherInErrorMap = errorMapOnlyEnabledColors
+      ? (displayedColors?.has(TEMPLATE_OTHER_COLOR_KEY) === true)
+      : true;
+    const paletteCount = wasmPalettePackedColors.length;
+    const wasmResult = collectProgressWithWasm({
+      sampleData,
+      tilePixels,
+      tileSize: Math.max(1, Math.trunc(Number(tileSize) || 0)),
+      offsetX,
+      offsetY,
+      palettePackedColors: wasmPalettePackedColors,
+      paletteRgb: wasmPaletteRgb,
+      paletteCount,
+      colorMatchDelta,
+      templateEnabled: templateEnabled !== false,
+      errorDataPtr0: errorData instanceof Uint8ClampedArray ? errorData : null,
+      errorWidth,
+      errorMapOnlyEnabled: errorMapOnlyEnabledColors,
+      displayedColorsPacked: displayedColorPackedArr,
+      displayOther: displayOtherInErrorMap,
+    });
+    if (wasmResult) {
+      const { paintedCount, wrongCount, requiredCount, paintedByIndex, paintedAndEnabledByIndex, missingByIndex, missingMask } = wasmResult;
+      const isEnabled = templateEnabled !== false;
+      // Reconstruct string-keyed paletteStats from indexed WASM output
+      for (let i = 0; i <= paletteCount; i++) {
+        const p = paintedByIndex[i] | 0;
+        const pe = paintedAndEnabledByIndex[i] | 0;
+        const m = missingByIndex[i] | 0;
+        if (p === 0 && m === 0) continue;
+        const colorKey = i < paletteCount ? (paletteKeyByIndex[i] || TEMPLATE_OTHER_COLOR_KEY) : TEMPLATE_OTHER_COLOR_KEY;
+        let entry = paletteStats[colorKey];
+        if (entry === undefined) {
+          entry = { painted: 0, paintedAndEnabled: 0, missing: 0, examplesEnabled: [] };
+          paletteStats[colorKey] = entry;
+        }
+        entry.painted += p;
+        entry.paintedAndEnabled += pe;
+        entry.missing += m;
+      }
+      // Build templateStats from total painted count
+      if (templateKey) {
+        let tp = templateStats[templateKey];
+        if (tp === undefined) {
+          tp = { painted: 0, palette: {} };
+          templateStats[templateKey] = tp;
+        }
+        tp.painted += paintedCount;
+        for (let i = 0; i <= paletteCount; i++) {
+          const p = paintedByIndex[i] | 0;
+          if (p === 0) continue;
+          const colorKey = i < paletteCount ? (paletteKeyByIndex[i] || TEMPLATE_OTHER_COLOR_KEY) : TEMPLATE_OTHER_COLOR_KEY;
+          tp.palette[colorKey] = (Number(tp.palette[colorKey]) || 0) + p;
+        }
+      }
+      // Collect examples via missingMask (second pass — cheap byte scan)
+      if (isEnabled && exampleMax > 0) {
+        const safeTileSize = Math.max(1, Math.trunc(Number(tileSize) || 0));
+        for (let i = 0; i < sampleData.count; i++) {
+          const maskVal = missingMask[i];
+          if (maskVal === 0) continue;
+          const paletteIndex = maskVal - 1;
+          const colorKey = paletteIndex < paletteCount ? (paletteKeyByIndex[paletteIndex] || TEMPLATE_OTHER_COLOR_KEY) : TEMPLATE_OTHER_COLOR_KEY;
+          let entry = paletteStats[colorKey];
+          if (entry === undefined) {
+            entry = { painted: 0, paintedAndEnabled: 0, missing: 0, examplesEnabled: [] };
+            paletteStats[colorKey] = entry;
+          }
+          const pixelX = offsetX + sampleData.x[i];
+          const pixelY = offsetY + sampleData.y[i];
+          if (pixelX < 0 || pixelY < 0 || pixelX >= safeTileSize || pixelY >= safeTileSize) continue;
+          addPixelExampleToReservoir(entry, tileCoords, pixelX, pixelY, exampleMax, randomFn);
+        }
+      }
+      return { paintedCount, wrongCount, requiredCount };
+    }
+  }
+
+  // --- JS fallback ---
   let paintedCount = 0;
   let wrongCount = 0;
   let requiredCount = 0;

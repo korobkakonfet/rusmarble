@@ -15,6 +15,8 @@
  *   openTextTemplateBuilder: Function,
  * }}
  */
+import { templateWorkerManager } from './templateWorkerManager.js';
+
 export const createTemplateCreationUi = (deps = {}) => {
   const {
     t: translate = null,
@@ -22,7 +24,6 @@ export const createTemplateCreationUi = (deps = {}) => {
     normalizeTemplatePaletteConversionOptions,
     templatePaletteConversionDefaults,
     convertTemplateImageFileToPaletteBlob,
-    convertImageDataToWplacePalette,
     cleanUpCanvas,
     consoleWarn,
     TEMPLATE_PALETTE_PREVIEW_MAX_DIMENSION,
@@ -506,7 +507,7 @@ export const createTemplateCreationUi = (deps = {}) => {
       };
 
       let renderToken = 0;
-      const renderPreview = () => {
+      const renderPreview = async () => {
         updateControlMeta();
         if (!previewImageData || !convertedCtx) {
           const selected = getSelectedOptions();
@@ -527,16 +528,19 @@ export const createTemplateCreationUi = (deps = {}) => {
         }
         const token = ++renderToken;
         const options = getSelectedOptions();
-        const workingImageData = new ImageData(
-          new Uint8ClampedArray(previewImageData.data),
-          previewWidth,
-          previewHeight
-        );
-        const conversion = convertImageDataToWplacePalette(workingImageData, options);
+        const pixelData = new Uint8ClampedArray(previewImageData.data);
+        const workerResult = await templateWorkerManager.runTask('convertImageData', {
+          pixelData,
+          width: previewWidth,
+          height: previewHeight,
+          options,
+        }, { transferList: [pixelData.buffer] }).catch(() => null);
         if (token !== renderToken) return;
         convertedCtx.clearRect(0, 0, previewWidth, previewHeight);
-        convertedCtx.putImageData(conversion.imageData, 0, 0);
-        const stats = conversion.stats || {};
+        if (workerResult?.pixelData instanceof Uint8ClampedArray) {
+          convertedCtx.putImageData(new ImageData(workerResult.pixelData, previewWidth, previewHeight), 0, 0);
+        }
+        const stats = workerResult?.stats || {};
         const convertedText = new Intl.NumberFormat().format(Number(stats.convertedPixels) || 0);
         const otherText = new Intl.NumberFormat().format(Number(stats.remainingOtherPixels) || 0);
         previewMeta.textContent = tt(
@@ -1852,7 +1856,7 @@ export const createTemplateCreationUi = (deps = {}) => {
               maskRegionCache = { key: cacheKey, value: mapRegion };
             }
           }
-          const result = buildRussianFlagTemplateImageData({
+          const result = await buildRussianFlagTemplateImageData({
             styleKey: style.key,
             width,
             height,

@@ -117,6 +117,17 @@ if (blueMetaContent) {
 const inlineCss = fs.readFileSync('dist/RusMarble.user.css', 'utf8');
 
 // Compiles the JS files
+const workerBundle = await esbuild.build({
+  entryPoints: ['src/templatePixelWorker.js'],
+  bundle: true,
+  write: false,
+  format: 'iife',
+  target: 'es2020',
+  platform: 'browser',
+  minify: false,
+}).catch(() => process.exit(1));
+const workerBundleJS = workerBundle.outputFiles.find(file => file.path.endsWith('.js'));
+
 const resultEsbuild = await esbuild.build({
   entryPoints: ['src/main.js'], // "Infect" the files from this point (it spreads from this "patient 0")
   bundle: true, // Should the code be bundled?
@@ -125,7 +136,8 @@ const resultEsbuild = await esbuild.build({
     __CSS_BM_FILE__: JSON.stringify(cssBmFile),
     __TEMPLATE_SYNC_BASE_URL__: JSON.stringify(templateSyncBaseUrl),
     __CHAT_WS_URL__: JSON.stringify(chatWsUrl),
-    __INLINE_CSS__: JSON.stringify(inlineCss)
+    __INLINE_CSS__: JSON.stringify(inlineCss),
+    __TEMPLATE_PIXEL_WORKER_SOURCE__: JSON.stringify(workerBundleJS?.text || '')
   },
   format: 'iife', // What format the bundler bundles the code into
   target: 'es2020', // What is the minimum version/year that should be supported? When omited, it attempts to support backwards compatability with legacy browsers

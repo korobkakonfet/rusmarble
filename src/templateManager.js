@@ -1,12 +1,24 @@
 ﻿import Template from "./Template";
 import { numberToEncoded, cleanUpCanvas, rgbToMeta, sortByOptions, testCanvasSize, getCurrentColor, sleep, createBitmapPreservingPixels, consoleLog, uint8ToBase64, setDebugLoggingEnabled as setGlobalDebugLoggingEnabled } from "./utils";
 import { themeList, addTemplateCanvas, removeLayer, removeTemplateCanvasSources, forceRefreshTiles, coordsGeoCoordsToTileCoords, getMapBounds, doAfterMapFound, isMapTilerLoaded, bmCanvas, getMountedTemplateCanvasSourceIDs } from './utilsMaptiler.js';
-import { buildMaskRowSpans, collectTemplateProgressFromSamples, mergeTemplateExampleReservoir, renderSampleDataToImage } from './templateChunkUtils.js';
+import {
+  buildMaskRowSpans,
+  cloneMaskRowSpans,
+  collectTemplateProgressFromSamples,
+  encodeChunkSampleBytes,
+  getMaskRowSpansTransferList,
+  mergeSerializedPaletteProgress,
+  mergeSerializedTemplateProgress,
+  mergeTemplateExampleReservoir,
+  renderSampleDataToImage,
+} from './templateChunkUtils.js';
+import { templateWorkerManager } from './templateWorkerManager.js';
 
 const DEFAULT_TEMPLATE_SYNC_STREAM = 'root';
 const DEFAULT_TEMPLATE_EXAMPLE_LIMIT = 32;
 const SMART_TEMPLATE_EXAMPLE_LIMIT = 128;
 const TEMPLATE_OTHER_COLOR_KEY = 'other';
+const OVERLAY_RASTER_CACHE_MAX = 256;
 const packRgb = (r, g, b) => ((r << 16) | (g << 8) | b);
 const parsePackedRgbKey = (key) => {
   if (typeof key !== 'string') return null;
@@ -38,6 +50,7 @@ const knownPalettePackedColors = (() => {
   }
   return packedSet;
 })();
+const knownColorsSorted = Uint32Array.from(knownPalettePackedColors).sort();
 const UI_WORK_SLICE_MS = 8;
 const getNowMs = () => (
   typeof performance !== 'undefined' && typeof performance.now === 'function'
@@ -120,6 +133,17 @@ const normalizeTimeArchiveMeta = (value) => {
 const templateJsonReplacer = (_key, value) => (
   value instanceof Uint8Array ? uint8ToBase64(value) : value
 );
+const paintPixelsToCanvas = (pixels, width, height) => {
+  let canvas = new OffscreenCanvas(width, height);
+  const context = canvas.getContext('2d');
+  if (!context) {
+    cleanUpCanvas(canvas);
+    canvas = null;
+    throw new Error('Failed to initialize canvas for worker pixels.');
+  }
+  context.putImageData(new ImageData(pixels, width, height), 0, 0);
+  return canvas;
+};
 
 
 /** Manages the template system.
@@ -187,6 +211,10 @@ export default class TemplateManager {
     this.templatesJSON = null; // All templates currently loaded (JSON)
     // this.templatesShouldBeDrawn = true; // Should ALL templates be drawn to the canvas?
     this.tileProgress = new Map(); // Tracks per-tile progress stats {painted, required, wrong}
+    this._runningPalette = Object.create(null);  // colorKey -> {painted, paintedAndEnabled, missing}
+    this._runningTemplate = Object.create(null); // storageKey -> {painted, palette: {colorKey: count}}
+    this._examplesDirty = true; // rebuild combined examples next time they are requested
+    this._cachedExamples = null;
     // this.tileOverlay = new Map(); // Cache tile overlay to save time
     this.extraColorsBitmap = 0; // List of unlocked colors, set by apiManager
     this.completedColorsBitmapLo = 0; // 0 ~ 31
@@ -196,6 +224,9 @@ export default class TemplateManager {
     this.largestSeenSortID = 0; // Even a safer approach: recording the largest storage Keys that have been used in this session. Don't remove anything here.
     this.importPromise = Promise.resolve();
     this._visiblePrefixCache = null; // { key: string, result: Set }
+    this._overlayRenderGeneration = 0;
+    this._activeOverlayGenerationId = null;
+    this._overlayRasterCache = new Map();
   }
 
   /** Retrieves the pixel art canvas.
@@ -462,7 +493,15 @@ export default class TemplateManager {
    * @since 0.72.7
    */
   async storeTemplates() {
-    await GM.setValue('bmTemplates', JSON.stringify(this.getPersistableTemplatesJSON(), templateJsonReplacer));
+    const data = this.getPersistableTemplatesJSON();
+    let json;
+    if (templateWorkerManager.canUseWorkers()) {
+      const result = await templateWorkerManager.runTask('serializeJson', { data }).catch(() => null);
+      json = result?.json ?? JSON.stringify(data, templateJsonReplacer);
+    } else {
+      json = JSON.stringify(data, templateJsonReplacer);
+    }
+    await GM.setValue('bmTemplates', json);
   }
 
   getPersistableTemplatesJSON() {
@@ -583,7 +622,8 @@ export default class TemplateManager {
     const templateCount = templatesTilesToHandle?.length || 0;
     const enabledTemplateCount = this.templatesArray.filter((template) => template.enabled).length;
     const errorMapOnlyEnabledColors = this.isErrorMapShown() && this.isErrorMapOnlyEnabledColorsShown();
-    const displayedColors = errorMapOnlyEnabledColors ? new Set(this.getDisplayedColorsSorted()) : null;
+    const displayedColorList = errorMapOnlyEnabledColors ? this.getDisplayedColorsSorted() : null;
+    const displayedColors = displayedColorList ? new Set(displayedColorList) : null;
 
     let paintedCount = 0;
     let wrongCount = 0;
@@ -638,32 +678,78 @@ export default class TemplateManager {
       const offsetYResult = templateTile.pixelCoords[1];
 
       try {
-        const progress = collectTemplateProgressFromSamples({
-          sampleData,
-          tilePixels,
-          tileSize,
-          offsetX: offsetXResult,
-          offsetY: offsetYResult,
-          tileCoords,
-          templateEnabled: templateTileEnabled,
-          templateKey,
-          paletteStats,
-          templateStats,
-          exampleMax,
-          errorMapOnlyEnabledColors,
-          displayedColors,
-          errorData: isErrorMapShown && templateTileEnabled ? errorData : null,
-          errorWidth,
-        });
-        paintedCount += progress.paintedCount;
-        wrongCount += progress.wrongCount;
-        requiredCount += progress.requiredCount;
+        const encodedSampleBytes = sampleData ? encodeChunkSampleBytes(sampleData) : null;
+        const workerTilePixels = tilePixels.slice();
+        const workerResult = encodedSampleBytes
+          ? await templateWorkerManager.runTask('scanTileProgress', {
+            sampleData: encodedSampleBytes,
+            tilePixels: workerTilePixels,
+            tileSize,
+            offsetX: offsetXResult,
+            offsetY: offsetYResult,
+            tileCoords,
+            templateEnabled: templateTileEnabled,
+            templateKey,
+            exampleMax,
+            errorMapOnlyEnabledColors,
+            displayedColors: displayedColorList,
+            includeErrorMap: isErrorMapShown && templateTileEnabled,
+            errorWidth,
+            errorHeight,
+          }, {
+            transferList: [
+              encodedSampleBytes.buffer,
+              workerTilePixels.buffer,
+            ],
+          })
+          : null;
 
-        if (isErrorMapShown && templateTileEnabled) {
-          errorContext.putImageData(errorImage, 0, 0);
-          addTemplateCanvas(template.sortID, templateTile.tileKey, [errorWidth, errorHeight], errorCanvas, "error");
-          cleanUpCanvas(errorCanvas);
-          errorCanvas = null;
+        if (workerResult) {
+          paintedCount += workerResult.paintedCount || 0;
+          wrongCount += workerResult.wrongCount || 0;
+          requiredCount += workerResult.requiredCount || 0;
+          mergeSerializedPaletteProgress(paletteStats, workerResult.paletteStats, exampleMax);
+          mergeSerializedTemplateProgress(templateStats, workerResult.templateStats);
+
+          if (
+            isErrorMapShown
+            && templateTileEnabled
+            && workerResult.errorData instanceof Uint8ClampedArray
+          ) {
+            errorImage = new ImageData(workerResult.errorData, errorWidth, errorHeight);
+            errorContext.putImageData(errorImage, 0, 0);
+            addTemplateCanvas(template.sortID, templateTile.tileKey, [errorWidth, errorHeight], errorCanvas, "error");
+            cleanUpCanvas(errorCanvas);
+            errorCanvas = null;
+          }
+        } else {
+          const progress = collectTemplateProgressFromSamples({
+            sampleData,
+            tilePixels,
+            tileSize,
+            offsetX: offsetXResult,
+            offsetY: offsetYResult,
+            tileCoords,
+            templateEnabled: templateTileEnabled,
+            templateKey,
+            paletteStats,
+            templateStats,
+            exampleMax,
+            errorMapOnlyEnabledColors,
+            displayedColors,
+            errorData: isErrorMapShown && templateTileEnabled ? errorData : null,
+            errorWidth,
+          });
+          paintedCount += progress.paintedCount;
+          wrongCount += progress.wrongCount;
+          requiredCount += progress.requiredCount;
+
+          if (isErrorMapShown && templateTileEnabled) {
+            errorContext.putImageData(errorImage, 0, 0);
+            addTemplateCanvas(template.sortID, templateTile.tileKey, [errorWidth, errorHeight], errorCanvas, "error");
+            cleanUpCanvas(errorCanvas);
+            errorCanvas = null;
+          }
         }
       } catch (exception) {
         console.warn('Failed to compute per-tile painted/wrong stats:', exception);
@@ -672,10 +758,10 @@ export default class TemplateManager {
 
     if (templateCount === 0) {
       if (this.tileProgress.has(tileCoordsPadded)) {
-        this.tileProgress.delete(tileCoordsPadded);
+        this._deleteTileProgress(tileCoordsPadded);
       }
     } else {
-      this.tileProgress.set(tileCoordsPadded, {
+      this._setTileProgress(tileCoordsPadded, {
         painted: paintedCount,
         required: requiredCount,
         wrong: wrongCount,
@@ -684,13 +770,11 @@ export default class TemplateManager {
       });
     }
 
+    // Use running totals — O(templates) instead of O(tiles × templates).
     let aggPainted = 0;
-    const templateEnabledState = Object.fromEntries((this?.templatesArray ?? []).map((template) => [template.storageKey, template.enabled]));
-    for (const stats of this.tileProgress.values()) {
-      Object.entries(stats.template).forEach(([storageKey, content]) => {
-        if (!templateEnabledState[storageKey]) return;
-        aggPainted += content.painted || 0;
-      });
+    for (const template of (this.templatesArray ?? [])) {
+      if (!template.enabled) continue;
+      aggPainted += this._runningTemplate[template.storageKey]?.painted || 0;
     }
 
     const totalRequired = this.templatesArray.reduce((sum, template) =>
@@ -851,6 +935,11 @@ export default class TemplateManager {
    */
   async _createOverlayOnMapInternal(sortID = null, options = null) {
     const yieldUi = createUiWorkScheduler();
+    if (this._activeOverlayGenerationId) {
+      templateWorkerManager.cancelGeneration(this._activeOverlayGenerationId);
+    }
+    const overlayGenerationId = `overlay:${++this._overlayRenderGeneration}`;
+    this._activeOverlayGenerationId = overlayGenerationId;
     const tilePrefixSet = options?.tilePrefixes ?? null;
     const skipExisting = options?.skipExisting === true;
     const mountedOverlaySourceIDs = skipExisting
@@ -882,9 +971,11 @@ export default class TemplateManager {
     const drawMultResult = this.getTemplateDrawSize(displayMode);
     const maskPoints = this.getTemplateMaskPoints(displayMode, drawMultResult, templates[0] ?? null);
     const maskRowSpans = buildMaskRowSpans(maskPoints, drawMultResult);
+    const displayedColorsHash = this.getOverlayDisplayedColorsHash(displayedColors);
 
     for (const template of templates) {
       await yieldUi();
+      if (this._activeOverlayGenerationId !== overlayGenerationId) return;
       if (!template.enabled) return; // no need to draw if template is disabled
       if (allColorsDisabled) {
         // make sure we removed all layers related to this template
@@ -897,6 +988,7 @@ export default class TemplateManager {
       }
       for (const tileKey of tileKeys) {
         await yieldUi();
+        if (this._activeOverlayGenerationId !== overlayGenerationId) return;
         const sourceID = `BM-overlay-${tileKey}-${template.sortID}`;
         if (skipExisting && mountedOverlaySourceIDs?.has(sourceID)) {
           continue;
@@ -922,111 +1014,124 @@ export default class TemplateManager {
         const safeOriginalHeight = Math.max(1, Math.round(Number(originalHeight) || 0));
         const resultWidth = safeOriginalWidth * drawMultResult; // Calculate draw multiplier for scaling
         const resultHeight = safeOriginalHeight * drawMultResult;
-
-        let resultCanvas = new OffscreenCanvas(resultWidth, resultHeight);
-        const resultContext = resultCanvas.getContext('2d');
-
-        resultContext.imageSmoothingEnabled = false; // Nearest neighbor
-
-        // Tells the canvas to ignore anything outside of this area
-        resultContext.beginPath();
-        resultContext.rect(0, 0, resultWidth, resultHeight);
-        resultContext.clip();
-
-        resultContext.clearRect(0, 0, resultWidth, resultHeight); // Draws transparent background
+        const overlayCacheKey = this.getOverlayRasterCacheKey(
+          tileKey,
+          template.sortID,
+          drawMultResult,
+          displayMode,
+          displayedColorsHash
+        );
+        const cachedRaster = this.getOverlayRasterCacheEntry(overlayCacheKey);
+        let resultCanvas = null;
+        let resultContext = null;
 
         try {
-          if (sampleData) {
-            const image = resultContext.createImageData(resultWidth, resultHeight);
-            if (!hasColorDisabled && drawMultTemplate === drawMultResult && displayMode !== 'fill') {
-              renderSampleDataToImage({
-                sampleData,
-                imageData: image,
+          const useCheckerboardRender = !hasColorDisabled && drawMultTemplate === drawMultResult && displayMode !== 'fill';
+          if (cachedRaster?.pixels instanceof Uint8ClampedArray) {
+            resultCanvas = paintPixelsToCanvas(cachedRaster.pixels.slice(), resultWidth, resultHeight);
+          } else if (sampleData) {
+            const encodedSampleBytesOverlay = sampleData ? encodeChunkSampleBytes(sampleData) : null;
+            const serializedMaskRowSpans = cloneMaskRowSpans(maskRowSpans);
+            const workerResult = encodedSampleBytesOverlay
+              ? await templateWorkerManager.runTask('renderOverlayChunk', {
+                sampleData: encodedSampleBytesOverlay,
                 resultWidth,
+                resultHeight,
                 drawSize: drawMultResult,
                 maskPoints,
-                maskRowSpans,
-                includeDefaceCheckerboard: true,
+                maskRowSpans: serializedMaskRowSpans,
+                displayedColors: useCheckerboardRender ? null : displayedColors,
+                includeDefaceCheckerboard: useCheckerboardRender,
+              }, {
+                generation: overlayGenerationId,
+                transferList: [
+                  encodedSampleBytesOverlay.buffer,
+                  ...getMaskRowSpansTransferList(serializedMaskRowSpans),
+                ],
+              })
+              : null;
+            if (workerResult?.pixels instanceof Uint8ClampedArray) {
+              const cachedPixels = workerResult.pixels.slice();
+              this.setOverlayRasterCacheEntry(overlayCacheKey, {
+                width: resultWidth,
+                height: resultHeight,
+                pixels: cachedPixels,
               });
-            } else if (!allColorsDisabled) {
-              renderSampleDataToImage({
-                sampleData,
-                imageData: image,
-                resultWidth,
-                drawSize: drawMultResult,
-                maskPoints,
-                maskRowSpans,
-                displayedColorSet,
-                includeDefaceCheckerboard: false,
-              });
+              resultCanvas = paintPixelsToCanvas(workerResult.pixels, resultWidth, resultHeight);
+            } else {
+              resultCanvas = new OffscreenCanvas(resultWidth, resultHeight);
+              resultContext = resultCanvas.getContext('2d');
+              resultContext.imageSmoothingEnabled = false;
+              resultContext.beginPath();
+              resultContext.rect(0, 0, resultWidth, resultHeight);
+              resultContext.clip();
+              resultContext.clearRect(0, 0, resultWidth, resultHeight);
+              const image = resultContext.createImageData(resultWidth, resultHeight);
+              if (useCheckerboardRender) {
+                renderSampleDataToImage({
+                  sampleData,
+                  imageData: image,
+                  resultWidth,
+                  drawSize: drawMultResult,
+                  maskPoints,
+                  maskRowSpans,
+                  includeDefaceCheckerboard: true,
+                });
+              } else if (!allColorsDisabled) {
+                renderSampleDataToImage({
+                  sampleData,
+                  imageData: image,
+                  resultWidth,
+                  drawSize: drawMultResult,
+                  maskPoints,
+                  maskRowSpans,
+                  displayedColorSet,
+                  includeDefaceCheckerboard: false,
+                });
+              }
+              resultContext.putImageData(image, 0, 0);
             }
-            resultContext.putImageData(image, 0, 0);
           } else if (!hasColorDisabled && drawMultTemplate === drawMultResult && displayMode !== 'fill') {
+            resultCanvas = new OffscreenCanvas(resultWidth, resultHeight);
+            resultContext = resultCanvas.getContext('2d');
+            resultContext.imageSmoothingEnabled = false;
             resultContext.drawImage(templateTileBitmap, 0, 0);
           } else if (!allColorsDisabled) {
-            // ELSE we need to apply the color filter
+            // Apply the color filter via worker + WASM
             const templateWidth = templateTileBitmap.width;
             const templateHeight = templateTileBitmap.height;
-            let templateCanvas = new OffscreenCanvas(templateWidth, templateHeight);
-            const templateContext = templateCanvas.getContext('2d', { willReadFrequently: true });
-            templateContext.imageSmoothingEnabled = false;
-            templateContext.clearRect(0, 0, templateWidth, templateHeight);
-            templateContext.drawImage(templateTileBitmap, 0, 0);
-            const templateData = templateContext.getImageData(0, 0, templateWidth, templateHeight).data;
-            const image = resultContext.createImageData(resultWidth, resultHeight);
-            const imageData = image.data;
-            const drawMultCenterTemplateLocal = drawMultCenterTemplate;
-            const drawMultTemplateStepBytes = drawMultTemplate << 2;
-            const drawMultResultStepBytes = drawMultResult << 2;
-            const templateRowStepBytes = templateWidth << 2;
-            const resultRowStepBytes = resultWidth << 2;
-            const shouldCheckUnknownColors = displayOtherColor === true;
-            for (const [offsetX, offsetY] of maskPoints) {
-              let processedRows = 0;
-              for (
-                let yt = drawMultCenterTemplateLocal, yr = offsetY;
-                yt < templateHeight;
-                yt += drawMultTemplate, yr += drawMultResult
-              ) {
-                processedRows++;
-                if ((processedRows & 7) === 0) {
-                  await yieldUi();
-                }
-                const templateRowBase = yt * templateRowStepBytes;
-                const resultRowBase = yr * resultRowStepBytes;
-                for (
-                  let xt = drawMultCenterTemplate, xr = offsetX,
-                    templatePixelCenter = templateRowBase + (xt << 2),
-                    realPixelCenter = resultRowBase + (xr << 2);
-                  xt < templateWidth;
-                  xt += drawMultTemplate, xr += drawMultResult,
-                    templatePixelCenter += drawMultTemplateStepBytes,
-                    realPixelCenter += drawMultResultStepBytes
-                ) {
-                  const templatePixelCenterRed = templateData[templatePixelCenter]; // Shread block's center pixel's RED value
-                  const templatePixelCenterGreen = templateData[templatePixelCenter + 1]; // Shread block's center pixel's GREEN value
-                  const templatePixelCenterBlue = templateData[templatePixelCenter + 2]; // Shread block's center pixel's BLUE value
-                  const templatePixelCenterAlpha = templateData[templatePixelCenter + 3]; // Shread block's center pixel's ALPHA value
-
-                  if (templatePixelCenterAlpha < 1) { continue; } // leave transparent pixels as is
-                  const packedTemplateColor = packRgb(
-                    templatePixelCenterRed,
-                    templatePixelCenterGreen,
-                    templatePixelCenterBlue
-                  );
-                  const shouldRender = displayedColorPackedSet.has(packedTemplateColor)
-                    || (shouldCheckUnknownColors && !knownPalettePackedColors.has(packedTemplateColor));
-                  if (shouldRender) {
-                    // // show enabled color center pixel
-                    imageData[realPixelCenter] = templatePixelCenterRed;
-                    imageData[realPixelCenter + 1] = templatePixelCenterGreen;
-                    imageData[realPixelCenter + 2] = templatePixelCenterBlue;
-                    imageData[realPixelCenter + 3] = templatePixelCenterAlpha;
-                  };
-                }
-              }
+            const templateCanvas = new OffscreenCanvas(templateWidth, templateHeight);
+            const templateCtx = templateCanvas.getContext('2d', { willReadFrequently: true });
+            templateCtx.imageSmoothingEnabled = false;
+            templateCtx.drawImage(templateTileBitmap, 0, 0);
+            const templateData = templateCtx.getImageData(0, 0, templateWidth, templateHeight).data;
+            const displayedColorsSorted = Uint32Array.from(displayedColorPackedSet).sort();
+            const filterResult = await templateWorkerManager.runTask('filterTemplateBitmap', {
+              templateData,
+              templateWidth,
+              templateHeight,
+              resultWidth,
+              resultHeight,
+              drawMultTemplate,
+              drawMultResult,
+              drawMultCenter: drawMultCenterTemplate,
+              maskPoints,
+              displayedColorsPacked: displayedColorsSorted,
+              knownColorsPacked: knownColorsSorted,
+              displayOther: displayOtherColor === true,
+            }, {
+              generation: overlayGenerationId,
+              transferList: [templateData.buffer, displayedColorsSorted.buffer],
+            });
+            resultCanvas = new OffscreenCanvas(resultWidth, resultHeight);
+            resultContext = resultCanvas.getContext('2d');
+            resultContext.imageSmoothingEnabled = false;
+            if (filterResult?.pixels instanceof Uint8ClampedArray) {
+              resultContext.putImageData(
+                new ImageData(filterResult.pixels, resultWidth, resultHeight),
+                0, 0,
+              );
             }
-            resultContext.putImageData(image, 0, 0);
           }
         } catch (exception) {
 
@@ -1035,8 +1140,16 @@ export default class TemplateManager {
 
           // Fallback to drawing raw bitmap if filtering fails
           if (templateTileBitmap) {
+            if (!resultCanvas) {
+              resultCanvas = new OffscreenCanvas(resultWidth, resultHeight);
+              resultContext = resultCanvas.getContext('2d');
+            }
             resultContext.drawImage(templateTileBitmap, 0, 0);
           }
+        }
+
+        if (!resultCanvas) {
+          resultCanvas = new OffscreenCanvas(resultWidth, resultHeight);
         }
 
         addTemplateCanvas(template.sortID, tileKey, [safeOriginalWidth, safeOriginalHeight], resultCanvas, "overlay");
@@ -1496,6 +1609,35 @@ export default class TemplateManager {
     return result;
   }
 
+  getOverlayDisplayedColorsHash(displayedColors) {
+    return Array.isArray(displayedColors) ? displayedColors.join(';') : '';
+  }
+
+  getOverlayRasterCacheKey(tileKey, sortID, drawSize, displayMode, displayedColorsHash) {
+    return [tileKey, sortID, drawSize, displayMode, displayedColorsHash].join('||');
+  }
+
+  getOverlayRasterCacheEntry(cacheKey) {
+    const entry = this._overlayRasterCache.get(cacheKey);
+    if (!entry) return null;
+    this._overlayRasterCache.delete(cacheKey);
+    this._overlayRasterCache.set(cacheKey, entry);
+    return entry;
+  }
+
+  setOverlayRasterCacheEntry(cacheKey, entry) {
+    if (!cacheKey || !entry) return;
+    if (this._overlayRasterCache.has(cacheKey)) {
+      this._overlayRasterCache.delete(cacheKey);
+    }
+    this._overlayRasterCache.set(cacheKey, entry);
+    while (this._overlayRasterCache.size > OVERLAY_RASTER_CACHE_MAX) {
+      const oldestKey = this._overlayRasterCache.keys().next().value;
+      if (oldestKey === undefined) break;
+      this._overlayRasterCache.delete(oldestKey);
+    }
+  }
+
   getTemplateExampleLimit() {
     return DEFAULT_TEMPLATE_EXAMPLE_LIMIT;
   }
@@ -1508,36 +1650,57 @@ export default class TemplateManager {
    * @since 0.86.4
    */
   getOverallPerColorProgress() {
+    // paletteSum: O(templates × colors) — not a bottleneck
     const paletteSum = {};
     (this.templatesArray ?? []).forEach(t => {
-      if (!t.enabled) return; // only count enabled templates
+      if (!t.enabled) return;
       if (!t?.colorPalette) return;
       for (const [rgb, meta] of Object.entries(t.colorPalette)) {
         paletteSum[rgb] = (paletteSum[rgb] ?? 0) + meta.count;
       }
-    })
-
-    const combinedProgress = {};
-    const exampleMax = this.getTemplateExampleLimit();
-    for (const stats of this.tileProgress.values()) {
-      Object.entries(stats.palette).forEach(([colorKey, content]) => {
-        if (combinedProgress[colorKey] === undefined) {
-          combinedProgress[colorKey] = Object.fromEntries(Object.entries(content));
-          combinedProgress[colorKey].examplesEnabled = [];
-          combinedProgress[colorKey]._exampleSeenCount = 0;
-          this.mergeTemplateExamples(combinedProgress[colorKey], content.examplesEnabled, exampleMax);
-        } else {
-          combinedProgress[colorKey].painted += content.painted;
-          combinedProgress[colorKey].paintedAndEnabled += content.paintedAndEnabled;
-          combinedProgress[colorKey].missing += content.missing;
-          this.mergeTemplateExamples(combinedProgress[colorKey], content.examplesEnabled, exampleMax);
-        }
-      })
-    };
-
-    Object.values(combinedProgress).forEach((content) => {
-      delete content._exampleSeenCount;
     });
+
+    // counts: O(colors) from incremental running totals — no tile iteration needed
+    const combinedProgress = {};
+    for (const colorKey in this._runningPalette) {
+      const slot = this._runningPalette[colorKey];
+      combinedProgress[colorKey] = {
+        painted: Math.max(0, slot.painted),
+        paintedAndEnabled: Math.max(0, slot.paintedAndEnabled),
+        missing: Math.max(0, slot.missing),
+        examplesEnabled: [],
+      };
+    }
+
+    // examples: O(tiles × colors × examples) — only when tiles changed since last call
+    if (this._examplesDirty) {
+      this._examplesDirty = false;
+      const exampleMax = this.getTemplateExampleLimit();
+      // Re-initialize example state on each entry (reservoir needs fresh _exampleSeenCount)
+      for (const key in combinedProgress) {
+        combinedProgress[key]._exampleSeenCount = 0;
+      }
+      for (const stats of this.tileProgress.values()) {
+        for (const colorKey in stats.palette) {
+          const content = stats.palette[colorKey];
+          if (!content || !Array.isArray(content.examplesEnabled) || content.examplesEnabled.length === 0) continue;
+          let entry = combinedProgress[colorKey];
+          if (!entry) continue; // color not in running totals, skip
+          this.mergeTemplateExamples(entry, content.examplesEnabled, exampleMax);
+        }
+      }
+      for (const key in combinedProgress) {
+        delete combinedProgress[key]._exampleSeenCount;
+      }
+      this._cachedExamples = combinedProgress;
+    } else if (this._cachedExamples) {
+      // Reuse previously built examples
+      for (const colorKey in this._cachedExamples) {
+        if (combinedProgress[colorKey]) {
+          combinedProgress[colorKey].examplesEnabled = this._cachedExamples[colorKey]?.examplesEnabled ?? [];
+        }
+      }
+    }
 
     var completedColorsBitmapLo = 0;
     var completedColorsBitmapHi = 0;
@@ -2400,10 +2563,66 @@ export default class TemplateManager {
    * @param {Template} template
    * @since 0.85.19
    */
+  // Apply a tile's palette/template counts to running totals. sign = +1 to add, -1 to subtract.
+  _applyTileToRunning(stats, sign) {
+    if (!stats) return;
+    const palette = stats.palette;
+    if (palette) {
+      for (const colorKey in palette) {
+        const entry = palette[colorKey];
+        if (!entry) continue;
+        let slot = this._runningPalette[colorKey];
+        if (!slot) {
+          slot = { painted: 0, paintedAndEnabled: 0, missing: 0 };
+          this._runningPalette[colorKey] = slot;
+        }
+        slot.painted += sign * (entry.painted || 0);
+        slot.paintedAndEnabled += sign * (entry.paintedAndEnabled || 0);
+        slot.missing += sign * (entry.missing || 0);
+      }
+    }
+    const template = stats.template;
+    if (template) {
+      for (const storageKey in template) {
+        const entry = template[storageKey];
+        if (!entry) continue;
+        let slot = this._runningTemplate[storageKey];
+        if (!slot) {
+          slot = { painted: 0, palette: Object.create(null) };
+          this._runningTemplate[storageKey] = slot;
+        }
+        slot.painted += sign * (entry.painted || 0);
+        const pal = entry.palette;
+        if (pal) {
+          for (const colorKey in pal) {
+            slot.palette[colorKey] = (slot.palette[colorKey] || 0) + sign * (Number(pal[colorKey]) || 0);
+          }
+        }
+      }
+    }
+  }
+
+  // Set a tile's progress and keep running totals in sync.
+  _setTileProgress(key, stats) {
+    const old = this.tileProgress.get(key);
+    if (old) this._applyTileToRunning(old, -1);
+    this.tileProgress.set(key, stats);
+    if (stats) this._applyTileToRunning(stats, +1);
+    this._examplesDirty = true;
+  }
+
+  // Delete a tile's progress and keep running totals in sync.
+  _deleteTileProgress(key) {
+    const old = this.tileProgress.get(key);
+    if (old) this._applyTileToRunning(old, -1);
+    this.tileProgress.delete(key);
+    this._examplesDirty = true;
+  }
+
   clearTileProgress(template) {
     // may improve: only delete those tiles that are no longer involved in other templates
     template.tilePrefixes.forEach(prefix => {
-      this.tileProgress.delete(prefix);
+      this._deleteTileProgress(prefix);
       // this.tileOverlay.delete(prefix);
     });
     // should not be needed if color filter list (that calls getOverallPerColorProgress) is called after this. But just in case
@@ -2411,12 +2630,3 @@ export default class TemplateManager {
     this.completedColorsBitmapHi = 0;
   }
 }
-
-
-
-
-
-
-
-
-

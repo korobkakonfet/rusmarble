@@ -21,6 +21,16 @@ const targets = [
     output: path.join(outputDir, 'templateSampleExtractWasmBytes.js'),
     exportName: 'templateSampleExtractWasmBytes',
   },
+  {
+    source: path.join(sourceDir, 'collectProgress.wat'),
+    output: path.join(outputDir, 'collectProgressWasmBytes.js'),
+    exportName: 'collectProgressWasmBytes',
+  },
+  {
+    source: path.join(sourceDir, 'filterBitmapPixels.wat'),
+    output: path.join(outputDir, 'filterBitmapPixelsWasmBytes.js'),
+    exportName: 'filterBitmapPixelsWasmBytes',
+  },
 ];
 
 const formatUint8Array = (bytes) => {

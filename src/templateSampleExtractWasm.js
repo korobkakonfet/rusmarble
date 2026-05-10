@@ -5,7 +5,7 @@ const WASM_PAGE_BYTES = 64 * 1024;
 const TEMPLATE_OTHER_COLOR_KEY = 'other';
 const TEMPLATE_DEFACE_KEY = '222,250,206';
 
-let wasmSampleExtractState;
+let wasmSampleExtractState = null;
 
 const packRgb = (r, g, b) => ((r << 16) | (g << 8) | b) >>> 0;
 const TEMPLATE_DEFACE_PACKED = packRgb(222, 250, 206);
@@ -39,36 +39,21 @@ const paletteState = (() => {
   };
 })();
 
-const getTemplateSampleExtractWasmState = () => {
-  if (wasmSampleExtractState !== undefined) {
-    return wasmSampleExtractState;
-  }
-  try {
-    if (
-      typeof WebAssembly === 'undefined'
-      || !(templateSampleExtractWasmBytes instanceof Uint8Array)
-      || templateSampleExtractWasmBytes.length === 0
-    ) {
-      wasmSampleExtractState = null;
-      return wasmSampleExtractState;
-    }
-    const module = new WebAssembly.Module(templateSampleExtractWasmBytes);
-    const instance = new WebAssembly.Instance(module, {});
+if (
+  typeof WebAssembly !== 'undefined'
+  && templateSampleExtractWasmBytes instanceof Uint8Array
+  && templateSampleExtractWasmBytes.length > 0
+) {
+  WebAssembly.instantiate(templateSampleExtractWasmBytes, {}).then(({ instance }) => {
     const extractSamples = instance.exports?.extract_samples;
     const memory = instance.exports?.memory;
-    if (!(memory instanceof WebAssembly.Memory) || typeof extractSamples !== 'function') {
-      wasmSampleExtractState = null;
-      return wasmSampleExtractState;
+    if (memory instanceof WebAssembly.Memory && typeof extractSamples === 'function') {
+      wasmSampleExtractState = { memory, extractSamples };
     }
-    wasmSampleExtractState = {
-      memory,
-      extractSamples,
-    };
-  } catch (_) {
-    wasmSampleExtractState = null;
-  }
-  return wasmSampleExtractState;
-};
+  }).catch(() => {});
+}
+
+const getTemplateSampleExtractWasmState = () => wasmSampleExtractState;
 
 export function isTemplateSampleExtractWasmAvailable() {
   return getTemplateSampleExtractWasmState() !== null;
