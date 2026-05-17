@@ -21,6 +21,7 @@
  * @param {(value?: boolean) => void} deps.forceRefreshTiles - Forces map tile refresh.
  * @param {(layer: string) => void} deps.removeLayer - Removes map layer by id.
  * @param {(enabled: boolean) => void} deps.setMapCommentsEnabled - Enables/disables map comments on the map layer.
+ * @param {(enabled: boolean) => void} deps.applyArchiveBackground - Enables/disables archive background raster layer.
  * @param {() => void} deps.applySafeMode - Applies the persisted safe mode state to runtime hooks.
  * @param {object} deps.themeList - Available theme list.
  * @param {string} deps.outputStatusId - Element id for the status output.
@@ -47,6 +48,7 @@ export function buildUserSettingsSection({
   forceRefreshTiles,
   removeLayer,
   setMapCommentsEnabled,
+  applyArchiveBackground,
   applySafeMode,
   themeList,
   outputStatusId,
@@ -248,6 +250,14 @@ export function buildUserSettingsSection({
             } else {
               instance.handleDisplayStatus("Progress Bar Disabled.");
             }
+          });
+        }).buildElement()
+        .addCheckbox({'id': 'bm-archive-background-enabled', 'textContent': 'Show latest archive as background', 'checked': templateManager.isArchiveBackgroundEnabled()}, (instance, label, checkbox) => {
+          checkbox.addEventListener('change', async () => {
+            const enabled = checkbox.checked;
+            await templateManager.setArchiveBackgroundEnabled(enabled);
+            await applyArchiveBackground(enabled);
+            instance.handleDisplayStatus(enabled ? 'Archive background enabled.' : 'Archive background disabled.');
           });
         }).buildElement()
         .addCheckbox({'id': 'bm-hide-user-droplets', 'textContent': t('settings.hideDroplets'), 'checked': templateManager.isDropletsHidden()}, (instance, label, checkbox) => {

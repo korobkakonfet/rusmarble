@@ -15,8 +15,8 @@ import { createTemplateCreationUi } from './templateCreationUi.js';
 import { createArchiveTemplateUi } from './archiveTemplateUi.js';
 import { layoutLanguageOptions, normalizeLayoutLanguage, translateLayout, getLayoutThemeLabel as getLocalizedLayoutThemeLabel, getTemplateDisplayLabel as getLocalizedTemplateDisplayLabel, getTemplateCreateModeLabel, getChatBanTypeLabel, getColorSortLabel } from './layoutI18n.js';
 import { encodeChunkSampleBytes } from './templateChunkUtils.js';
-import { consoleLog, consoleWarn, isDebugLoggingEnabled, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels } from './utils.js';
-import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getCurrentTileSize, setForcedTileRefreshSuppressed} from './utilsMaptiler.js';
+import { consoleLog, consoleWarn, consoleError, isDebugLoggingEnabled, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels } from './utils.js';
+import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getCurrentTileSize, setForcedTileRefreshSuppressed, applyArchiveBgLayerToMap} from './utilsMaptiler.js';
 // import { getCenterGeoCoords, addTemplate } from './utilsMaptiler.js';
 
 const name = GM_info.script.name.toString(); // Name of userscript
@@ -1498,6 +1498,69 @@ function setMapCommentsEnabled(enabled) {
   } catch (error) {
     consoleWarn('Failed to toggle map comments visibility.', error);
   }
+}
+
+let cachedArchiveBackgroundVersion = null;
+
+function gmRequestWithTimeout(url, responseType, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const onTimeout = () => reject(new Error(`gmRequest timed out for ${url}`));
+    GM_xmlhttpRequest({
+      method: 'GET',
+      url,
+      responseType,
+      timeout: timeoutMs,
+      onload: resolve,
+      onerror: (err) => reject(new Error(`gmRequest error for ${url}: ${err?.statusText || err}`)),
+      ontimeout: onTimeout,
+      onabort: () => reject(new Error(`gmRequest aborted for ${url}`)),
+    });
+  });
+}
+
+async function fetchLatestArchiveVersion() {
+  if (cachedArchiveBackgroundVersion) return cachedArchiveBackgroundVersion;
+  consoleError('[archive bg] fetching archive index from', TEMPLATE_ARCHIVE_BASE_URL);
+  try {
+    const response = await gmRequestWithTimeout(`${TEMPLATE_ARCHIVE_BASE_URL}/`, 'text', 15000);
+    consoleError('[archive bg] index response status:', response?.status);
+    const html = String(response?.responseText || response?.response || '');
+    consoleError('[archive bg] index html length:', html.length);
+    const listMatch = html.match(/const\s+WPLACE_VERSIONS\s*=\s*\[([\s\S]*?)\];/);
+    if (!listMatch) { consoleError('[archive bg] WPLACE_VERSIONS not found in index page'); return null; }
+    const entryRegex = /\{[^{}]*version:\s*['"]([^'"]+)['"][^{}]*\}/g;
+    let lastVersion = null, match;
+    while ((match = entryRegex.exec(listMatch[1])) !== null) lastVersion = String(match[1]).trim();
+    if (!lastVersion) { consoleError('[archive bg] version list was empty'); return null; }
+    consoleError('[archive bg] latest version:', lastVersion);
+    cachedArchiveBackgroundVersion = lastVersion;
+    return lastVersion;
+  } catch (err) {
+    consoleError('[archive bg] failed to fetch archive index:', err?.message || err);
+    return null;
+  }
+}
+
+async function applyArchiveBackground(enabled) {
+  consoleError('[archive bg] applyArchiveBackground called, enabled=', enabled);
+  if (!enabled) {
+    doAfterMapFound(() => {
+      const map = resolveTemplateOverlayMapInstance();
+      if (map) applyArchiveBgLayerToMap(map, null);
+    });
+    return;
+  }
+  const version = await fetchLatestArchiveVersion();
+  consoleError('[archive bg] resolved version:', version);
+  if (!version) { consoleError('[archive bg] no version, aborting'); return; }
+  const tileUrl = `https://wplace.eralyon.net/tiles/${version}/11/{x}/{y}.png`;
+  consoleError('[archive bg] calling applyArchiveBgLayerToMap with:', tileUrl);
+  doAfterMapFound(() => {
+    const map = resolveTemplateOverlayMapInstance();
+    consoleError('[archive bg] doAfterMapFound fired, map=', !!map);
+    if (!map) return;
+    applyArchiveBgLayerToMap(map, tileUrl);
+  });
 }
 
 function setMapCommentsVisibleForReport(visible) {
@@ -3694,11 +3757,150 @@ inject(() => {
   // Spys on "spontaneous" fetch requests made by the client
   const originalFetch = window.fetch; // Saves a copy of the original fetch
 
-  // Overrides fetch
+  // Archive tile CORS bypass: proxy requests to the archive tile server through the userscript.
+  // MapLibre fetches raster tiles from Web Workers — we use BroadcastChannel so workers can
+  // relay requests to the main thread, which posts to the TM side via window.postMessage.
+
+  const BM_ARCHIVE_ORIGIN = 'https://wplace.eralyon.net';
+  const BM_ARCHIVE_REQ = 'bm-archive-tile-req';
+  const BM_ARCHIVE_DATA = 'bm-archive-tile-data';
+  const BM_ARCHIVE_BC = 'bm-archive-bc';
+
+  // Main-thread side of the BroadcastChannel relay: forward requests from any worker to TM
+  const bmArchiveBc = new BroadcastChannel(BM_ARCHIVE_BC);
+  bmArchiveBc.onmessage = (event) => {
+    const d = event.data ?? {};
+    if (d.type !== BM_ARCHIVE_REQ) return;
+    console.error('[archive tile] BroadcastChannel relay: received req from worker, url=', d.url);
+    window.postMessage({ source: 'blue-marble', type: BM_ARCHIVE_REQ, url: d.url, reqId: d.reqId }, '*');
+  };
+  // Forward TM responses back to all workers via BroadcastChannel
+  window.addEventListener('message', (event) => {
+    if (event.source !== window) return;
+    const d = event.data ?? {};
+    if (d.source !== 'blue-marble' || d.type !== BM_ARCHIVE_DATA) return;
+    bmArchiveBc.postMessage({ type: BM_ARCHIVE_DATA, reqId: d.reqId, buffer: d.buffer, error: d.error });
+  });
+
+  // Main-thread bmArchiveFetch — used for Image.src intercept
+  const bmArchiveFetch = (url) => new Promise((resolve, reject) => {
+    const reqId = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    console.error('[archive tile] bmArchiveFetch requesting:', url);
+    const handler = (event) => {
+      if (event.source !== window) return;
+      const d = event.data ?? {};
+      if (d.source !== 'blue-marble' || d.type !== BM_ARCHIVE_DATA || d.reqId !== reqId) return;
+      window.removeEventListener('message', handler);
+      if (d.error) {
+        console.error('[archive tile] bmArchiveFetch got error for:', url);
+        reject(new Error('archive tile fetch failed'));
+        return;
+      }
+      console.error('[archive tile] bmArchiveFetch got buffer, byteLength=', d.buffer?.byteLength, 'for:', url);
+      resolve(d.buffer);
+    };
+    window.addEventListener('message', handler);
+    window.postMessage({ source: 'blue-marble', type: BM_ARCHIVE_REQ, url, reqId }, '*');
+  });
+
+  // Inject fetch override into every Worker so MapLibre's tile workers are also covered
+  (() => {
+    const OriginalWorker = window.Worker;
+    window.Worker = function(scriptURL, options) {
+      // Build a blob that prepends the archive-tile fetch override before the real worker script
+      const workerOverride = `
+(function() {
+  var BM_ARCHIVE_ORIGIN = '${BM_ARCHIVE_ORIGIN}';
+  var BM_ARCHIVE_REQ = '${BM_ARCHIVE_REQ}';
+  var BM_ARCHIVE_DATA = '${BM_ARCHIVE_DATA}';
+  var BM_ARCHIVE_BC = '${BM_ARCHIVE_BC}';
+  var bc = new BroadcastChannel(BM_ARCHIVE_BC);
+  var pending = {};
+  bc.onmessage = function(event) {
+    var d = event.data || {};
+    if (d.type !== BM_ARCHIVE_DATA) return;
+    var p = pending[d.reqId];
+    if (!p) return;
+    delete pending[d.reqId];
+    if (d.error) { p.reject(new Error('archive tile fetch failed')); return; }
+    var blob = new Blob([d.buffer], { type: 'image/png' });
+    var blobUrl = URL.createObjectURL(blob);
+    originalFetch(blobUrl).then(function(res) { URL.revokeObjectURL(blobUrl); p.resolve(res); }).catch(p.reject);
+  };
+  var originalFetch = self.fetch;
+  self.fetch = function() {
+    var args = arguments;
+    var url = (args[0] instanceof Request ? args[0].url : args[0]) || '';
+    if (typeof url === 'string' && url.startsWith(BM_ARCHIVE_ORIGIN + '/tiles/')) {
+      return new Promise(function(resolve, reject) {
+        var reqId = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+        pending[reqId] = { resolve: resolve, reject: reject };
+        bc.postMessage({ type: BM_ARCHIVE_REQ, url: url, reqId: reqId });
+      });
+    }
+    return originalFetch.apply(self, args);
+  };
+})();
+`;
+      let workerScriptURL = scriptURL;
+      const isModuleWorker = options && options.type === 'module';
+      if (!isModuleWorker && (typeof scriptURL === 'string' || scriptURL instanceof URL)) {
+        const scriptSrc = `${workerOverride}\nimportScripts(${JSON.stringify(String(scriptURL))});`;
+        const blob = new Blob([scriptSrc], { type: 'application/javascript' });
+        workerScriptURL = URL.createObjectURL(blob);
+      }
+      return new OriginalWorker(workerScriptURL, options);
+    };
+    window.Worker.prototype = OriginalWorker.prototype;
+  })();
+
+  // Hook Image.prototype src setter — fallback for non-worker tile loads
+  (() => {
+    const srcDescriptor = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
+    if (!srcDescriptor) return;
+    Object.defineProperty(HTMLImageElement.prototype, 'src', {
+      get: srcDescriptor.get,
+      set(url) {
+        if (typeof url === 'string' && url.startsWith(BM_ARCHIVE_ORIGIN + '/tiles/')) {
+          console.error('[archive tile] Image.src intercepted:', url);
+          const img = this;
+          bmArchiveFetch(url).then((buffer) => {
+            const blob = new Blob([buffer], { type: 'image/png' });
+            const blobUrl = URL.createObjectURL(blob);
+            srcDescriptor.set.call(img, blobUrl);
+            img.addEventListener('load', () => URL.revokeObjectURL(blobUrl), { once: true });
+            img.addEventListener('error', () => URL.revokeObjectURL(blobUrl), { once: true });
+          }).catch(() => {
+            img.dispatchEvent(new Event('error'));
+          });
+        } else {
+          srcDescriptor.set.call(this, url);
+        }
+      },
+      configurable: true,
+    });
+  })();
+
+  // Overrides fetch (main thread fallback — worker path above covers MapLibre workers)
   window.fetch = async function(...args) {
 
     const blink = Date.now(); // Current time
     const endpointName = ((args[0] instanceof Request) ? args[0]?.url : args[0]) || 'ignore';
+
+    // Intercept archive tile requests and proxy through TM to bypass CORS
+    if (typeof endpointName === 'string' && endpointName.startsWith(BM_ARCHIVE_ORIGIN + '/tiles/')) {
+      console.error('[archive tile] main-thread fetch intercepted:', endpointName);
+      return bmArchiveFetch(endpointName).then((buffer) => {
+        console.error('[archive tile] main-thread fetch resolved, byteLength=', buffer?.byteLength);
+        const blob = new Blob([buffer], { type: 'image/png' });
+        const blobUrl = URL.createObjectURL(blob);
+        return originalFetch(blobUrl).then((res) => { URL.revokeObjectURL(blobUrl); return res; });
+      }).catch((err) => {
+        console.error('[archive tile] main-thread fetch rejected:', err?.message);
+        throw err;
+      });
+    }
+
     const isReportRequest = !safeModeEnabled && isReportUserEndpoint(endpointName);
     if (isReportRequest) {
       postReportRequestPhase('start', endpointName);
@@ -3945,6 +4147,14 @@ function resolveTemplateOverlayMapInstance() {
   return null;
 }
 
+setInterval(() => {
+  const map = resolveTemplateOverlayMapInstance();
+  if (!map) { consoleError('[archive zoom] map not found'); return; }
+  const zoom = map['getZoom']?.();
+  const center = map['getCenter']?.();
+  consoleError('[archive zoom] zoom=', zoom, 'center=', center);
+}, 5000);
+
 function bindTemplateViewportOverlayRefresh() {
   if (templateViewportOverlayRefreshBound || isSafeModeActive()) return;
   doAfterMapFound(() => {
@@ -4188,6 +4398,41 @@ window.addEventListener('message', (event) => {
   }
 });
 
+// Proxy archive tile requests from the injected fetch hook through GM_xmlhttpRequest (no CORS restriction)
+window.addEventListener('message', (event) => {
+  const d = event?.data;
+  if (!d || d.source !== 'blue-marble' || d.type !== 'bm-archive-tile-req') return;
+  const { url, reqId } = d;
+  if (!url || !reqId) return;
+  consoleError('[archive tile] GM handler: fetching', url);
+  GM_xmlhttpRequest({
+    method: 'GET',
+    url,
+    responseType: 'arraybuffer',
+    onload: (response) => {
+      consoleError('[archive tile] GM handler: onload status=', response.status, 'byteLength=', response.response?.byteLength, 'url=', url);
+      if (response.status < 200 || response.status >= 300) {
+        window.postMessage({ source: 'blue-marble', type: 'bm-archive-tile-data', reqId, error: true }, '*');
+        return;
+      }
+      const buffer = response.response;
+      window.postMessage(
+        { source: 'blue-marble', type: 'bm-archive-tile-data', reqId, buffer },
+        '*',
+        buffer instanceof ArrayBuffer ? [buffer] : []
+      );
+    },
+    onerror: (err) => {
+      consoleError('[archive tile] GM handler: onerror for', url, err);
+      window.postMessage({ source: 'blue-marble', type: 'bm-archive-tile-data', reqId, error: true }, '*');
+    },
+    ontimeout: () => {
+      consoleError('[archive tile] GM handler: ontimeout for', url);
+      window.postMessage({ source: 'blue-marble', type: 'bm-archive-tile-data', reqId, error: true }, '*');
+    },
+  });
+});
+
 GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   const userSettingsValue = await GM.getValue('bmUserSettings', '{}');
   let userSettings;
@@ -4242,8 +4487,12 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   } else {
     templateManager.setUserSettings(userSettings);
   }
+  const _qp = new URLSearchParams(window.location.search);
+
   currentLayoutLanguage = normalizeLayoutLanguage(templateManager.getLayoutLanguage?.());
   setMapCommentsEnabled(templateManager.isMapCommentsEnabled());
+  consoleError('[archive bg] isArchiveBackgroundEnabled=', templateManager.isArchiveBackgroundEnabled());
+  if (templateManager.isArchiveBackgroundEnabled()) applyArchiveBackground(true);
 
   // load templates after user settings
   let storageTemplates;
@@ -6590,6 +6839,7 @@ async function buildOverlayMain() {
       forceRefreshTiles,
       removeLayer,
       setMapCommentsEnabled: (enabled) => setMapCommentsEnabled(enabled),
+      applyArchiveBackground: (enabled) => applyArchiveBackground(enabled),
       applySafeMode: () => applySafeModeState(),
       themeList,
       outputStatusId: overlayMain.outputStatusId,
@@ -9029,5 +9279,6 @@ async function buildOverlayMain() {
       forceClickCenter();
     } catch (_) {}
   }, 0);
+
 
 }
