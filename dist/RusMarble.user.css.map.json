@@ -337,5 +337,15 @@
   "bm-help": "bm-5f",
   "bm-link": "bm-5g",
   "bm-fg": "bm-5h",
-  "bm-bg": "bm-5i"
+  "bm-bg": "bm-5i",
+  "bm-archive-background-enabled": "bm-60",
+  "bm-archive-background": "bm-7w",
+  "bm-archive-tile-data": "bm-80",
+  "bm-archive-tile-req": "bm-8n",
+  "bm-archive": "bm-as",
+  "bm-archive-bc": "bm-a3",
+  "bm-button-paint-order": "bm-7S",
+  "bm-button-paint-humanize": "bm-76",
+  "bm-button-paint-stop": "bm-8g",
+  "bm-button-paint-clear": "bm-7X"
 }

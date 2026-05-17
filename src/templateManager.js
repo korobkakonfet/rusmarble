@@ -16,7 +16,7 @@ import { templateWorkerManager } from './templateWorkerManager.js';
 
 const DEFAULT_TEMPLATE_SYNC_STREAM = 'root';
 const DEFAULT_TEMPLATE_EXAMPLE_LIMIT = 32;
-const SMART_TEMPLATE_EXAMPLE_LIMIT = 128;
+const SMART_TEMPLATE_EXAMPLE_LIMIT = Infinity;
 const TEMPLATE_OTHER_COLOR_KEY = 'other';
 const OVERLAY_RASTER_CACHE_MAX = 256;
 const packRgb = (r, g, b) => ((r << 16) | (g << 8) | b);
@@ -2241,7 +2241,20 @@ export default class TemplateManager {
       }
       return points;
     }
-    return template.customMaskPoints(size);
+    // 'cross' mode — replicate Template.customMask logic without needing a template instance
+    const points = [];
+    const center = (size - 1) >> 1;
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const onAxis = (x % size === center || y % size === center);
+        const nearCenter = (
+          x % size >= center - 1 && x % size <= center + 1 &&
+          y % size >= center - 1 && y % size <= center + 1
+        );
+        if (onAxis && nearCenter) points.push([x, y]);
+      }
+    }
+    return points;
   }
 
   /** A utility to check if it uses the dot template display (legacy).
@@ -2461,6 +2474,15 @@ export default class TemplateManager {
    */
   async setTemplateAutoSyncEnabled(value) {
     this.userSettings.autoSyncTemplates = value;
+    await this.storeUserSettings();
+  }
+
+  isArchiveBackgroundEnabled() {
+    return this.userSettings?.archiveBackgroundEnabled ?? false;
+  }
+
+  async setArchiveBackgroundEnabled(value) {
+    this.userSettings.archiveBackgroundEnabled = Boolean(value);
     await this.storeUserSettings();
   }
 
