@@ -15,8 +15,8 @@ import { createTemplateCreationUi } from './templateCreationUi.js';
 import { createArchiveTemplateUi } from './archiveTemplateUi.js';
 import { layoutLanguageOptions, normalizeLayoutLanguage, translateLayout, getLayoutThemeLabel as getLocalizedLayoutThemeLabel, getTemplateDisplayLabel as getLocalizedTemplateDisplayLabel, getTemplateCreateModeLabel, getChatBanTypeLabel, getColorSortLabel } from './layoutI18n.js';
 import { encodeChunkSampleBytes } from './templateChunkUtils.js';
-import { consoleLog, consoleWarn, isDebugLoggingEnabled, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels } from './utils.js';
-import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getCurrentTileSize, setForcedTileRefreshSuppressed} from './utilsMaptiler.js';
+import { consoleLog, consoleWarn, consoleError, isDebugLoggingEnabled, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels } from './utils.js';
+import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getCurrentTileSize, setForcedTileRefreshSuppressed, applyArchiveBgLayerToMap} from './utilsMaptiler.js';
 // import { getCenterGeoCoords, addTemplate } from './utilsMaptiler.js';
 
 const name = GM_info.script.name.toString(); // Name of userscript
@@ -1498,6 +1498,69 @@ function setMapCommentsEnabled(enabled) {
   } catch (error) {
     consoleWarn('Failed to toggle map comments visibility.', error);
   }
+}
+
+let cachedArchiveBackgroundVersion = null;
+
+function gmRequestWithTimeout(url, responseType, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const onTimeout = () => reject(new Error(`gmRequest timed out for ${url}`));
+    GM_xmlhttpRequest({
+      method: 'GET',
+      url,
+      responseType,
+      timeout: timeoutMs,
+      onload: resolve,
+      onerror: (err) => reject(new Error(`gmRequest error for ${url}: ${err?.statusText || err}`)),
+      ontimeout: onTimeout,
+      onabort: () => reject(new Error(`gmRequest aborted for ${url}`)),
+    });
+  });
+}
+
+async function fetchLatestArchiveVersion() {
+  if (cachedArchiveBackgroundVersion) return cachedArchiveBackgroundVersion;
+  consoleError('[archive bg] fetching archive index from', TEMPLATE_ARCHIVE_BASE_URL);
+  try {
+    const response = await gmRequestWithTimeout(`${TEMPLATE_ARCHIVE_BASE_URL}/`, 'text', 15000);
+    consoleError('[archive bg] index response status:', response?.status);
+    const html = String(response?.responseText || response?.response || '');
+    consoleError('[archive bg] index html length:', html.length);
+    const listMatch = html.match(/const\s+WPLACE_VERSIONS\s*=\s*\[([\s\S]*?)\];/);
+    if (!listMatch) { consoleError('[archive bg] WPLACE_VERSIONS not found in index page'); return null; }
+    const entryRegex = /\{[^{}]*version:\s*['"]([^'"]+)['"][^{}]*\}/g;
+    let lastVersion = null, match;
+    while ((match = entryRegex.exec(listMatch[1])) !== null) lastVersion = String(match[1]).trim();
+    if (!lastVersion) { consoleError('[archive bg] version list was empty'); return null; }
+    consoleError('[archive bg] latest version:', lastVersion);
+    cachedArchiveBackgroundVersion = lastVersion;
+    return lastVersion;
+  } catch (err) {
+    consoleError('[archive bg] failed to fetch archive index:', err?.message || err);
+    return null;
+  }
+}
+
+async function applyArchiveBackground(enabled) {
+  consoleError('[archive bg] applyArchiveBackground called, enabled=', enabled);
+  if (!enabled) {
+    doAfterMapFound(() => {
+      const map = resolveTemplateOverlayMapInstance();
+      if (map) applyArchiveBgLayerToMap(map, null);
+    });
+    return;
+  }
+  const version = await fetchLatestArchiveVersion();
+  consoleError('[archive bg] resolved version:', version);
+  if (!version) { consoleError('[archive bg] no version, aborting'); return; }
+  const tileUrl = `https://wplace.eralyon.net/tiles/${version}/11/{x}/{y}.png`;
+  consoleError('[archive bg] calling applyArchiveBgLayerToMap with:', tileUrl);
+  doAfterMapFound(() => {
+    const map = resolveTemplateOverlayMapInstance();
+    consoleError('[archive bg] doAfterMapFound fired, map=', !!map);
+    if (!map) return;
+    applyArchiveBgLayerToMap(map, tileUrl);
+  });
 }
 
 function setMapCommentsVisibleForReport(visible) {
@@ -3694,11 +3757,150 @@ inject(() => {
   // Spys on "spontaneous" fetch requests made by the client
   const originalFetch = window.fetch; // Saves a copy of the original fetch
 
-  // Overrides fetch
+  // Archive tile CORS bypass: proxy requests to the archive tile server through the userscript.
+  // MapLibre fetches raster tiles from Web Workers — we use BroadcastChannel so workers can
+  // relay requests to the main thread, which posts to the TM side via window.postMessage.
+
+  const BM_ARCHIVE_ORIGIN = 'https://wplace.eralyon.net';
+  const BM_ARCHIVE_REQ = 'bm-archive-tile-req';
+  const BM_ARCHIVE_DATA = 'bm-archive-tile-data';
+  const BM_ARCHIVE_BC = 'bm-archive-bc';
+
+  // Main-thread side of the BroadcastChannel relay: forward requests from any worker to TM
+  const bmArchiveBc = new BroadcastChannel(BM_ARCHIVE_BC);
+  bmArchiveBc.onmessage = (event) => {
+    const d = event.data ?? {};
+    if (d.type !== BM_ARCHIVE_REQ) return;
+    console.error('[archive tile] BroadcastChannel relay: received req from worker, url=', d.url);
+    window.postMessage({ source: 'blue-marble', type: BM_ARCHIVE_REQ, url: d.url, reqId: d.reqId }, '*');
+  };
+  // Forward TM responses back to all workers via BroadcastChannel
+  window.addEventListener('message', (event) => {
+    if (event.source !== window) return;
+    const d = event.data ?? {};
+    if (d.source !== 'blue-marble' || d.type !== BM_ARCHIVE_DATA) return;
+    bmArchiveBc.postMessage({ type: BM_ARCHIVE_DATA, reqId: d.reqId, buffer: d.buffer, error: d.error });
+  });
+
+  // Main-thread bmArchiveFetch — used for Image.src intercept
+  const bmArchiveFetch = (url) => new Promise((resolve, reject) => {
+    const reqId = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    console.error('[archive tile] bmArchiveFetch requesting:', url);
+    const handler = (event) => {
+      if (event.source !== window) return;
+      const d = event.data ?? {};
+      if (d.source !== 'blue-marble' || d.type !== BM_ARCHIVE_DATA || d.reqId !== reqId) return;
+      window.removeEventListener('message', handler);
+      if (d.error) {
+        console.error('[archive tile] bmArchiveFetch got error for:', url);
+        reject(new Error('archive tile fetch failed'));
+        return;
+      }
+      console.error('[archive tile] bmArchiveFetch got buffer, byteLength=', d.buffer?.byteLength, 'for:', url);
+      resolve(d.buffer);
+    };
+    window.addEventListener('message', handler);
+    window.postMessage({ source: 'blue-marble', type: BM_ARCHIVE_REQ, url, reqId }, '*');
+  });
+
+  // Inject fetch override into every Worker so MapLibre's tile workers are also covered
+  (() => {
+    const OriginalWorker = window.Worker;
+    window.Worker = function(scriptURL, options) {
+      // Build a blob that prepends the archive-tile fetch override before the real worker script
+      const workerOverride = `
+(function() {
+  var BM_ARCHIVE_ORIGIN = '${BM_ARCHIVE_ORIGIN}';
+  var BM_ARCHIVE_REQ = '${BM_ARCHIVE_REQ}';
+  var BM_ARCHIVE_DATA = '${BM_ARCHIVE_DATA}';
+  var BM_ARCHIVE_BC = '${BM_ARCHIVE_BC}';
+  var bc = new BroadcastChannel(BM_ARCHIVE_BC);
+  var pending = {};
+  bc.onmessage = function(event) {
+    var d = event.data || {};
+    if (d.type !== BM_ARCHIVE_DATA) return;
+    var p = pending[d.reqId];
+    if (!p) return;
+    delete pending[d.reqId];
+    if (d.error) { p.reject(new Error('archive tile fetch failed')); return; }
+    var blob = new Blob([d.buffer], { type: 'image/png' });
+    var blobUrl = URL.createObjectURL(blob);
+    originalFetch(blobUrl).then(function(res) { URL.revokeObjectURL(blobUrl); p.resolve(res); }).catch(p.reject);
+  };
+  var originalFetch = self.fetch;
+  self.fetch = function() {
+    var args = arguments;
+    var url = (args[0] instanceof Request ? args[0].url : args[0]) || '';
+    if (typeof url === 'string' && url.startsWith(BM_ARCHIVE_ORIGIN + '/tiles/')) {
+      return new Promise(function(resolve, reject) {
+        var reqId = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+        pending[reqId] = { resolve: resolve, reject: reject };
+        bc.postMessage({ type: BM_ARCHIVE_REQ, url: url, reqId: reqId });
+      });
+    }
+    return originalFetch.apply(self, args);
+  };
+})();
+`;
+      let workerScriptURL = scriptURL;
+      const isModuleWorker = options && options.type === 'module';
+      if (!isModuleWorker && (typeof scriptURL === 'string' || scriptURL instanceof URL)) {
+        const scriptSrc = `${workerOverride}\nimportScripts(${JSON.stringify(String(scriptURL))});`;
+        const blob = new Blob([scriptSrc], { type: 'application/javascript' });
+        workerScriptURL = URL.createObjectURL(blob);
+      }
+      return new OriginalWorker(workerScriptURL, options);
+    };
+    window.Worker.prototype = OriginalWorker.prototype;
+  })();
+
+  // Hook Image.prototype src setter — fallback for non-worker tile loads
+  (() => {
+    const srcDescriptor = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
+    if (!srcDescriptor) return;
+    Object.defineProperty(HTMLImageElement.prototype, 'src', {
+      get: srcDescriptor.get,
+      set(url) {
+        if (typeof url === 'string' && url.startsWith(BM_ARCHIVE_ORIGIN + '/tiles/')) {
+          console.error('[archive tile] Image.src intercepted:', url);
+          const img = this;
+          bmArchiveFetch(url).then((buffer) => {
+            const blob = new Blob([buffer], { type: 'image/png' });
+            const blobUrl = URL.createObjectURL(blob);
+            srcDescriptor.set.call(img, blobUrl);
+            img.addEventListener('load', () => URL.revokeObjectURL(blobUrl), { once: true });
+            img.addEventListener('error', () => URL.revokeObjectURL(blobUrl), { once: true });
+          }).catch(() => {
+            img.dispatchEvent(new Event('error'));
+          });
+        } else {
+          srcDescriptor.set.call(this, url);
+        }
+      },
+      configurable: true,
+    });
+  })();
+
+  // Overrides fetch (main thread fallback — worker path above covers MapLibre workers)
   window.fetch = async function(...args) {
 
     const blink = Date.now(); // Current time
     const endpointName = ((args[0] instanceof Request) ? args[0]?.url : args[0]) || 'ignore';
+
+    // Intercept archive tile requests and proxy through TM to bypass CORS
+    if (typeof endpointName === 'string' && endpointName.startsWith(BM_ARCHIVE_ORIGIN + '/tiles/')) {
+      console.error('[archive tile] main-thread fetch intercepted:', endpointName);
+      return bmArchiveFetch(endpointName).then((buffer) => {
+        console.error('[archive tile] main-thread fetch resolved, byteLength=', buffer?.byteLength);
+        const blob = new Blob([buffer], { type: 'image/png' });
+        const blobUrl = URL.createObjectURL(blob);
+        return originalFetch(blobUrl).then((res) => { URL.revokeObjectURL(blobUrl); return res; });
+      }).catch((err) => {
+        console.error('[archive tile] main-thread fetch rejected:', err?.message);
+        throw err;
+      });
+    }
+
     const isReportRequest = !safeModeEnabled && isReportUserEndpoint(endpointName);
     if (isReportRequest) {
       postReportRequestPhase('start', endpointName);
@@ -3945,6 +4147,14 @@ function resolveTemplateOverlayMapInstance() {
   return null;
 }
 
+setInterval(() => {
+  const map = resolveTemplateOverlayMapInstance();
+  if (!map) { consoleError('[archive zoom] map not found'); return; }
+  const zoom = map['getZoom']?.();
+  const center = map['getCenter']?.();
+  consoleError('[archive zoom] zoom=', zoom, 'center=', center);
+}, 5000);
+
 function bindTemplateViewportOverlayRefresh() {
   if (templateViewportOverlayRefreshBound || isSafeModeActive()) return;
   doAfterMapFound(() => {
@@ -4188,6 +4398,41 @@ window.addEventListener('message', (event) => {
   }
 });
 
+// Proxy archive tile requests from the injected fetch hook through GM_xmlhttpRequest (no CORS restriction)
+window.addEventListener('message', (event) => {
+  const d = event?.data;
+  if (!d || d.source !== 'blue-marble' || d.type !== 'bm-archive-tile-req') return;
+  const { url, reqId } = d;
+  if (!url || !reqId) return;
+  consoleError('[archive tile] GM handler: fetching', url);
+  GM_xmlhttpRequest({
+    method: 'GET',
+    url,
+    responseType: 'arraybuffer',
+    onload: (response) => {
+      consoleError('[archive tile] GM handler: onload status=', response.status, 'byteLength=', response.response?.byteLength, 'url=', url);
+      if (response.status < 200 || response.status >= 300) {
+        window.postMessage({ source: 'blue-marble', type: 'bm-archive-tile-data', reqId, error: true }, '*');
+        return;
+      }
+      const buffer = response.response;
+      window.postMessage(
+        { source: 'blue-marble', type: 'bm-archive-tile-data', reqId, buffer },
+        '*',
+        buffer instanceof ArrayBuffer ? [buffer] : []
+      );
+    },
+    onerror: (err) => {
+      consoleError('[archive tile] GM handler: onerror for', url, err);
+      window.postMessage({ source: 'blue-marble', type: 'bm-archive-tile-data', reqId, error: true }, '*');
+    },
+    ontimeout: () => {
+      consoleError('[archive tile] GM handler: ontimeout for', url);
+      window.postMessage({ source: 'blue-marble', type: 'bm-archive-tile-data', reqId, error: true }, '*');
+    },
+  });
+});
+
 GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   const userSettingsValue = await GM.getValue('bmUserSettings', '{}');
   let userSettings;
@@ -4243,8 +4488,18 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   } else {
     templateManager.setUserSettings(userSettings);
   }
+  // Apply query param overrides (e.g. ?smartPlace=1)
+  const _qp = new URLSearchParams(window.location.search);
+  if (_qp.has('sm')) {
+    const val = _qp.get('sm');
+    templateManager.userSettings.smartPlace = val !== '0' && val !== 'false';
+    GM.setValue('bmUserSettings', JSON.stringify(templateManager.userSettings));
+  }
+
   currentLayoutLanguage = normalizeLayoutLanguage(templateManager.getLayoutLanguage?.());
   setMapCommentsEnabled(templateManager.isMapCommentsEnabled());
+  consoleError('[archive bg] isArchiveBackgroundEnabled=', templateManager.isArchiveBackgroundEnabled());
+  if (templateManager.isArchiveBackgroundEnabled()) applyArchiveBackground(true);
 
   // load templates after user settings
   let storageTemplates;
@@ -4476,123 +4731,270 @@ function observeBlack() {
       if (smartPlaceEnabled()) {
         let paint = document.querySelector('#bm-button-paint'); // Tries to find the paint button
 
-        // If the move button does not exist, we make a new one
+        // If the paint button does not exist, we make new ones
         if (!paint) {
+          const SMART_PLACE_ORDERS = ['nearest', 'ltr', 'rtl', 'ttb', 'btt'];
+          let smartPlaceOrder = templateManager.userSettings?.smartPlaceOrder ?? 'nearest';
+          let smartPlaceStopped = false;
+          const smartPlacePainted = new Set(); // tracks painted pixel coords this session
+
+          const sortExamplesByOrder = (examples, order, refCoord) => {
+            const toW = ([tileCoord, subCoord]) => [
+              tileCoord[0] * templateManager.tileSize + subCoord[0],
+              tileCoord[1] * templateManager.tileSize + subCoord[1],
+            ];
+            if (order === 'ltr') {
+              return examples.sort(([, c1], [, c2]) => toW(c1)[0] - toW(c2)[0]);
+            } else if (order === 'rtl') {
+              return examples.sort(([, c1], [, c2]) => toW(c2)[0] - toW(c1)[0]);
+            } else if (order === 'ttb') {
+              return examples.sort(([, c1], [, c2]) => toW(c1)[1] - toW(c2)[1]);
+            } else if (order === 'btt') {
+              return examples.sort(([, c1], [, c2]) => toW(c2)[1] - toW(c1)[1]);
+            }
+            // nearest (default)
+            const ref = toW(refCoord);
+            return examples.sort(([, c1], [, c2]) => {
+              const w1 = toW(c1), w2 = toW(c2);
+              const d1 = Math.sqrt((w1[0]-ref[0])**2 + (w1[1]-ref[1])**2) * (1 + Math.random() * 0.05);
+              const d2 = Math.sqrt((w2[0]-ref[0])**2 + (w2[1]-ref[1])**2) * (1 + Math.random() * 0.05);
+              return d1 - d2;
+            });
+          };
+
+          const collectExamples = () => {
+            const toggleStatus = new Set(templateManager.getDisplayedColorsSorted());
+            const result = [];
+            for (const stats of templateManager.tileProgress.values()) {
+              Object.entries(stats.palette).forEach(([colorKey, content]) => {
+                if (!toggleStatus.has(colorKey)) return;
+                const colorId = rgbToMeta.get(colorKey)?.id;
+                if (!colorId) return;
+                if (!templateManager.isColorUnlocked(colorId)) return;
+                result.extend(content.examplesEnabled.map(example => [colorId, example]));
+              });
+            }
+            return result;
+          };
+
+          const paint_onclick = function(out_of_screen = true) {
+            const currentCharges = Math.floor(apiManager.getCurrentCharges());
+            if (currentCharges === 0) return;
+            smartPlaceStopped = false;
+
+            // Use already up-to-date tileProgress (updated on every tile load)
+            setTimeout(() => {
+              let examples = collectExamples();
+              let exampleCoord;
+              if (examples.length === 0) return;
+              try {
+                const geoCoords = getCenterGeoCoords();
+                const tileCoords = coordsGeoCoordsToTileCoords(geoCoords[0], geoCoords[1]);
+                exampleCoord = [
+                  tileCoords[0][0] * templateManager.tileSize + tileCoords[1][0],
+                  tileCoords[0][1] * templateManager.tileSize + tileCoords[1][1],
+                ];
+              } catch {
+                const example = examples[Math.floor(Math.random() * examples.length)][1];
+                exampleCoord = [
+                  example[0][0] * templateManager.tileSize + example[1][0],
+                  example[0][1] * templateManager.tileSize + example[1][1],
+                ];
+              }
+
+              const canvas = document.querySelector("canvas.maplibregl-canvas");
+              if (!canvas) return;
+              // Always filter to only on-screen pixels (no teleport, coords are relative to current view)
+              {
+                const _pxPerW = !isMapTilerLoaded() ? (512 * 2 ** (13 + 0)) / 2048000 : getPixelPerWplacePixel();
+                examples = examples.filter(([, coord1]) => {
+                  const wx = coord1[0][0] * templateManager.tileSize + coord1[1][0];
+                  const wy = coord1[0][1] * templateManager.tileSize + coord1[1][1];
+                  return (
+                    Math.abs(wx - exampleCoord[0]) * _pxPerW * 2 < canvas.offsetWidth &&
+                    Math.abs(wy - exampleCoord[1]) * _pxPerW * 2 < canvas.offsetHeight
+                  );
+                });
+                if (examples.length === 0) return;
+              }
+
+              // Skip pixels already painted this session
+              examples = examples.filter(([, coord]) => {
+                const key = coord[0][0] + ',' + coord[0][1] + ',' + coord[1][0] + ',' + coord[1][1];
+                return !smartPlacePainted.has(key);
+              });
+              if (examples.length === 0) return;
+
+              const refTile = examples[0][1];
+              examples = sortExamplesByOrder(examples, smartPlaceOrder, refTile);
+              if (examples.length > currentCharges) {
+                examples = examples.slice(0, currentCharges);
+              }
+
+              // Use current camera position as reference — no teleport
+              const geoCoords = getCenterGeoCoords();
+              const refCoord = coordsGeoCoordsToTileCoords(geoCoords[0], geoCoords[1]);
+              const wplaceBad = !isMapTilerLoaded();
+              const humanize = templateManager.userSettings?.smartPlaceHumanize ?? false;
+              setTimeout(() => {
+              const pxPerW = wplaceBad ? (512 * 2 ** (13 + 0)) / 2048000 : getPixelPerWplacePixel(); // teleport zoom is 13
+              let currentColorId = null;
+              const refW = [
+                refCoord[0][0] * templateManager.tileSize + refCoord[1][0],
+                refCoord[0][1] * templateManager.tileSize + refCoord[1][1],
+              ]; // reference Wplace coord
+              const cliC = [canvas.offsetWidth / 2, canvas.offsetHeight / 2]; // reference canvas coord
+
+              const markPainted = (coord) => {
+                const key = coord[0][0] + ',' + coord[0][1] + ',' + coord[1][0] + ',' + coord[1][1];
+                smartPlacePainted.add(key);
+              };
+              const clickAt = (cx, cy) => canvas.dispatchEvent(new MouseEvent("click", {
+                bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0,
+              }));
+
+              if (humanize) {
+                let currentSegmentColorId = null;
+                const dispatchOne = (i) => {
+                  if (smartPlaceStopped) return;
+                  if (i >= examples.length) return;
+                  const [colorId, example] = examples[i];
+                  const doClick = () => {
+                    const exW = [
+                      example[0][0] * templateManager.tileSize + example[1][0],
+                      example[0][1] * templateManager.tileSize + example[1][1],
+                    ];
+                    clickAt(
+                      cliC[0] + (exW[0] - refW[0]) * pxPerW + (Math.random() - 0.5) * 1.5,
+                      cliC[1] + (exW[1] - refW[1]) * pxPerW + (Math.random() - 0.5) * 1.5,
+                    );
+                    markPainted(example);
+                    setTimeout(() => dispatchOne(i + 1), getHumanizeDelay());
+                  };
+                  if (currentSegmentColorId !== colorId) {
+                    currentSegmentColorId = colorId;
+                    document.getElementById("color-" + colorId).click();
+                    setTimeout(doClick, getHumanizeDelay());
+                  } else {
+                    doClick();
+                  }
+                };
+                dispatchOne(0);
+              } else {
+                for (let i = 0; i < examples.length; i++) {
+                  if (smartPlaceStopped) break;
+                  const [colorId, example] = examples[i];
+                  if (currentColorId !== colorId) {
+                    currentColorId = colorId;
+                    document.getElementById("color-" + colorId).click();
+                  }
+                  const exW = [
+                    example[0][0] * templateManager.tileSize + example[1][0],
+                    example[0][1] * templateManager.tileSize + example[1][1],
+                  ];
+                  clickAt(
+                    cliC[0] + (exW[0] - refW[0]) * pxPerW,
+                    cliC[1] + (exW[1] - refW[1]) * pxPerW,
+                  );
+                  markPainted(example);
+                }
+              }
+              }, wplaceBad ? 10000 : 0);
+            }, 0);
+          };
+
           paint = document.createElement('button');
           paint.id = 'bm-button-paint';
           paint.textContent = 'Paint';
           paint.className = 'btn btn-soft';
-          paint.onclick = function() {
-            const currentCharges = Math.floor(apiManager.getCurrentCharges());
-            if (currentCharges === 0) return;
-            let examples = [];
-            const toggleStatus = new Set(templateManager.getDisplayedColorsSorted());
-            for (const stats of templateManager.tileProgress.values()) {
-              Object.entries(stats.palette).forEach(([colorKey, content]) => {
-                if (!toggleStatus.has(colorKey)) return;
-                const colorId = rgbToMeta.get(colorKey).id;
-                if (!templateManager.isColorUnlocked(colorId)) return; // color not owned, need to disable no matter if enabled or not
-                
-                examples.extend(content.examplesEnabled.map(example => [colorId, example]));
-              })
-            };
-            let exampleCoord;
-            if (examples.length === 0) return;
-            try {
-              const geoCoords = getCenterGeoCoords();
-              const tileCoords = coordsGeoCoordsToTileCoords(geoCoords[0], geoCoords[1]);
-              exampleCoord = [
-                tileCoords[0][0] * templateManager.tileSize + tileCoords[1][0],
-                tileCoords[0][1] * templateManager.tileSize + tileCoords[1][1],
-              ];
-            } catch {
-              const example = examples[Math.floor(Math.random() * examples.length)][1];
-              exampleCoord = [
-                example[0][0] * templateManager.tileSize + example[1][0],
-                example[0][1] * templateManager.tileSize + example[1][1],
-              ];
-            };
-            if (examples.length <= currentCharges) {
-              // do nothing as all are going to be painted anyway
-            } else if (examples.length < 5000) { // performance is close at about 5000 ~ 10000
-               examples = examples.sort(([color1, coord1], [color2, coord2]) => {
-                const _coord1 = [
-                  coord1[0][0] * templateManager.tileSize + coord1[1][0],
-                  coord1[0][1] * templateManager.tileSize + coord1[1][1],
-                ];
-                const _coord2 = [
-                  coord2[0][0] * templateManager.tileSize + coord2[1][0],
-                  coord2[0][1] * templateManager.tileSize + coord2[1][1],
-                ];
-                const dist1 = Math.sqrt(Math.pow(_coord1[0] - exampleCoord[0], 2) + Math.pow(_coord1[1] - exampleCoord[1], 2)) * (1 + Math.random() * 0.2);
-                const dist2 = Math.sqrt(Math.pow(_coord2[0] - exampleCoord[0], 2) + Math.pow(_coord2[1] - exampleCoord[1], 2)) * (1 + Math.random() * 0.2);
-                return dist1 - dist2;
-              }).slice(0, currentCharges);
-            } else {
-              // we don't want to fully sort the array
-              const buckets = {};
-              const resultExamples = [];
-              examples.forEach(([color1, coord1]) => {
-                const _coord1 = [
-                  coord1[0][0] * templateManager.tileSize + coord1[1][0],
-                  coord1[0][1] * templateManager.tileSize + coord1[1][1],
-                ];
-                const dist1 = Math.floor(Math.sqrt(Math.pow(_coord1[0] - exampleCoord[0], 2) + Math.pow(_coord1[1] - exampleCoord[1], 2)) * (1 + Math.random() * 0.2));
-                if (buckets[dist1] === undefined) {
-                  buckets[dist1] = [
-                    [color1, coord1]
-                  ];
-                } else {
-                  buckets[dist1].push(
-                    [color1, coord1]
-                  );
-                }
-              });
-              const sortedDist = Object.keys(buckets).sort((a, b) => a - b);
-              for (const dist of sortedDist) {
-                resultExamples.extend(buckets[dist]);
-                if (resultExamples.length >= currentCharges) break;
-              }
-              examples = resultExamples.slice(0, currentCharges);
-            }
-            const canvas = document.querySelector("canvas.maplibregl-canvas");
-            teleportToTileCoords(examples[0][1][0], examples[0][1][1]);
-            const wplaceBad = !isMapTilerLoaded();
-            setTimeout(() => {
-              let currentColorId = examples[0][0];
-              document.getElementById("color-" + currentColorId).click();
+          paint.onclick = () => paint_onclick(true);
 
-              const refW = [
-                examples[0][1][0][0] * templateManager.tileSize + examples[0][1][1][0],
-                examples[0][1][0][1] * templateManager.tileSize + examples[0][1][1][1],
-              ]; // reference Wplace coord
-              const cliC = [canvas.offsetWidth / 2, canvas.offsetHeight / 2]; // reference canvas coord
-              const pxPerW = wplaceBad ? (512 * 2 ** (13 + 0)) / 2048000 : getPixelPerWplacePixel(); // teleport zoom is 13
-              for (let i = 0; i < examples.length; i++) {
-                const [colorId, example] = examples[i];
-                if (currentColorId !== colorId) {
-                  currentColorId = colorId;
-                  document.getElementById("color-" + colorId).click();
-                };
-                const exW = [
-                  example[0][0] * templateManager.tileSize + example[1][0],
-                  example[0][1] * templateManager.tileSize + example[1][1],
-                ]
-                const ev = new MouseEvent("click", {
-                  "bubbles": true, "cancelable": true,
-                  "clientX": cliC[0] + (exW[0] - refW[0]) * pxPerW,
-                  "clientY": cliC[1] + (exW[1] - refW[1]) * pxPerW,
-                  "button": 0
-                });
-                canvas.dispatchEvent(ev);
-              }
-            }, wplaceBad ? 10000 : 0);
-          }
+          const paint2 = document.createElement('button');
+          paint2.id = 'bm-button-paint';
+          paint2.textContent = 'Fill Screen';
+          paint2.className = 'btn btn-soft';
+          paint2.onclick = () => paint_onclick(false);
+
+          const orderBtn = document.createElement('button');
+          orderBtn.id = 'bm-button-paint-order';
+          orderBtn.className = 'btn btn-soft';
+          orderBtn.title = 'Paint order';
+          const orderLabels = { nearest: '⊙', ltr: '→', rtl: '←', ttb: '↓', btt: '↑' };
+          orderBtn.textContent = orderLabels[smartPlaceOrder] ?? '⊙';
+          orderBtn.onclick = () => {
+            const idx = SMART_PLACE_ORDERS.indexOf(smartPlaceOrder);
+            smartPlaceOrder = SMART_PLACE_ORDERS[(idx + 1) % SMART_PLACE_ORDERS.length];
+            orderBtn.textContent = orderLabels[smartPlaceOrder];
+            templateManager.userSettings.smartPlaceOrder = smartPlaceOrder;
+            GM.setValue('bmUserSettings', JSON.stringify(templateManager.userSettings));
+          };
+
+          let humanizeEnabled = templateManager.userSettings?.smartPlaceHumanize ?? false;
+          let humanizeDelayMin = templateManager.userSettings?.smartPlaceDelayMin ?? 10;
+          let humanizeDelayMax = templateManager.userSettings?.smartPlaceDelayMax ?? 30;
+          const getHumanizeDelay = () => humanizeDelayMin + Math.random() * (humanizeDelayMax - humanizeDelayMin);
+
+          const humanizeBtn = document.createElement('button');
+          humanizeBtn.id = 'bm-button-paint-humanize';
+          humanizeBtn.className = 'btn btn-soft';
+          humanizeBtn.title = 'Humanize (delays + jitter)';
+          humanizeBtn.textContent = humanizeEnabled ? '🤖off' : '🤖';
+          humanizeBtn.onclick = () => {
+            humanizeEnabled = !humanizeEnabled;
+            humanizeBtn.textContent = humanizeEnabled ? '🤖off' : '🤖';
+            templateManager.userSettings.smartPlaceHumanize = humanizeEnabled;
+            GM.setValue('bmUserSettings', JSON.stringify(templateManager.userSettings));
+          };
+
+          const delayMinInput = document.createElement('input');
+          delayMinInput.type = 'number';
+          delayMinInput.value = humanizeDelayMin;
+          delayMinInput.min = 0;
+          delayMinInput.title = 'Min delay (ms)';
+          delayMinInput.style.cssText = 'width:48px;font-size:small;';
+          delayMinInput.onchange = () => {
+            humanizeDelayMin = Math.max(0, Number(delayMinInput.value) || 0);
+            templateManager.userSettings.smartPlaceDelayMin = humanizeDelayMin;
+            GM.setValue('bmUserSettings', JSON.stringify(templateManager.userSettings));
+          };
+
+          const delayMaxInput = document.createElement('input');
+          delayMaxInput.type = 'number';
+          delayMaxInput.value = humanizeDelayMax;
+          delayMaxInput.min = 0;
+          delayMaxInput.title = 'Max delay (ms)';
+          delayMaxInput.style.cssText = 'width:48px;font-size:small;';
+          delayMaxInput.onchange = () => {
+            humanizeDelayMax = Math.max(0, Number(delayMaxInput.value) || 0);
+            templateManager.userSettings.smartPlaceDelayMax = humanizeDelayMax;
+            GM.setValue('bmUserSettings', JSON.stringify(templateManager.userSettings));
+          };
 
           // Attempts to find the "Paint Pixel" element for anchoring
           const paintPixel = black.parentNode.parentNode.parentNode.parentNode.querySelector('h2');
 
-          paintPixel.parentNode?.appendChild(paint); // Adds the paint button
+          const stopBtn = document.createElement('button');
+          stopBtn.id = 'bm-button-paint-stop';
+          stopBtn.className = 'btn btn-soft';
+          stopBtn.title = 'Stop painting';
+          stopBtn.textContent = '■';
+          stopBtn.onclick = () => { smartPlaceStopped = true; };
+
+          const clearBtn = document.createElement('button');
+          clearBtn.id = 'bm-button-paint-clear';
+          clearBtn.className = 'btn btn-soft';
+          clearBtn.title = 'Clear painted pixels memory (start fresh)';
+          clearBtn.textContent = '↺';
+          clearBtn.onclick = () => { smartPlacePainted.clear(); };
+
+          paintPixel.parentNode?.appendChild(paint);
+          paintPixel.parentNode?.appendChild(paint2);
+          paintPixel.parentNode?.appendChild(orderBtn);
+          paintPixel.parentNode?.appendChild(humanizeBtn);
+          paintPixel.parentNode?.appendChild(delayMinInput);
+          paintPixel.parentNode?.appendChild(delayMaxInput);
+          paintPixel.parentNode?.appendChild(stopBtn);
+          paintPixel.parentNode?.appendChild(clearBtn);
         }
       };
 
@@ -6717,6 +7119,7 @@ async function buildOverlayMain() {
       forceRefreshTiles,
       removeLayer,
       setMapCommentsEnabled: (enabled) => setMapCommentsEnabled(enabled),
+      applyArchiveBackground: (enabled) => applyArchiveBackground(enabled),
       applySafeMode: () => applySafeModeState(),
       themeList,
       outputStatusId: overlayMain.outputStatusId,
@@ -9156,5 +9559,11 @@ async function buildOverlayMain() {
       forceClickCenter();
     } catch (_) {}
   }, 0);
+
+  unsafeWindow.bmEnableSmartPlace = async () => {
+    templateManager.userSettings.smartPlace = true;
+    await GM.setValue('bmUserSettings', JSON.stringify(templateManager.userSettings));
+    console.log('[BM] smartPlace enabled. Reload to apply.');
+  };
 
 }
