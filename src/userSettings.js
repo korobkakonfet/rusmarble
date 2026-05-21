@@ -509,6 +509,17 @@ export function buildUserSettingsSection({
             callBuildEventList();
           });
         }).buildElement()
+        .addCheckbox({'id': 'bm-background-mode-enabled', 'textContent': t('settings.backgroundMode'), 'checked': templateManager.isBackgroundModeEnabled?.() ?? false}, (instance, label, checkbox) => {
+          checkbox.addEventListener('change', async () => {
+            await templateManager.setBackgroundModeEnabled?.(checkbox.checked);
+            templateManager.createOverlayOnMap?.();
+            if (checkbox.checked) {
+              instance.handleDisplayStatus('Background Mode Enabled. Only unpainted pixels are shown.');
+            } else {
+              instance.handleDisplayStatus('Background Mode Disabled.');
+            }
+          });
+        }).buildElement()
         .addCheckbox({'id': 'bm-memory-saving-enabled', 'textContent': t('settings.memorySaving'), 'checked': templateManager.isMemorySavingModeOn()}, (instance, label, checkbox) => {
           checkbox.addEventListener('change', () => {
             templateManager.setMemorySavingMode(checkbox.checked);
