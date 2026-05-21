@@ -1,6 +1,6 @@
 ﻿import Template from "./Template";
 import { numberToEncoded, cleanUpCanvas, rgbToMeta, sortByOptions, testCanvasSize, getCurrentColor, sleep, createBitmapPreservingPixels, consoleLog, uint8ToBase64, setDebugLoggingEnabled as setGlobalDebugLoggingEnabled } from "./utils";
-import { themeList, addTemplateCanvas, removeLayer, removeTemplateCanvasSources, forceRefreshTiles, coordsGeoCoordsToTileCoords, getMapBounds, doAfterMapFound, isMapTilerLoaded, bmCanvas, getMountedTemplateCanvasSourceIDs } from './utilsMaptiler.js';
+import { themeList, addTemplateCanvas, removeLayer, removeTemplateCanvasSources, forceRefreshTiles, coordsGeoCoordsToTileCoords, getMapBounds, doAfterMapFound, isMapTilerLoaded, bmCanvas, getMountedTemplateCanvasSourceIDs, setUsageLayersOpacity } from './utilsMaptiler.js';
 import {
   buildMaskRowSpans,
   cloneMaskRowSpans,
@@ -227,6 +227,7 @@ export default class TemplateManager {
     this._overlayRenderGeneration = 0;
     this._activeOverlayGenerationId = null;
     this._overlayRasterCache = new Map();
+    this._livePixelsFetcher = null;
   }
 
   /** Retrieves the pixel art canvas.
@@ -669,9 +670,10 @@ export default class TemplateManager {
       if (isErrorMapShown && templateTileEnabled) {
         errorCanvas = new OffscreenCanvas(errorWidth, errorHeight);
         errorContext = errorCanvas.getContext('2d', { willReadFrequently: true });
-        errorContext.clearRect(0, 0, errorWidth, errorHeight);
-        errorImage = errorContext.getImageData(0, 0, errorWidth, errorHeight);
-        errorData = errorImage.data;
+        // Use a zero-filled buffer rather than getImageData — in anti-fingerprinting
+        // browsers (Brave) getImageData adds noise to alpha=0 background pixels,
+        // which makes them visibly colored on the map.
+        errorData = new Uint8ClampedArray(errorWidth * errorHeight * 4);
       }
 
       const offsetXResult = templateTile.pixelCoords[0];
@@ -745,7 +747,7 @@ export default class TemplateManager {
           requiredCount += progress.requiredCount;
 
           if (isErrorMapShown && templateTileEnabled) {
-            errorContext.putImageData(errorImage, 0, 0);
+            errorContext.putImageData(new ImageData(errorData, errorWidth, errorHeight), 0, 0);
             addTemplateCanvas(template.sortID, templateTile.tileKey, [errorWidth, errorHeight], errorCanvas, "error");
             cleanUpCanvas(errorCanvas);
             errorCanvas = null;
@@ -998,9 +1000,63 @@ export default class TemplateManager {
         // Prefer sample-based overlay rendering even for bitmap-backed chunks.
         // This keeps the displayed shape consistent across browsers and avoids
         // occasional Chrome bitmap-path glitches where the cross mask is not visible.
-        const sampleData = await template.getChunkSamples(tileKey, {
+        let sampleData = await template.getChunkSamples(tileKey, {
           memorySaving: currentMemorySavingMode,
         });
+
+        if (sampleData && this.isBackgroundModeEnabled() && this._livePixelsFetcher) {
+          try {
+            const tileKeyParts = String(tileKey).split(',').map(Number);
+            const liveTileX = tileKeyParts[0];
+            const liveTileY = tileKeyParts[1];
+            const tileOffsetX = tileKeyParts[2] || 0;
+            const tileOffsetY = tileKeyParts[3] || 0;
+            const livePixels = await this._livePixelsFetcher(liveTileX, liveTileY);
+            if (livePixels instanceof Uint8ClampedArray && livePixels.length >= 4) {
+              const liveTileSize = Math.round(Math.sqrt(livePixels.length / 4));
+              const filteredSample = {
+                ...sampleData,
+                x: new Uint16Array(sampleData.count),
+                y: new Uint16Array(sampleData.count),
+                r: new Uint8Array(sampleData.count),
+                g: new Uint8Array(sampleData.count),
+                b: new Uint8Array(sampleData.count),
+                a: new Uint8Array(sampleData.count),
+                flags: new Uint8Array(sampleData.count),
+                count: 0,
+                native: false,
+              };
+              for (let i = 0; i < sampleData.count; i++) {
+                if (sampleData.a[i] < 1) continue;
+                const lx = tileOffsetX + sampleData.x[i];
+                const ly = tileOffsetY + sampleData.y[i];
+                if (lx < 0 || ly < 0 || lx >= liveTileSize || ly >= liveTileSize) {
+                  const wi = filteredSample.count++;
+                  filteredSample.x[wi] = sampleData.x[i];
+                  filteredSample.y[wi] = sampleData.y[i];
+                  filteredSample.r[wi] = sampleData.r[i];
+                  filteredSample.g[wi] = sampleData.g[i];
+                  filteredSample.b[wi] = sampleData.b[i];
+                  filteredSample.a[wi] = sampleData.a[i];
+                  filteredSample.flags[wi] = sampleData.flags[i];
+                  continue;
+                }
+                const liveAlpha = livePixels[(ly * liveTileSize + lx) * 4 + 3];
+                if (liveAlpha < 1) {
+                  const wi = filteredSample.count++;
+                  filteredSample.x[wi] = sampleData.x[i];
+                  filteredSample.y[wi] = sampleData.y[i];
+                  filteredSample.r[wi] = sampleData.r[i];
+                  filteredSample.g[wi] = sampleData.g[i];
+                  filteredSample.b[wi] = sampleData.b[i];
+                  filteredSample.a[wi] = sampleData.a[i];
+                  filteredSample.flags[wi] = sampleData.flags[i];
+                }
+              }
+              sampleData = filteredSample;
+            }
+          } catch (_) {}
+        }
         const templateTileBitmap = sampleData
           ? null
           : await template.getChunked(tileKey, currentMemorySavingMode);
@@ -1021,7 +1077,7 @@ export default class TemplateManager {
           displayMode,
           displayedColorsHash
         );
-        const cachedRaster = this.getOverlayRasterCacheEntry(overlayCacheKey);
+        const cachedRaster = this.isBackgroundModeEnabled() ? null : this.getOverlayRasterCacheEntry(overlayCacheKey);
         let resultCanvas = null;
         let resultContext = null;
 
@@ -1153,6 +1209,9 @@ export default class TemplateManager {
         }
 
         addTemplateCanvas(template.sortID, tileKey, [safeOriginalWidth, safeOriginalHeight], resultCanvas, "overlay");
+        if (this.isErrorMapShown()) {
+          setUsageLayersOpacity("overlay", 0);
+        }
         cleanUpCanvas(resultCanvas);
         resultCanvas = null;
         
@@ -2289,6 +2348,7 @@ export default class TemplateManager {
    */
   async setErrorMapShown(value) {
     this.userSettings.showErrorMap = value;
+    setUsageLayersOpacity("overlay", value ? 0 : 1);
     await this.storeUserSettings();
   }
 
@@ -2347,6 +2407,19 @@ export default class TemplateManager {
    * @returns {boolean}
    * @since 0.90.0
    */
+  isBackgroundModeEnabled() {
+    return this.userSettings?.backgroundMode ?? false;
+  }
+
+  async setBackgroundModeEnabled(value) {
+    this.userSettings.backgroundMode = Boolean(value);
+    await this.storeUserSettings();
+  }
+
+  setLivePixelsFetcher(fn) {
+    this._livePixelsFetcher = typeof fn === 'function' ? fn : null;
+  }
+
   isNextTemplatePixelShortcutEnabled() {
     return this.userSettings?.enableNextTemplatePixelShortcut ?? true;
   }

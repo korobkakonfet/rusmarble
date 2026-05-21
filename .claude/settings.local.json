@@ -37,7 +37,10 @@
       "Bash(curl -s --max-time 5 \"https://wplace.eralyon.net/versions.json\")",
       "Bash(/mnt/c/Users/sashak/WebstormProjects/Wplace-BlueMarble-Userscripts/node_modules/.bin/esbuild --version)",
       "Bash(cmd.exe /c \"cd C:\\\\\\\\Users\\\\\\\\sashak\\\\\\\\WebstormProjects\\\\\\\\Wplace-BlueMarble-Userscripts && npm run build:dev 2>&1\")",
-      "WebSearch"
+      "WebSearch",
+      "Bash(npm install *)",
+      "Bash(git checkout *)",
+      "Bash(git rebase *)"
     ]
   }
 }

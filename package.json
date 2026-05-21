@@ -22,5 +22,8 @@
     "minami": "^1.2.3",
     "terser": "^5.43.1",
     "wabt": "^1.0.39"
+  },
+  "optionalDependencies": {
+    "@esbuild/linux-x64": "^0.28.0"
   }
 }
