@@ -144,6 +144,10 @@ const getNearestPaintablePacked = (r, g, b) => {
   }
   return cacheNearestPaintablePacked(packed, bestPacked);
 };
+export const snapRgbToNearestPalette = (r, g, b) => {
+  const packed = getNearestPaintablePacked(r, g, b);
+  return { r: (packed >> 16) & 255, g: (packed >> 8) & 255, b: packed & 255 };
+};
 const displayedColorPackedSetCache = new WeakMap();
 const displayedColorPackedArrayCache = new WeakMap();
 const getDisplayedColorPackedSet = (displayedColorSet) => {
@@ -401,6 +405,22 @@ export const decodeChunkSampleBuffer = (bufferValue) => {
         sampleData.a[index] = bytes[offset + 8];
         offset += TEMPLATE_CHUNK_SAMPLE_RECORD_BYTES;
       }
+    }
+    // Snap non-deface pixels to nearest palette color. This fixes templates stored
+    // before snapping was applied at extraction time (e.g. remote templates, old local
+    // templates, Brave-noise-affected data).
+    for (let i = 0; i < count; i++) {
+      if (sampleData.a[i] < 64) continue;
+      const r = sampleData.r[i], g = sampleData.g[i], b = sampleData.b[i];
+      const alreadyDeface = (sampleData.flags[i] & TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) !== 0;
+      if (alreadyDeface || isDefaceRgb(r, g, b)) {
+        sampleData.flags[i] |= TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE;
+        continue;
+      }
+      const snapped = snapRgbToNearestPalette(r, g, b);
+      sampleData.r[i] = snapped.r;
+      sampleData.g[i] = snapped.g;
+      sampleData.b[i] = snapped.b;
     }
   }
   return sampleData;
@@ -661,6 +681,12 @@ export const buildChunkSampleDataFromSource = (
           forcedDeface = normalized.isDeface === true;
         }
       }
+      const packedRaw = packRgb(red, green, blue);
+      const isDefacePixel = forcedDeface || packedRaw === PACKED_DEFACE_RGB;
+      if (!isDefacePixel && alphaOut >= 64 && typeof sampleNormalizer !== 'function') {
+        const snapped = snapRgbToNearestPalette(red, green, blue);
+        red = snapped.r; green = snapped.g; blue = snapped.b;
+      }
       sampleData.x[writeIndex] = x;
       sampleData.y[writeIndex] = y;
       sampleData.r[writeIndex] = red;
@@ -668,7 +694,6 @@ export const buildChunkSampleDataFromSource = (
       sampleData.b[writeIndex] = blue;
       sampleData.a[writeIndex] = alphaOut;
       const packedColor = packRgb(red, green, blue);
-      const isDefacePixel = forcedDeface || packedColor === PACKED_DEFACE_RGB;
       sampleData.flags[writeIndex] = isDefacePixel ? TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE : 0;
       if (paletteStatsAccumulator && alphaOut >= 64) {
         if (isDefacePixel) {
@@ -915,7 +940,7 @@ export const collectTemplateProgressFromSamples = ({
         errorData[errorIndex] = 128;
         errorData[errorIndex + 1] = 128;
         errorData[errorIndex + 2] = 128;
-        errorData[errorIndex + 3] = 200;
+        errorData[errorIndex + 3] = 255;
       }
     } else {
       const exactMatch = liveRed === templateRed && liveGreen === templateGreen && liveBlue === templateBlue;
@@ -938,7 +963,7 @@ export const collectTemplateProgressFromSamples = ({
           errorData[errorIndex] = 255;
           errorData[errorIndex + 1] = 0;
           errorData[errorIndex + 2] = 0;
-          errorData[errorIndex + 3] = 224;
+          errorData[errorIndex + 3] = 255;
         }
       } else {
         paintedCount++;
@@ -968,7 +993,7 @@ export const collectTemplateProgressFromSamples = ({
           errorData[errorIndex] = 0;
           errorData[errorIndex + 1] = 128;
           errorData[errorIndex + 2] = 0;
-          errorData[errorIndex + 3] = 160;
+          errorData[errorIndex + 3] = 255;
         }
       }
     }
