@@ -4130,6 +4130,7 @@ if (typeof __INLINE_CSS__ !== 'undefined' && __INLINE_CSS__) {
 const overlayMain = new Overlay(name, version); // Constructs a new Overlay object for the main overlay
 const templateManager = new TemplateManager(name, version, overlayMain); // Constructs a new TemplateManager object
 templateManagerRef = templateManager;
+templateManager.setLivePixelsFetcher(getLiveTilePixels);
 const apiManager = new ApiManager(templateManager); // Constructs a new ApiManager object
 let templateViewportOverlayRefreshBound = false;
 let templateViewportOverlayRefreshMap = null;
@@ -4583,6 +4584,23 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
     ) {
       event.preventDefault();
       void jumpToNextUnpaintedTemplatePixel();
+      return;
+    }
+    if (
+      (key === 'b' || key === 'и')
+      && !event.repeat
+      && !event.ctrlKey
+      && !event.metaKey
+      && event.altKey
+    ) {
+      event.preventDefault();
+      const nextVal = !templateManager.isBackgroundModeEnabled();
+      void templateManager.setBackgroundModeEnabled(nextVal).then(() => {
+        templateManager.createOverlayOnMap();
+        overlayMain.handleDisplayStatus(nextVal ? 'Background Mode: ON' : 'Background Mode: OFF');
+        const checkbox = document.getElementById('bm-background-mode-enabled');
+        if (checkbox) checkbox.checked = nextVal;
+      });
       return;
     }
     // Don't pan if disabled
@@ -6336,6 +6354,7 @@ const applyLayoutLanguage = (value = null) => {
   setCheckboxLabelText('bm-event-enabled', t('settings.enableEvent'));
   setCheckboxLabelText('bm-event-hide-claimed', t('settings.hideClaimedEventItems'));
   setCheckboxLabelText('bm-event-hide-unavailable', t('settings.hideUnavailableEventItems'));
+  setCheckboxLabelText('bm-background-mode-enabled', t('settings.backgroundMode'));
   setCheckboxLabelText('bm-memory-saving-enabled', t('settings.memorySaving'));
   setCheckboxLabelText('bm-debug-logs-enabled', t('settings.debugLogs'));
 
