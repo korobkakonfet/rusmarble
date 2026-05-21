@@ -336,6 +336,18 @@ export function removeLayer(usage = null, sortID = null) {
   }, toRemove, bmCanvas);
 }
 
+export function setUsageLayersOpacity(usage, opacity) {
+  const sourceIDs = Object.keys(bmCanvas[usage] ?? {});
+  if (!sourceIDs.length) return;
+  controlMapTiler((map, sourceIDs, opacity) => {
+    sourceIDs.forEach(sourceID => {
+      if (map['getLayer'](sourceID)) {
+        map['setPaintProperty'](sourceID, 'raster-opacity', opacity);
+      }
+    });
+  }, sourceIDs, opacity);
+}
+
 export function removeTemplateCanvasSources(sourceIDs, usage = "overlay") {
   const safeSourceIDs = Array.isArray(sourceIDs)
     ? sourceIDs.filter((sourceID) => typeof sourceID === 'string' && sourceID)

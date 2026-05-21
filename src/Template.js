@@ -13,6 +13,9 @@ import {
   mergePaletteStatsAccumulator,
   renderSampleDataToImage,
   TEMPLATE_DEFACE_RGB,
+  TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE,
+  isDefaceRgb,
+  snapRgbToNearestPalette,
 } from "./templateChunkUtils.js";
 import {
   templatePalettePackedSet,
@@ -204,7 +207,6 @@ export default class Template {
   async normalizeSourceImageDataForSamples(imageData) {
     if (
       !this.sampleNormalizeToPalette
-      || this.forcePaletteConversion
       || !imageData?.data
       || !Number.isFinite(imageData?.width)
       || !Number.isFinite(imageData?.height)
@@ -385,11 +387,20 @@ export default class Template {
         if (alpha <= 0) continue;
         sampleData.x[writeIndex] = x;
         sampleData.y[writeIndex] = y;
-        sampleData.r[writeIndex] = imageData[idx];
-        sampleData.g[writeIndex] = imageData[idx + 1];
-        sampleData.b[writeIndex] = imageData[idx + 2];
+        const rawR = imageData[idx], rawG = imageData[idx + 1], rawB = imageData[idx + 2];
+        if (isDefaceRgb(rawR, rawG, rawB)) {
+          sampleData.r[writeIndex] = rawR;
+          sampleData.g[writeIndex] = rawG;
+          sampleData.b[writeIndex] = rawB;
+          sampleData.flags[writeIndex] = TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE;
+        } else {
+          const snapped = snapRgbToNearestPalette(rawR, rawG, rawB);
+          sampleData.r[writeIndex] = snapped.r;
+          sampleData.g[writeIndex] = snapped.g;
+          sampleData.b[writeIndex] = snapped.b;
+          sampleData.flags[writeIndex] = 0;
+        }
         sampleData.a[writeIndex] = alpha;
-        sampleData.flags[writeIndex] = 0;
         writeIndex++;
       }
     }

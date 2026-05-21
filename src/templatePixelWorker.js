@@ -6,6 +6,9 @@ import {
   finalizePaletteStatsAccumulator,
   renderSampleDataToImage,
   findNearestUnpaintedSamplePixel,
+  TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE,
+  isDefaceRgb,
+  snapRgbToNearestPalette,
 } from './templateChunkUtils.js';
 import {
   filterBitmapPixelsWithWasm,
@@ -447,9 +450,15 @@ const handlers = {
         if (alpha <= 0) continue;
         xArr[writeIndex] = x;
         yArr[writeIndex] = y;
-        rArr[writeIndex] = pixelData[idx];
-        gArr[writeIndex] = pixelData[idx + 1];
-        bArr[writeIndex] = pixelData[idx + 2];
+        const rawR = pixelData[idx], rawG = pixelData[idx + 1], rawB = pixelData[idx + 2];
+        if (isDefaceRgb(rawR, rawG, rawB)) {
+          rArr[writeIndex] = rawR; gArr[writeIndex] = rawG; bArr[writeIndex] = rawB;
+          flagsArr[writeIndex] = TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE;
+        } else {
+          const snapped = snapRgbToNearestPalette(rawR, rawG, rawB);
+          rArr[writeIndex] = snapped.r; gArr[writeIndex] = snapped.g; bArr[writeIndex] = snapped.b;
+          flagsArr[writeIndex] = 0;
+        }
         aArr[writeIndex] = alpha;
         writeIndex++;
       }
