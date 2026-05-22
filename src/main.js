@@ -4782,6 +4782,7 @@ function observeBlack() {
 
           const collectExamples = () => {
             const toggleStatus = new Set(templateManager.getDisplayedColorsSorted());
+            const bgMode = templateManager.isBackgroundModeEnabled();
             const result = [];
             for (const stats of templateManager.tileProgress.values()) {
               Object.entries(stats.palette).forEach(([colorKey, content]) => {
@@ -4789,7 +4790,10 @@ function observeBlack() {
                 const colorId = rgbToMeta.get(colorKey)?.id;
                 if (!colorId) return;
                 if (!templateManager.isColorUnlocked(colorId)) return;
-                result.extend(content.examplesEnabled.map(example => [colorId, example]));
+                const examples = bgMode && Array.isArray(content.examplesUnpainted) && content.examplesUnpainted.length > 0
+                  ? content.examplesUnpainted
+                  : content.examplesEnabled;
+                result.extend(examples.map(example => [colorId, example]));
               });
             }
             return result;
@@ -4890,8 +4894,10 @@ function observeBlack() {
                     setTimeout(() => dispatchOne(i + 1), getHumanizeDelay());
                   };
                   if (currentSegmentColorId !== colorId) {
+                    const colorBtn = document.getElementById("color-" + colorId);
+                    if (!colorBtn) { setTimeout(() => dispatchOne(i + 1), getHumanizeDelay()); return; }
                     currentSegmentColorId = colorId;
-                    document.getElementById("color-" + colorId).click();
+                    colorBtn.click();
                     setTimeout(doClick, getHumanizeDelay());
                   } else {
                     doClick();
@@ -4903,8 +4909,10 @@ function observeBlack() {
                   if (smartPlaceStopped) break;
                   const [colorId, example] = examples[i];
                   if (currentColorId !== colorId) {
+                    const colorBtn = document.getElementById("color-" + colorId);
+                    if (!colorBtn) continue;
                     currentColorId = colorId;
-                    document.getElementById("color-" + colorId).click();
+                    colorBtn.click();
                   }
                   const exW = [
                     example[0][0] * templateManager.tileSize + example[1][0],
