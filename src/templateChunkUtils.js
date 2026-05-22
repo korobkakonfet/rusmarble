@@ -517,6 +517,11 @@ export const mergeSerializedPaletteProgress = (target, incoming, exampleMax) => 
       Array.isArray(entry.examplesEnabled) ? entry.examplesEnabled : [],
       exampleMax
     );
+    if (Array.isArray(entry.examplesUnpainted) && entry.examplesUnpainted.length > 0) {
+      for (const ex of entry.examplesUnpainted) {
+        addUnpaintedPixelExampleToReservoir(targetEntry, ex[0], ex[1][0], ex[1][1], exampleMax, Math.random);
+      }
+    }
   }
   return target;
 };
@@ -770,6 +775,23 @@ const addPixelExampleToReservoir = (target, tileCoords, pixelX, pixelY, exampleM
   }
 };
 
+const addUnpaintedPixelExampleToReservoir = (target, tileCoords, pixelX, pixelY, exampleMax, randomFn) => {
+  if (!target || exampleMax <= 0) return;
+  if (!Array.isArray(target.examplesUnpainted)) target.examplesUnpainted = [];
+  target._exampleUnpaintedSeenCount = Math.max(
+    Number(target._exampleUnpaintedSeenCount) || 0,
+    target.examplesUnpainted.length
+  );
+  target._exampleUnpaintedSeenCount++;
+  if (target.examplesUnpainted.length < exampleMax) {
+    target.examplesUnpainted.push([tileCoords, [pixelX, pixelY]]);
+    return;
+  }
+  if (randomFn() * target._exampleUnpaintedSeenCount < exampleMax) {
+    target.examplesUnpainted[Math.floor(randomFn() * exampleMax)] = [tileCoords, [pixelX, pixelY]];
+  }
+};
+
 export const mergeTemplateExampleReservoir = (target, incoming, exampleMax, randomFn = Math.random) => {
   if (!target || !Array.isArray(incoming) || incoming.length === 0 || exampleMax <= 0) {
     return;
@@ -883,6 +905,9 @@ export const collectTemplateProgressFromSamples = ({
           const pixelY = offsetY + sampleData.y[i];
           if (pixelX < 0 || pixelY < 0 || pixelX >= safeTileSize || pixelY >= safeTileSize) continue;
           addPixelExampleToReservoir(entry, tileCoords, pixelX, pixelY, exampleMax, randomFn);
+          if (tilePixels instanceof Uint8ClampedArray && tilePixels[(pixelY * safeTileSize + pixelX) * 4 + 3] < 1) {
+            addUnpaintedPixelExampleToReservoir(entry, tileCoords, pixelX, pixelY, exampleMax, randomFn);
+          }
         }
       }
       return { paintedCount, wrongCount, requiredCount };
@@ -1012,6 +1037,9 @@ export const collectTemplateProgressFromSamples = ({
       paletteEntry.missing++;
       if (templateEnabled) {
         addPixelExampleToReservoir(paletteEntry, tileCoords, pixelX, pixelY, exampleMax, randomFn);
+        if (liveAlpha < 1) {
+          addUnpaintedPixelExampleToReservoir(paletteEntry, tileCoords, pixelX, pixelY, exampleMax, randomFn);
+        }
       }
     }
   }
