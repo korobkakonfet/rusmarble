@@ -40,7 +40,8 @@
       "WebSearch",
       "Bash(npm install *)",
       "Bash(git checkout *)",
-      "Bash(git rebase *)"
+      "Bash(git rebase *)",
+      "Bash(npm version *)"
     ]
   }
 }
