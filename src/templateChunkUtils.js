@@ -362,6 +362,16 @@ export const encodeChunkSampleData = (sampleData) => {
   return uint8ToBase64(encodeChunkSampleBytes(sampleData));
 };
 
+// Read only width/height from the 8-byte header without allocating TypedArrays.
+export const readChunkSampleHeader = (bufferValue) => {
+  const bytes = bufferValue instanceof Uint8Array ? bufferValue : null;
+  if (!bytes || bytes.length < TEMPLATE_CHUNK_SAMPLE_HEADER_BYTES) return null;
+  const isColumnar = (bytes[1] & 0x80) !== 0;
+  const width = isColumnar ? (bytes[0] | ((bytes[1] & 0x0F) << 8)) : (bytes[0] | (bytes[1] << 8));
+  const height = bytes[2] | (bytes[3] << 8);
+  return { width, height };
+};
+
 export const decodeChunkSampleBuffer = (bufferValue) => {
   if (bufferValue === undefined || bufferValue === null) return null;
   const bytes = typeof bufferValue === 'string' ? base64ToUint8(bufferValue) : bufferValue;

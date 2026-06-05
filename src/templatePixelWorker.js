@@ -174,6 +174,69 @@ const handlers = {
     };
   },
 
+  renderOverlayChunkBatch(payload) {
+    const shared = {
+      drawSize: payload.drawSize,
+      maskPoints: payload.maskPoints,
+      maskRowSpans: toUint16RowSpans(payload.maskRowSpans),
+      displayedColors: payload.displayedColors,
+      includeDefaceCheckerboard: payload.includeDefaceCheckerboard === true,
+    };
+    const results = (payload.chunks ?? []).map((chunk) => {
+      const sampleData = decodeChunkSampleBuffer(chunk.sampleData);
+      const pixels = renderChunkPixels({
+        sampleData,
+        resultWidth: chunk.resultWidth,
+        resultHeight: chunk.resultHeight,
+        ...shared,
+      });
+      return { tileKey: chunk.tileKey, resultWidth: chunk.resultWidth, resultHeight: chunk.resultHeight, pixels };
+    });
+    return { results };
+  },
+
+  // Renders all sample tiles and composites them (plus any pre-rendered cached tiles) into one
+  // OffscreenCanvas, returning a transferable ImageBitmap.
+  // sampleChunks: tiles with raw sample data that need renderChunkPixels.
+  // cachedChunks:  tiles with pre-rendered pixels (Uint8ClampedArray) to composite directly.
+  // Both carry destX/destY (pixel offset within the merged canvas).
+  // This lets the main thread do a single addTemplateFullCanvas call instead of N addTemplateCanvas calls.
+  renderAndMergeOverlayChunks(payload) {
+    const canvasWidth = payload.canvasWidth | 0;
+    const canvasHeight = payload.canvasHeight | 0;
+    if (canvasWidth <= 0 || canvasHeight <= 0) return { bitmap: null };
+    const shared = {
+      drawSize: payload.drawSize,
+      maskPoints: payload.maskPoints,
+      maskRowSpans: toUint16RowSpans(payload.maskRowSpans),
+      displayedColors: payload.displayedColors,
+      includeDefaceCheckerboard: payload.includeDefaceCheckerboard === true,
+    };
+    const canvas = new OffscreenCanvas(canvasWidth, canvasHeight);
+    const ctx = canvas.getContext('2d');
+    // Render and place uncached sample tiles
+    for (const chunk of (payload.sampleChunks ?? [])) {
+      const sampleData = decodeChunkSampleBuffer(chunk.sampleData);
+      const pixels = renderChunkPixels({
+        sampleData,
+        resultWidth: chunk.resultWidth,
+        resultHeight: chunk.resultHeight,
+        ...shared,
+      });
+      if (pixels instanceof Uint8ClampedArray) {
+        ctx.putImageData(new ImageData(pixels, chunk.resultWidth, chunk.resultHeight), chunk.destX | 0, chunk.destY | 0);
+      }
+    }
+    // Place pre-rendered cached tiles (no re-rendering needed)
+    for (const chunk of (payload.cachedChunks ?? [])) {
+      if (chunk.pixels instanceof Uint8ClampedArray) {
+        ctx.putImageData(new ImageData(chunk.pixels, chunk.resultWidth, chunk.resultHeight), chunk.destX | 0, chunk.destY | 0);
+      }
+    }
+    const bitmap = canvas.transferToImageBitmap();
+    return { bitmap };
+  },
+
   filterTemplateBitmap(payload) {
     const templateData = toUint8Clamped(payload.templateData);
     const templateWidth = payload.templateWidth | 0;
@@ -552,6 +615,14 @@ self.onmessage = (event) => {
       result.chunkResults.forEach((entry) => {
         transferList.push(...transferBuffers([entry.sampleBytes, entry.renderedPixels]));
       });
+    }
+    if (Array.isArray(result?.results)) {
+      result.results.forEach((entry) => {
+        if (entry?.pixels instanceof Uint8ClampedArray) transferList.push(entry.pixels.buffer);
+      });
+    }
+    if (result?.bitmap instanceof ImageBitmap) {
+      transferList.push(result.bitmap);
     }
     self.postMessage({ id, ok: true, result }, transferList);
   } catch (error) {

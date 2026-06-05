@@ -330,6 +330,23 @@ export default class Template {
     return null;
   }
 
+  // Returns the raw Uint8Array buffer for a tile. If the buffer is stored as a base64 string
+  // (the case after GM.getValue restore), decodes it once and caches the result back so subsequent
+  // calls are O(1). Returns null if no buffer exists for this tile.
+  getRawChunkBuffer(tileKey) {
+    let buf = this.chunkedSamplesBuffer?.[tileKey];
+    if (typeof buf === 'string') {
+      const decoded = base64ToUint8(buf);
+      if (decoded instanceof Uint8Array) {
+        this.chunkedSamplesBuffer[tileKey] = decoded;
+        buf = decoded;
+      } else {
+        buf = null;
+      }
+    }
+    return buf instanceof Uint8Array ? buf : null;
+  }
+
   decodeStoredChunkSamples(tileKey) {
     if (this.chunkedSamples?.[tileKey]) {
       return this.chunkedSamples[tileKey];
@@ -409,40 +426,43 @@ export default class Template {
 
   async getChunkSamples(tileKey, options = {}) {
     const stored = this.decodeStoredChunkSamples(tileKey);
-    if (stored) {
-      return stored;
+    if (stored) return stored;
+    if (this.chunkedSamples?.[tileKey]) return this.chunkedSamples[tileKey];
+    if (options?.allowBitmapFallback === false) return null;
+
+    // Deduplicate concurrent extraction for the same tile — prewarm and render may race.
+    // Both callers get the same promise and share the single worker round-trip.
+    if (!this._pendingExtractions) this._pendingExtractions = new Map();
+    if (this._pendingExtractions.has(tileKey)) {
+      return this._pendingExtractions.get(tileKey);
     }
-    if (this.chunkedSamples?.[tileKey]) {
-      return this.chunkedSamples[tileKey];
-    }
-    if (options?.allowBitmapFallback === false) {
-      return null;
-    }
-    const memorySaving = options?.memorySaving === true;
-    const bitmap = await this.getChunked(tileKey, memorySaving);
-    if (!(bitmap instanceof ImageBitmap)) {
-      return null;
-    }
-    const shreadSize = Math.max(1, Math.trunc(Number(this.shreadSize) || 1));
-    let sampleData = null;
-    if (templateWorkerManager.canUseWorkers()) {
-      const workerResult = await templateWorkerManager.runTask('extractChunkSamples', {
-        bitmap,
-        shreadSize,
-      }, { transferList: [bitmap] }).catch(() => null);
-      if (workerResult?.sampleData) {
-        sampleData = { ...workerResult.sampleData, native: true };
+    const extractPromise = (async () => {
+      const memorySaving = options?.memorySaving === true;
+      const bitmap = await this.getChunked(tileKey, memorySaving);
+      if (!(bitmap instanceof ImageBitmap)) return null;
+      const shreadSize = Math.max(1, Math.trunc(Number(this.shreadSize) || 1));
+      let sampleData = null;
+      if (templateWorkerManager.canUseWorkers()) {
+        const workerResult = await templateWorkerManager.runTask('extractChunkSamples', {
+          bitmap,
+          shreadSize,
+        }, { transferList: [bitmap] }).catch(() => null);
+        if (workerResult?.sampleData) {
+          sampleData = { ...workerResult.sampleData, native: true };
+        }
+      } else {
+        sampleData = this.extractChunkSamplesFromBitmap(bitmap);
+        if (memorySaving) bitmap.close?.();
       }
-    } else {
-      sampleData = this.extractChunkSamplesFromBitmap(bitmap);
-      if (memorySaving) {
-        bitmap.close?.();
-      }
+      if (sampleData) this.chunkedSamples[tileKey] = sampleData;
+      return sampleData;
+    })();
+    this._pendingExtractions.set(tileKey, extractPromise);
+    try {
+      return await extractPromise;
+    } finally {
+      this._pendingExtractions.delete(tileKey);
     }
-    if (sampleData) {
-      this.chunkedSamples[tileKey] = sampleData;
-    }
-    return sampleData;
   }
 
   /** Creates chunks of the template for each tile.

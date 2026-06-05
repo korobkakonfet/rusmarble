@@ -1,6 +1,7 @@
 ﻿import Template from "./Template";
+import { profiler } from './profiler.js';
 import { numberToEncoded, cleanUpCanvas, rgbToMeta, sortByOptions, testCanvasSize, getCurrentColor, sleep, createBitmapPreservingPixels, consoleLog, uint8ToBase64, setDebugLoggingEnabled as setGlobalDebugLoggingEnabled } from "./utils";
-import { themeList, addTemplateCanvas, removeLayer, removeTemplateCanvasSources, forceRefreshTiles, coordsGeoCoordsToTileCoords, getMapBounds, doAfterMapFound, isMapTilerLoaded, bmCanvas, getMountedTemplateCanvasSourceIDs, setUsageLayersOpacity } from './utilsMaptiler.js';
+import { themeList, addTemplateCanvas, addTemplateFullCanvas, removeLayer, removeTemplateCanvasSources, forceRefreshTiles, coordsGeoCoordsToTileCoords, getMapBounds, doAfterMapFound, isMapTilerLoaded, bmCanvas, getMountedTemplateCanvasSourceIDs, setUsageLayersOpacity } from './utilsMaptiler.js';
 import {
   buildMaskRowSpans,
   cloneMaskRowSpans,
@@ -10,6 +11,7 @@ import {
   mergeSerializedPaletteProgress,
   mergeSerializedTemplateProgress,
   mergeTemplateExampleReservoir,
+  readChunkSampleHeader,
   renderSampleDataToImage,
 } from './templateChunkUtils.js';
 import { templateWorkerManager } from './templateWorkerManager.js';
@@ -51,7 +53,7 @@ const knownPalettePackedColors = (() => {
   return packedSet;
 })();
 const knownColorsSorted = Uint32Array.from(knownPalettePackedColors).sort();
-const UI_WORK_SLICE_MS = 8;
+const UI_WORK_SLICE_MS = 30;
 const getNowMs = () => (
   typeof performance !== 'undefined' && typeof performance.now === 'function'
     ? performance.now()
@@ -213,8 +215,8 @@ export default class TemplateManager {
     this.tileProgress = new Map(); // Tracks per-tile progress stats {painted, required, wrong}
     this._runningPalette = Object.create(null);  // colorKey -> {painted, paintedAndEnabled, missing}
     this._runningTemplate = Object.create(null); // storageKey -> {painted, palette: {colorKey: count}}
-    this._examplesDirty = true; // rebuild combined examples next time they are requested
-    this._cachedExamples = null;
+    this._runningExamples = Object.create(null); // colorKey -> {examplesEnabled, _exampleSeenCount} — kept in sync incrementally
+    this._examplesColorDirty = new Set();        // colors whose examples need full rebuild (after tile removal)
     // this.tileOverlay = new Map(); // Cache tile overlay to save time
     this.extraColorsBitmap = 0; // List of unlocked colors, set by apiManager
     this.completedColorsBitmapLo = 0; // 0 ~ 31
@@ -816,7 +818,9 @@ export default class TemplateManager {
         resolve: null,
         reject: null,
         running: false,
-        needsRun: false
+        needsRun: false,
+        lastFullRebuildAt: 0,   // timestamp of last full (non-prefix-scoped) rebuild completion
+        lastScopedRebuildAt: 0, // timestamp of last prefix-scoped rebuild completion
       };
     }
 
@@ -851,11 +855,32 @@ export default class TemplateManager {
       return state.promise || Promise.resolve();
     }
 
+    // Rate-limit rebuilds: full rebuilds cooldown 2s, scoped-prefix rebuilds cooldown 500ms.
+    // immediate:true bypasses both (used for color-completion and visibleFirst triggers).
+    const FULL_REBUILD_COOLDOWN_MS = 2000;
+    const SCOPED_REBUILD_COOLDOWN_MS = 500;
+    const isFullRebuild = !normalizedOptions?.tilePrefixes;
+    const msSinceLastFull = getNowMs() - state.lastFullRebuildAt;
+    const msSinceLastScoped = getNowMs() - state.lastScopedRebuildAt;
+    const delayMs = normalizedOptions?.immediate
+      ? 0
+      : isFullRebuild && msSinceLastFull < FULL_REBUILD_COOLDOWN_MS
+        ? FULL_REBUILD_COOLDOWN_MS - msSinceLastFull
+        : !isFullRebuild && msSinceLastScoped < SCOPED_REBUILD_COOLDOWN_MS
+          ? SCOPED_REBUILD_COOLDOWN_MS - msSinceLastScoped
+          : 100;
+
+    // Only reset the timer if the new delay is shorter (don't push a queued rebuild further out).
     if (state.timer) {
+      if (delayMs >= state._pendingDelay) {
+        // Already have a timer firing sooner or at the same time — don't reset it.
+        return state.promise || Promise.resolve();
+      }
       clearTimeout(state.timer);
       state.timer = null;
     }
 
+    state._pendingDelay = delayMs;
     if (!state.promise) {
       state.promise = new Promise((resolve, reject) => {
         state.resolve = resolve;
@@ -865,6 +890,7 @@ export default class TemplateManager {
 
     state.timer = setTimeout(async () => {
       state.timer = null;
+      state._pendingDelay = 0;
       state.running = true;
       const pending = state.pendingSortID;
       const pendingOptions = state.pendingOptions;
@@ -872,7 +898,12 @@ export default class TemplateManager {
       state.pendingSortID = undefined;
       state.pendingOptions = null;
       try {
-        await this._createOverlayOnMapInternal(pending, pendingOptions);
+        await profiler.measureAsync('createOverlayOnMap', () => this._createOverlayOnMapInternal(pending, pendingOptions));
+        if (!pendingOptions?.tilePrefixes) {
+          state.lastFullRebuildAt = getNowMs();
+        } else {
+          state.lastScopedRebuildAt = getNowMs();
+        }
         state.resolve?.();
       } catch (err) {
         state.reject?.(err);
@@ -888,7 +919,7 @@ export default class TemplateManager {
           this.createOverlayOnMap(pending ?? null);
         }
       }
-    }, normalizedOptions?.immediate ? 0 : 100);
+    }, delayMs);
 
     return state.promise;
   }
@@ -921,6 +952,35 @@ export default class TemplateManager {
     return Promise.resolve();
   }
 
+  /** Pre-extract chunk samples for any tile that has a bitmap but no sample buffer.
+   * Runs in the background after template load so panning to new areas doesn't stall.
+   * Uses sleep(0) yields between tiles to avoid competing with active renders.
+   */
+  async _prewarmTemplateSamples(template) {
+    const allKeys = template.getChunkKeys();
+    for (const tileKey of allKeys) {
+      if (template.getRawChunkBuffer(tileKey) || template.chunkedSamples?.[tileKey]) continue;
+      const hasBitmap = (template.chunked && Object.prototype.hasOwnProperty.call(template.chunked, tileKey))
+        || (template.chunkedBuffer && Object.prototype.hasOwnProperty.call(template.chunkedBuffer, tileKey));
+      if (!hasBitmap) continue;
+      try {
+        await template.getChunkSamples(tileKey, { memorySaving: false });
+      } catch (_) {}
+      await sleep(0);
+    }
+  }
+
+  /** Schedule background sample pre-extraction for a template.
+   * Delayed by 1s to let the initial render complete first.
+   */
+  _schedulePrewarm(template) {
+    setTimeout(async () => {
+      try {
+        await this._prewarmTemplateSamples(template);
+      } catch (_) {}
+    }, 1000);
+  }
+
   /** Queue an overlay refresh after the browser has had a chance to paint UI updates first.
    * @param {number?} sortID
    * @param {object?} options
@@ -931,12 +991,26 @@ export default class TemplateManager {
     return this.createOverlayOnMap(sortID, options);
   }
 
+  /** Compute a tile's pixel offset (in template-space pixels) relative to the template's top-left corner. */
+  _getTileOffsetInTemplate(template, tileKey) {
+    const tileSize = this.tileSize;
+    const templateWorldWidth = 2048 * tileSize;
+    const coords = template.coords;
+    const topLeftWorldX = coords[0] * tileSize + coords[2];
+    const topLeftWorldY = coords[1] * tileSize + coords[3];
+    const tileCoords = String(tileKey).split(',').map(Number);
+    const chunkWorldX = tileCoords[0] * tileSize + tileCoords[2];
+    const chunkWorldY = tileCoords[1] * tileSize + tileCoords[3];
+    const offsetX = ((chunkWorldX - topLeftWorldX) % templateWorldWidth + templateWorldWidth) % templateWorldWidth;
+    const offsetY = chunkWorldY - topLeftWorldY;
+    return { offsetX, offsetY };
+  }
+
   /** Add the template overlay layer to the map (no debounce)
    * @param {number?} sortID
    * @since 0.86.1
    */
   async _createOverlayOnMapInternal(sortID = null, options = null) {
-    const yieldUi = createUiWorkScheduler();
     if (this._activeOverlayGenerationId) {
       templateWorkerManager.cancelGeneration(this._activeOverlayGenerationId);
     }
@@ -948,9 +1022,8 @@ export default class TemplateManager {
       ? new Set(getMountedTemplateCanvasSourceIDs('overlay'))
       : null;
 
-    const currentMemorySavingMode = this.isMemorySavingModeOn(); // To make sure that we do not free the object if it is stored due to race conditions.
+    const currentMemorySavingMode = this.isMemorySavingModeOn();
     const templates = (this.templatesArray ?? []).filter(t => t.enabled && (sortID === null || t.sortID == sortID));
-    // Keep color visibility consistent across all templates rendered in this pass.
     const _paletteToggledStatus = this.getPaletteToggledStatus();
     const displayedColors = this.getDisplayedColorsSorted(_paletteToggledStatus);
     const displayedColorSet = new Set(displayedColors);
@@ -967,7 +1040,7 @@ export default class TemplateManager {
       }
     }
     const hasColorDisabled = displayedColors.length !== Object.keys(_paletteToggledStatus).length;
-    const allColorsDisabled = displayedColors.length === 0; // Check if every color is disabled
+    const allColorsDisabled = displayedColors.length === 0;
 
     const displayMode = this.getTemplateDisplayMode();
     const drawMultResult = this.getTemplateDrawSize(displayMode);
@@ -975,252 +1048,373 @@ export default class TemplateManager {
     const maskRowSpans = buildMaskRowSpans(maskPoints, drawMultResult);
     const displayedColorsHash = this.getOverlayDisplayedColorsHash(displayedColors);
 
-    for (const template of templates) {
-      await yieldUi();
-      if (this._activeOverlayGenerationId !== overlayGenerationId) return;
-      if (!template.enabled) return; // no need to draw if template is disabled
-      if (allColorsDisabled) {
-        // make sure we removed all layers related to this template
+    if (allColorsDisabled) {
+      for (const template of templates) {
         removeLayer("overlay", template.sortID);
-        continue;
-      };
+      }
+      return;
+    }
+
+    // ── Phase 1+2: collect tile data and dispatch worker calls for ALL templates in parallel ──
+    // Each template gets its own yield scheduler so their rAF pauses interleave rather than stack.
+    profiler.start('overlay:phase1');
+    const phase12Results = await Promise.all(templates.map(async (template) => {
+      if (!template.enabled) return null;
       const tileKeys = this._getTemplateTileKeys(template, tilePrefixSet);
-      if (!tileKeys.length) {
+      if (!tileKeys.length) return null;
+
+      const drawMultTemplate = template.shreadSize;
+      const drawMultCenterTemplate = (template.shreadSize - 1) >> 1;
+      const useCheckerboardRender = !hasColorDisabled && drawMultTemplate === drawMultResult && displayMode !== 'fill';
+      const backgroundMode = this.isBackgroundModeEnabled() && !!this._livePixelsFetcher;
+
+      // Phase 1: categorize tiles into cached / sample / bitmap buckets
+      const yieldUi = createUiWorkScheduler(); // independent scheduler per template
+      const cachedTiles = [];
+      const sampleTiles = [];
+      const bitmapTiles = [];
+
+      // ── Pass 1: categorize tiles synchronously (fast-path) or collect for parallel extraction ──
+      // Tiles with a raw binary sample buffer are resolved without any async work.
+      // Tiles needing bitmap extraction are collected and fired in parallel below.
+      const slowTiles = []; // { tileKey, sourceID }
+      for (const tileKey of tileKeys) {
+        const sourceID = `BM-overlay-${tileKey}-${template.sortID}`;
+        if (skipExisting && mountedOverlaySourceIDs?.has(sourceID)) continue;
+
+        const rawBuffer = !backgroundMode ? template.getRawChunkBuffer(tileKey) : null;
+        if (rawBuffer) {
+          const header = readChunkSampleHeader(rawBuffer);
+          if (header) {
+            const safeW = Math.max(1, header.width);
+            const safeH = Math.max(1, header.height);
+            const resultWidth = safeW * drawMultResult;
+            const resultHeight = safeH * drawMultResult;
+            const overlayCacheKey = this.getOverlayRasterCacheKey(tileKey, template.sortID, drawMultResult, displayMode, displayedColorsHash);
+            const cachedRaster = this.getOverlayRasterCacheEntry(overlayCacheKey);
+            if (cachedRaster?.pixels instanceof Uint8ClampedArray) {
+              cachedTiles.push({ tileKey, sourceID, pixels: cachedRaster.pixels.slice(), resultWidth, resultHeight, safeW, safeH });
+            } else {
+              sampleTiles.push({ tileKey, sourceID, rawBuffer, resultWidth, resultHeight, safeW, safeH, overlayCacheKey });
+            }
+            continue;
+          }
+        }
+        slowTiles.push({ tileKey, sourceID });
+      }
+
+      if (this._activeOverlayGenerationId !== overlayGenerationId) return null;
+
+      // ── Pass 2: extract samples for slow tiles in parallel ──
+      // All getChunkSamples calls (PNG decode + worker extraction) run concurrently.
+      // getChunkSamples deduplicates: if prewarm already started extraction for a tile,
+      // we join the existing promise rather than starting a new worker task.
+      if (slowTiles.length > 0) {
+        await yieldUi();
+        if (this._activeOverlayGenerationId !== overlayGenerationId) return null;
+
+        const slowResults = await Promise.all(slowTiles.map(async ({ tileKey, sourceID }) => {
+          let sampleData = await template.getChunkSamples(tileKey, { memorySaving: currentMemorySavingMode });
+
+          if (sampleData && backgroundMode) {
+            try {
+              const tileKeyParts = String(tileKey).split(',').map(Number);
+              const liveTileX = tileKeyParts[0];
+              const liveTileY = tileKeyParts[1];
+              const tileOffsetX = tileKeyParts[2] || 0;
+              const tileOffsetY = tileKeyParts[3] || 0;
+              const livePixels = await this._livePixelsFetcher(liveTileX, liveTileY);
+              if (livePixels instanceof Uint8ClampedArray && livePixels.length >= 4) {
+                const liveTileSize = Math.round(Math.sqrt(livePixels.length / 4));
+                const filteredSample = {
+                  ...sampleData,
+                  x: new Uint16Array(sampleData.count),
+                  y: new Uint16Array(sampleData.count),
+                  r: new Uint8Array(sampleData.count),
+                  g: new Uint8Array(sampleData.count),
+                  b: new Uint8Array(sampleData.count),
+                  a: new Uint8Array(sampleData.count),
+                  flags: new Uint8Array(sampleData.count),
+                  count: 0,
+                  native: false,
+                };
+                for (let i = 0; i < sampleData.count; i++) {
+                  if (sampleData.a[i] < 1) continue;
+                  const lx = tileOffsetX + sampleData.x[i];
+                  const ly = tileOffsetY + sampleData.y[i];
+                  if (lx < 0 || ly < 0 || lx >= liveTileSize || ly >= liveTileSize) {
+                    const wi = filteredSample.count++;
+                    filteredSample.x[wi] = sampleData.x[i];
+                    filteredSample.y[wi] = sampleData.y[i];
+                    filteredSample.r[wi] = sampleData.r[i];
+                    filteredSample.g[wi] = sampleData.g[i];
+                    filteredSample.b[wi] = sampleData.b[i];
+                    filteredSample.a[wi] = sampleData.a[i];
+                    filteredSample.flags[wi] = sampleData.flags[i];
+                    continue;
+                  }
+                  const liveAlpha = livePixels[(ly * liveTileSize + lx) * 4 + 3];
+                  if (liveAlpha < 1) {
+                    const wi = filteredSample.count++;
+                    filteredSample.x[wi] = sampleData.x[i];
+                    filteredSample.y[wi] = sampleData.y[i];
+                    filteredSample.r[wi] = sampleData.r[i];
+                    filteredSample.g[wi] = sampleData.g[i];
+                    filteredSample.b[wi] = sampleData.b[i];
+                    filteredSample.a[wi] = sampleData.a[i];
+                    filteredSample.flags[wi] = sampleData.flags[i];
+                  }
+                }
+                sampleData = filteredSample;
+              }
+            } catch (_) {}
+          }
+
+          return { tileKey, sourceID, sampleData };
+        }));
+
+        if (this._activeOverlayGenerationId !== overlayGenerationId) return null;
+
+        for (const { tileKey, sourceID, sampleData } of slowResults) {
+          if (sampleData) {
+            const safeW = Math.max(1, Math.round(Number(sampleData.width) || 0));
+            const safeH = Math.max(1, Math.round(Number(sampleData.height) || 0));
+            const resultWidth = safeW * drawMultResult;
+            const resultHeight = safeH * drawMultResult;
+            const overlayCacheKey = this.getOverlayRasterCacheKey(tileKey, template.sortID, drawMultResult, displayMode, displayedColorsHash);
+            const cachedRaster = backgroundMode ? null : this.getOverlayRasterCacheEntry(overlayCacheKey);
+            if (cachedRaster?.pixels instanceof Uint8ClampedArray) {
+              cachedTiles.push({ tileKey, sourceID, pixels: cachedRaster.pixels.slice(), resultWidth, resultHeight, safeW, safeH });
+            } else {
+              sampleTiles.push({ tileKey, sourceID, sampleData, resultWidth, resultHeight, safeW, safeH, overlayCacheKey });
+            }
+          } else {
+            const templateTileBitmap = await template.getChunked(tileKey, currentMemorySavingMode);
+            const safeW = Math.max(1, Math.round((templateTileBitmap?.width || 0) / template.shreadSize));
+            const safeH = Math.max(1, Math.round((templateTileBitmap?.height || 0) / template.shreadSize));
+            const resultWidth = safeW * drawMultResult;
+            const resultHeight = safeH * drawMultResult;
+            bitmapTiles.push({ tileKey, sourceID, bitmap: templateTileBitmap, resultWidth, resultHeight, safeW, safeH });
+          }
+        }
+      }
+
+      if (this._activeOverlayGenerationId !== overlayGenerationId) return null;
+
+      // Phase 2: render all tiles in the worker and merge into a single bitmap (if the template
+      // is small enough). Otherwise fall back to the per-tile batch approach.
+      const imageW = template.imageWidth;
+      const imageH = template.imageHeight;
+      const MAX_MERGED_PX = 4096; // max dimension for merged canvas
+      const canMerge = imageW > 0 && imageH > 0 && bitmapTiles.length === 0
+        && imageW * drawMultResult <= MAX_MERGED_PX && imageH * drawMultResult <= MAX_MERGED_PX;
+
+      let workerPixelMap = new Map();
+      let mergedBitmap = null;
+
+      if (canMerge && (sampleTiles.length > 0 || cachedTiles.length > 0)) {
+        // Build sampleChunks (need rendering) and cachedChunks (pixels already available)
+        const sampleChunks = sampleTiles.map(t => {
+          const { offsetX, offsetY } = this._getTileOffsetInTemplate(template, t.tileKey);
+          // Reuse the raw buffer if available (fast-path tile): avoids a full encode cycle.
+          // Otherwise fall back to encoding from decoded sampleData (slow-path tile).
+          const sampleBytes = t.rawBuffer instanceof Uint8Array
+            ? t.rawBuffer.slice()
+            : encodeChunkSampleBytes(t.sampleData);
+          return {
+            sampleData: sampleBytes,
+            resultWidth: t.resultWidth,
+            resultHeight: t.resultHeight,
+            destX: offsetX * drawMultResult,
+            destY: offsetY * drawMultResult,
+          };
+        });
+        const cachedChunks = cachedTiles.map(t => {
+          const { offsetX, offsetY } = this._getTileOffsetInTemplate(template, t.tileKey);
+          return {
+            pixels: t.pixels,
+            resultWidth: t.resultWidth,
+            resultHeight: t.resultHeight,
+            destX: offsetX * drawMultResult,
+            destY: offsetY * drawMultResult,
+          };
+        });
+        const serializedMaskRowSpans = cloneMaskRowSpans(maskRowSpans);
+        const mergeTransferList = [
+          ...sampleChunks.map(c => c.sampleData.buffer),
+          ...cachedChunks.map(c => c.pixels.buffer),
+          ...getMaskRowSpansTransferList(serializedMaskRowSpans),
+        ];
+        const mergeResult = await templateWorkerManager.runTask('renderAndMergeOverlayChunks', {
+          canvasWidth: imageW * drawMultResult,
+          canvasHeight: imageH * drawMultResult,
+          sampleChunks,
+          cachedChunks,
+          drawSize: drawMultResult,
+          maskPoints,
+          maskRowSpans: serializedMaskRowSpans,
+          displayedColors: useCheckerboardRender ? null : displayedColors,
+          includeDefaceCheckerboard: useCheckerboardRender,
+        }, { generation: overlayGenerationId, transferList: mergeTransferList });
+
+        if (this._activeOverlayGenerationId !== overlayGenerationId) return null;
+        mergedBitmap = mergeResult?.bitmap ?? null;
+      } else if (!canMerge && sampleTiles.length > 0) {
+        // Fall back: per-tile batch for large/bitmap templates
+        const batchChunks = sampleTiles.map(t => ({
+          tileKey: t.tileKey,
+          sampleData: t.rawBuffer instanceof Uint8Array
+            ? t.rawBuffer.slice()
+            : encodeChunkSampleBytes(t.sampleData),
+          resultWidth: t.resultWidth,
+          resultHeight: t.resultHeight,
+        }));
+        const serializedMaskRowSpans = cloneMaskRowSpans(maskRowSpans);
+        const batchTransferList = [
+          ...batchChunks.map(c => c.sampleData.buffer),
+          ...getMaskRowSpansTransferList(serializedMaskRowSpans),
+        ];
+        const batchResult = await templateWorkerManager.runTask('renderOverlayChunkBatch', {
+          chunks: batchChunks,
+          drawSize: drawMultResult,
+          maskPoints,
+          maskRowSpans: serializedMaskRowSpans,
+          displayedColors: useCheckerboardRender ? null : displayedColors,
+          includeDefaceCheckerboard: useCheckerboardRender,
+        }, { generation: overlayGenerationId, transferList: batchTransferList });
+
+        if (this._activeOverlayGenerationId !== overlayGenerationId) return null;
+        if (Array.isArray(batchResult?.results)) {
+          for (const r of batchResult.results) {
+            if (r?.pixels instanceof Uint8ClampedArray) workerPixelMap.set(r.tileKey, r);
+          }
+        }
+      }
+
+      return { template, cachedTiles, sampleTiles, bitmapTiles, workerPixelMap, mergedBitmap, canMerge,
+        useCheckerboardRender, drawMultTemplate, drawMultCenterTemplate };
+    }));
+    profiler.end('overlay:phase1');
+
+    if (this._activeOverlayGenerationId !== overlayGenerationId) return;
+
+    // ── Phase 3: register canvases with MapTiler (must stay on main thread) ──────────────────────
+    // Merged path: 1 addTemplateFullCanvas call per template (bitmap already composited by worker).
+    // Fallback path: per-tile addTemplateCanvas (large/bitmap templates).
+    profiler.start('overlay:phase3');
+    const yieldUi = createUiWorkScheduler();
+    for (const result of phase12Results) {
+      if (!result) continue;
+      if (this._activeOverlayGenerationId !== overlayGenerationId) return;
+      const { template, cachedTiles, sampleTiles, bitmapTiles, workerPixelMap, mergedBitmap, canMerge,
+        useCheckerboardRender, drawMultTemplate, drawMultCenterTemplate } = result;
+
+      if (canMerge && mergedBitmap instanceof ImageBitmap) {
+        // Worker has already composited all tiles — one MapTiler call suffices.
+        addTemplateFullCanvas(template.sortID, template.coords,
+          [template.imageWidth, template.imageHeight], mergedBitmap, "overlay");
+        mergedBitmap.close?.();
+        if (this.isErrorMapShown()) setUsageLayersOpacity("overlay", 0);
         continue;
       }
-      for (const tileKey of tileKeys) {
+
+      // Fallback: per-tile registration (bitmap templates or very large templates)
+      for (const t of cachedTiles) {
         await yieldUi();
         if (this._activeOverlayGenerationId !== overlayGenerationId) return;
-        const sourceID = `BM-overlay-${tileKey}-${template.sortID}`;
-        if (skipExisting && mountedOverlaySourceIDs?.has(sourceID)) {
-          continue;
-        }
-        const drawMultTemplate = template.shreadSize;
-        const drawMultCenterTemplate = (template.shreadSize - 1) >> 1;
-        // Prefer sample-based overlay rendering even for bitmap-backed chunks.
-        // This keeps the displayed shape consistent across browsers and avoids
-        // occasional Chrome bitmap-path glitches where the cross mask is not visible.
-        let sampleData = await template.getChunkSamples(tileKey, {
-          memorySaving: currentMemorySavingMode,
-        });
+        const canvas = paintPixelsToCanvas(t.pixels, t.resultWidth, t.resultHeight)
+          ?? new OffscreenCanvas(t.resultWidth, t.resultHeight);
+        addTemplateCanvas(template.sortID, t.tileKey, [t.safeW, t.safeH], canvas, "overlay");
+        if (this.isErrorMapShown()) setUsageLayersOpacity("overlay", 0);
+        cleanUpCanvas(canvas);
+      }
 
-        if (sampleData && this.isBackgroundModeEnabled() && this._livePixelsFetcher) {
-          try {
-            const tileKeyParts = String(tileKey).split(',').map(Number);
-            const liveTileX = tileKeyParts[0];
-            const liveTileY = tileKeyParts[1];
-            const tileOffsetX = tileKeyParts[2] || 0;
-            const tileOffsetY = tileKeyParts[3] || 0;
-            const livePixels = await this._livePixelsFetcher(liveTileX, liveTileY);
-            if (livePixels instanceof Uint8ClampedArray && livePixels.length >= 4) {
-              const liveTileSize = Math.round(Math.sqrt(livePixels.length / 4));
-              const filteredSample = {
-                ...sampleData,
-                x: new Uint16Array(sampleData.count),
-                y: new Uint16Array(sampleData.count),
-                r: new Uint8Array(sampleData.count),
-                g: new Uint8Array(sampleData.count),
-                b: new Uint8Array(sampleData.count),
-                a: new Uint8Array(sampleData.count),
-                flags: new Uint8Array(sampleData.count),
-                count: 0,
-                native: false,
-              };
-              for (let i = 0; i < sampleData.count; i++) {
-                if (sampleData.a[i] < 1) continue;
-                const lx = tileOffsetX + sampleData.x[i];
-                const ly = tileOffsetY + sampleData.y[i];
-                if (lx < 0 || ly < 0 || lx >= liveTileSize || ly >= liveTileSize) {
-                  const wi = filteredSample.count++;
-                  filteredSample.x[wi] = sampleData.x[i];
-                  filteredSample.y[wi] = sampleData.y[i];
-                  filteredSample.r[wi] = sampleData.r[i];
-                  filteredSample.g[wi] = sampleData.g[i];
-                  filteredSample.b[wi] = sampleData.b[i];
-                  filteredSample.a[wi] = sampleData.a[i];
-                  filteredSample.flags[wi] = sampleData.flags[i];
-                  continue;
-                }
-                const liveAlpha = livePixels[(ly * liveTileSize + lx) * 4 + 3];
-                if (liveAlpha < 1) {
-                  const wi = filteredSample.count++;
-                  filteredSample.x[wi] = sampleData.x[i];
-                  filteredSample.y[wi] = sampleData.y[i];
-                  filteredSample.r[wi] = sampleData.r[i];
-                  filteredSample.g[wi] = sampleData.g[i];
-                  filteredSample.b[wi] = sampleData.b[i];
-                  filteredSample.a[wi] = sampleData.a[i];
-                  filteredSample.flags[wi] = sampleData.flags[i];
-                }
-              }
-              sampleData = filteredSample;
-            }
-          } catch (_) {}
+      for (const t of sampleTiles) {
+        await yieldUi();
+        if (this._activeOverlayGenerationId !== overlayGenerationId) return;
+        let resultCanvas = null;
+        const workerResult = workerPixelMap.get(t.tileKey);
+        if (workerResult?.pixels instanceof Uint8ClampedArray) {
+          this.setOverlayRasterCacheEntry(t.overlayCacheKey, {
+            width: t.resultWidth,
+            height: t.resultHeight,
+            pixels: workerResult.pixels.slice(),
+          });
+          resultCanvas = paintPixelsToCanvas(workerResult.pixels, t.resultWidth, t.resultHeight);
         }
-        const templateTileBitmap = sampleData
-          ? null
-          : await template.getChunked(tileKey, currentMemorySavingMode);
-        const originalWidth = sampleData
-          ? sampleData.width
-          : Math.max(1, Math.round((templateTileBitmap?.width || 0) / template.shreadSize));
-        const safeOriginalWidth = Math.max(1, Math.round(Number(originalWidth) || 0));
-        const originalHeight = sampleData
-          ? sampleData.height
-          : Math.max(1, Math.round((templateTileBitmap?.height || 0) / template.shreadSize));
-        const safeOriginalHeight = Math.max(1, Math.round(Number(originalHeight) || 0));
-        const resultWidth = safeOriginalWidth * drawMultResult; // Calculate draw multiplier for scaling
-        const resultHeight = safeOriginalHeight * drawMultResult;
-        const overlayCacheKey = this.getOverlayRasterCacheKey(
-          tileKey,
-          template.sortID,
-          drawMultResult,
-          displayMode,
-          displayedColorsHash
-        );
-        const cachedRaster = this.isBackgroundModeEnabled() ? null : this.getOverlayRasterCacheEntry(overlayCacheKey);
+        if (!resultCanvas) {
+          resultCanvas = new OffscreenCanvas(t.resultWidth, t.resultHeight);
+          const ctx = resultCanvas.getContext('2d');
+          ctx.imageSmoothingEnabled = false;
+          ctx.beginPath(); ctx.rect(0, 0, t.resultWidth, t.resultHeight); ctx.clip();
+          ctx.clearRect(0, 0, t.resultWidth, t.resultHeight);
+          const image = ctx.createImageData(t.resultWidth, t.resultHeight);
+          if (useCheckerboardRender) {
+            renderSampleDataToImage({ sampleData: t.sampleData, imageData: image, resultWidth: t.resultWidth, drawSize: drawMultResult, maskPoints, maskRowSpans, includeDefaceCheckerboard: true });
+          } else if (!allColorsDisabled) {
+            renderSampleDataToImage({ sampleData: t.sampleData, imageData: image, resultWidth: t.resultWidth, drawSize: drawMultResult, maskPoints, maskRowSpans, displayedColorSet, includeDefaceCheckerboard: false });
+          }
+          ctx.putImageData(image, 0, 0);
+        }
+        addTemplateCanvas(template.sortID, t.tileKey, [t.safeW, t.safeH], resultCanvas, "overlay");
+        if (this.isErrorMapShown()) setUsageLayersOpacity("overlay", 0);
+        cleanUpCanvas(resultCanvas);
+      }
+
+      for (const t of bitmapTiles) {
+        await yieldUi();
+        if (this._activeOverlayGenerationId !== overlayGenerationId) return;
         let resultCanvas = null;
         let resultContext = null;
-
         try {
-          const useCheckerboardRender = !hasColorDisabled && drawMultTemplate === drawMultResult && displayMode !== 'fill';
-          if (cachedRaster?.pixels instanceof Uint8ClampedArray) {
-            resultCanvas = paintPixelsToCanvas(cachedRaster.pixels.slice(), resultWidth, resultHeight);
-          } else if (sampleData) {
-            const encodedSampleBytesOverlay = sampleData ? encodeChunkSampleBytes(sampleData) : null;
-            const serializedMaskRowSpans = cloneMaskRowSpans(maskRowSpans);
-            const workerResult = encodedSampleBytesOverlay
-              ? await templateWorkerManager.runTask('renderOverlayChunk', {
-                sampleData: encodedSampleBytesOverlay,
-                resultWidth,
-                resultHeight,
-                drawSize: drawMultResult,
-                maskPoints,
-                maskRowSpans: serializedMaskRowSpans,
-                displayedColors: useCheckerboardRender ? null : displayedColors,
-                includeDefaceCheckerboard: useCheckerboardRender,
-              }, {
-                generation: overlayGenerationId,
-                transferList: [
-                  encodedSampleBytesOverlay.buffer,
-                  ...getMaskRowSpansTransferList(serializedMaskRowSpans),
-                ],
-              })
-              : null;
-            if (workerResult?.pixels instanceof Uint8ClampedArray) {
-              const cachedPixels = workerResult.pixels.slice();
-              this.setOverlayRasterCacheEntry(overlayCacheKey, {
-                width: resultWidth,
-                height: resultHeight,
-                pixels: cachedPixels,
-              });
-              resultCanvas = paintPixelsToCanvas(workerResult.pixels, resultWidth, resultHeight);
-            } else {
-              resultCanvas = new OffscreenCanvas(resultWidth, resultHeight);
-              resultContext = resultCanvas.getContext('2d');
-              resultContext.imageSmoothingEnabled = false;
-              resultContext.beginPath();
-              resultContext.rect(0, 0, resultWidth, resultHeight);
-              resultContext.clip();
-              resultContext.clearRect(0, 0, resultWidth, resultHeight);
-              const image = resultContext.createImageData(resultWidth, resultHeight);
-              if (useCheckerboardRender) {
-                renderSampleDataToImage({
-                  sampleData,
-                  imageData: image,
-                  resultWidth,
-                  drawSize: drawMultResult,
-                  maskPoints,
-                  maskRowSpans,
-                  includeDefaceCheckerboard: true,
-                });
-              } else if (!allColorsDisabled) {
-                renderSampleDataToImage({
-                  sampleData,
-                  imageData: image,
-                  resultWidth,
-                  drawSize: drawMultResult,
-                  maskPoints,
-                  maskRowSpans,
-                  displayedColorSet,
-                  includeDefaceCheckerboard: false,
-                });
-              }
-              resultContext.putImageData(image, 0, 0);
-            }
-          } else if (!hasColorDisabled && drawMultTemplate === drawMultResult && displayMode !== 'fill') {
-            resultCanvas = new OffscreenCanvas(resultWidth, resultHeight);
+          if (!hasColorDisabled && drawMultTemplate === drawMultResult && displayMode !== 'fill') {
+            resultCanvas = new OffscreenCanvas(t.resultWidth, t.resultHeight);
             resultContext = resultCanvas.getContext('2d');
             resultContext.imageSmoothingEnabled = false;
-            resultContext.drawImage(templateTileBitmap, 0, 0);
+            resultContext.drawImage(t.bitmap, 0, 0);
           } else if (!allColorsDisabled) {
-            // Apply the color filter via worker + WASM
-            const templateWidth = templateTileBitmap.width;
-            const templateHeight = templateTileBitmap.height;
+            const templateWidth = t.bitmap.width;
+            const templateHeight = t.bitmap.height;
             const templateCanvas = new OffscreenCanvas(templateWidth, templateHeight);
             const templateCtx = templateCanvas.getContext('2d', { willReadFrequently: true });
             templateCtx.imageSmoothingEnabled = false;
-            templateCtx.drawImage(templateTileBitmap, 0, 0);
+            templateCtx.drawImage(t.bitmap, 0, 0);
             const templateData = templateCtx.getImageData(0, 0, templateWidth, templateHeight).data;
             const displayedColorsSorted = Uint32Array.from(displayedColorPackedSet).sort();
             const filterResult = await templateWorkerManager.runTask('filterTemplateBitmap', {
-              templateData,
-              templateWidth,
-              templateHeight,
-              resultWidth,
-              resultHeight,
-              drawMultTemplate,
-              drawMultResult,
-              drawMultCenter: drawMultCenterTemplate,
+              templateData, templateWidth, templateHeight,
+              resultWidth: t.resultWidth, resultHeight: t.resultHeight,
+              drawMultTemplate, drawMultResult, drawMultCenter: drawMultCenterTemplate,
               maskPoints,
               displayedColorsPacked: displayedColorsSorted,
               knownColorsPacked: knownColorsSorted,
               displayOther: displayOtherColor === true,
-            }, {
-              generation: overlayGenerationId,
-              transferList: [templateData.buffer, displayedColorsSorted.buffer],
-            });
-            resultCanvas = new OffscreenCanvas(resultWidth, resultHeight);
+            }, { generation: overlayGenerationId, transferList: [templateData.buffer, displayedColorsSorted.buffer] });
+            resultCanvas = new OffscreenCanvas(t.resultWidth, t.resultHeight);
             resultContext = resultCanvas.getContext('2d');
             resultContext.imageSmoothingEnabled = false;
             if (filterResult?.pixels instanceof Uint8ClampedArray) {
-              resultContext.putImageData(
-                new ImageData(filterResult.pixels, resultWidth, resultHeight),
-                0, 0,
-              );
+              resultContext.putImageData(new ImageData(filterResult.pixels, t.resultWidth, t.resultHeight), 0, 0);
             }
           }
         } catch (exception) {
-
-          // If filtering fails, we can log the error or handle it accordingly
           console.warn('Failed to apply color filter:', exception);
-
-          // Fallback to drawing raw bitmap if filtering fails
-          if (templateTileBitmap) {
+          if (t.bitmap) {
             if (!resultCanvas) {
-              resultCanvas = new OffscreenCanvas(resultWidth, resultHeight);
+              resultCanvas = new OffscreenCanvas(t.resultWidth, t.resultHeight);
               resultContext = resultCanvas.getContext('2d');
             }
-            resultContext.drawImage(templateTileBitmap, 0, 0);
+            resultContext.drawImage(t.bitmap, 0, 0);
           }
         }
-
-        if (!resultCanvas) {
-          resultCanvas = new OffscreenCanvas(resultWidth, resultHeight);
-        }
-
-        addTemplateCanvas(template.sortID, tileKey, [safeOriginalWidth, safeOriginalHeight], resultCanvas, "overlay");
-        if (this.isErrorMapShown()) {
-          setUsageLayersOpacity("overlay", 0);
-        }
+        if (!resultCanvas) resultCanvas = new OffscreenCanvas(t.resultWidth, t.resultHeight);
+        addTemplateCanvas(template.sortID, t.tileKey, [t.safeW, t.safeH], resultCanvas, "overlay");
+        if (this.isErrorMapShown()) setUsageLayersOpacity("overlay", 0);
         cleanUpCanvas(resultCanvas);
-        resultCanvas = null;
-        
-        if (currentMemorySavingMode && templateTileBitmap) {
-          templateTileBitmap.close();
-        }
-      };
+        if (currentMemorySavingMode && t.bitmap) t.bitmap.close();
+      }
     }
-
+    profiler.end('overlay:phase3');
   }
 
 
@@ -1424,6 +1618,7 @@ export default class TemplateManager {
 
         templateInstance.storageKey = templateKey;
         this.templatesArray.push(templateInstance);
+        this._schedulePrewarm(templateInstance);
       }
 
       try {
@@ -1731,33 +1926,24 @@ export default class TemplateManager {
       };
     }
 
-    // examples: O(tiles × colors × examples) — only when tiles changed since last call
-    if (this._examplesDirty) {
-      this._examplesDirty = false;
+    // examples: incremental via _runningExamples; only dirty colors (removed tiles) need a full tile scan.
+    if (this._examplesColorDirty.size > 0) {
       const exampleMax = this.getTemplateExampleLimit();
-      // Re-initialize example state on each entry (reservoir needs fresh _exampleSeenCount)
-      for (const key in combinedProgress) {
-        combinedProgress[key]._exampleSeenCount = 0;
-      }
-      for (const stats of this.tileProgress.values()) {
-        for (const colorKey in stats.palette) {
+      for (const colorKey of this._examplesColorDirty) {
+        const rebuilt = { examplesEnabled: [], _exampleSeenCount: 0 };
+        for (const stats of this.tileProgress.values()) {
           const content = stats.palette[colorKey];
-          if (!content || !Array.isArray(content.examplesEnabled) || content.examplesEnabled.length === 0) continue;
-          let entry = combinedProgress[colorKey];
-          if (!entry) continue; // color not in running totals, skip
-          this.mergeTemplateExamples(entry, content.examplesEnabled, exampleMax);
+          if (content?.examplesEnabled?.length) {
+            mergeTemplateExampleReservoir(rebuilt, content.examplesEnabled, exampleMax);
+          }
         }
+        this._runningExamples[colorKey] = rebuilt;
       }
-      for (const key in combinedProgress) {
-        delete combinedProgress[key]._exampleSeenCount;
-      }
-      this._cachedExamples = combinedProgress;
-    } else if (this._cachedExamples) {
-      // Reuse previously built examples
-      for (const colorKey in this._cachedExamples) {
-        if (combinedProgress[colorKey]) {
-          combinedProgress[colorKey].examplesEnabled = this._cachedExamples[colorKey]?.examplesEnabled ?? [];
-        }
+      this._examplesColorDirty.clear();
+    }
+    for (const colorKey in this._runningExamples) {
+      if (combinedProgress[colorKey]) {
+        combinedProgress[colorKey].examplesEnabled = this._runningExamples[colorKey]?.examplesEnabled ?? [];
       }
     }
 
@@ -1778,14 +1964,37 @@ export default class TemplateManager {
       completedColorsBitmapLo !== this.completedColorsBitmapLo ||
       completedColorsBitmapHi !== this.completedColorsBitmapHi
     ) {
+      const prevLo = this.completedColorsBitmapLo;
+      const prevHi = this.completedColorsBitmapHi;
       this.completedColorsBitmapLo = completedColorsBitmapLo;
       this.completedColorsBitmapHi = completedColorsBitmapHi;
       if (this.areCompletedColorsHidden()) {
-        this.createOverlayOnMap();
+        // Only rebuild tiles that contain a color whose completion status changed.
+        // This avoids a full N-tile rebuild just because one color finished.
+        const changedLo = prevLo ^ completedColorsBitmapLo;
+        const changedHi = prevHi ^ completedColorsBitmapHi;
+        const changedColorIds = new Set();
+        for (let bit = 0; bit < 32; bit++) {
+          if (changedLo & (1 << bit)) changedColorIds.add(bit);
+          if (changedHi & (1 << bit)) changedColorIds.add(bit + 32);
+        }
+        // Map changed color IDs → rgb keys
+        const changedRgbKeys = new Set();
+        for (const [rgb, meta] of rgbToMeta) {
+          if (typeof meta?.id === 'number' && changedColorIds.has(meta.id)) changedRgbKeys.add(rgb);
+        }
+        // Collect tile prefixes that contain any of the changed colors
+        const affectedPrefixes = new Set();
+        for (const [prefix, stats] of this.tileProgress) {
+          if (!stats?.palette) continue;
+          for (const colorKey of changedRgbKeys) {
+            if (stats.palette[colorKey]) { affectedPrefixes.add(prefix); break; }
+          }
+        }
+        if (affectedPrefixes.size > 0) {
+          this.createOverlayOnMap(null, { tilePrefixes: affectedPrefixes, immediate: true });
+        }
         if (this.isErrorMapShown() && this.isErrorMapOnlyEnabledColorsShown()) {
-          // Change to completed color -> Change to Enabled color
-          // Change to enabled color -> Change to error map
-          // Force refresh to prevent the delay before the normal scheduled tile update
           forceRefreshTiles();
         }
       }
@@ -2663,6 +2872,7 @@ export default class TemplateManager {
     if (!stats) return;
     const palette = stats.palette;
     if (palette) {
+      const exampleMax = this.getTemplateExampleLimit();
       for (const colorKey in palette) {
         const entry = palette[colorKey];
         if (!entry) continue;
@@ -2674,6 +2884,21 @@ export default class TemplateManager {
         slot.painted += sign * (entry.painted || 0);
         slot.paintedAndEnabled += sign * (entry.paintedAndEnabled || 0);
         slot.missing += sign * (entry.missing || 0);
+
+        // Maintain incremental examples reservoir.
+        if (sign === 1 && Array.isArray(entry.examplesEnabled) && entry.examplesEnabled.length > 0) {
+          // On add: skip if this color is already dirty (rebuild will include this tile via tileProgress).
+          if (!this._examplesColorDirty.has(colorKey)) {
+            if (!this._runningExamples[colorKey]) {
+              this._runningExamples[colorKey] = { examplesEnabled: [], _exampleSeenCount: 0 };
+            }
+            mergeTemplateExampleReservoir(this._runningExamples[colorKey], entry.examplesEnabled, exampleMax);
+          }
+        } else if (sign === -1 && Array.isArray(entry.examplesEnabled) && entry.examplesEnabled.length > 0) {
+          // On remove: reservoir sampling is not invertible — mark for full rebuild.
+          this._examplesColorDirty.add(colorKey);
+          delete this._runningExamples[colorKey];
+        }
       }
     }
     const template = stats.template;
@@ -2703,7 +2928,6 @@ export default class TemplateManager {
     if (old) this._applyTileToRunning(old, -1);
     this.tileProgress.set(key, stats);
     if (stats) this._applyTileToRunning(stats, +1);
-    this._examplesDirty = true;
   }
 
   // Delete a tile's progress and keep running totals in sync.
@@ -2711,7 +2935,6 @@ export default class TemplateManager {
     const old = this.tileProgress.get(key);
     if (old) this._applyTileToRunning(old, -1);
     this.tileProgress.delete(key);
-    this._examplesDirty = true;
   }
 
   clearTileProgress(template) {
