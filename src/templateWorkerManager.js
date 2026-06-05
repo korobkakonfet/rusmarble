@@ -1,3 +1,5 @@
+import { profiler } from './profiler.js';
+
 const TEMPLATE_PIXEL_WORKER_SOURCE = typeof __TEMPLATE_PIXEL_WORKER_SOURCE__ !== 'undefined'
   ? __TEMPLATE_PIXEL_WORKER_SOURCE__
   : '';
@@ -73,9 +75,14 @@ class TemplateWorkerManager {
     if (generation && this.cancelledGenerations.has(generation)) {
       return null;
     }
+    const t0 = performance.now();
     return new Promise((resolve, reject) => {
       const id = this.nextJobId++;
-      const job = { id, type, payload, transferList, generation, resolve, reject };
+      const wrappedResolve = (result) => {
+        profiler.record(`worker:${type}`, performance.now() - t0);
+        resolve(result);
+      };
+      const job = { id, type, payload, transferList, generation, resolve: wrappedResolve, reject };
       this.jobs.set(id, job);
       this.queue.push(job);
       this.pumpQueue();

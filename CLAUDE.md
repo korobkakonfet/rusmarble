@@ -4,6 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
+**Always build with `npm run build` (production). Never use `build:dev` unless explicitly asked.**
+
 ```bash
 npm run build          # Production build (minified, CSS mangled, console dropped)
 npm run build:dev      # Development build (no obfuscation, no console removal)

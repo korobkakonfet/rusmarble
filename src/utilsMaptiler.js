@@ -1,6 +1,8 @@
 import { consoleLog, consoleError } from "./utils.js";
+import { profiler } from './profiler.js';
 
 let suppressForcedTileRefresh = false;
+let hoverGhostLayerAdded = false;
 
 export function setForcedTileRefreshSuppressed(value) {
   suppressForcedTileRefresh = Boolean(value);
@@ -246,6 +248,16 @@ export function addTemplateCanvas(sortID, tileName, templateSize, source, usage)
 
   return controlMapTiler((map, sourceID, geoCoords1, geoCoords2, usage, bmCanvas) => {
     document.head["__bmCanvas"] = bmCanvas; // sync bmCanvas to document
+
+    // Fast path: source + layer already registered. Canvas content was already updated by
+    // syncTemplateCanvasSource above — MapTiler canvas sources auto-read from the HTML canvas
+    // element on repaint, so no remove/re-add cycle is needed.
+    if (map["getSource"](sourceID) && map["getLayer"](sourceID)) {
+      map["triggerRepaint"]?.();
+      return;
+    }
+
+    // Slow path: first-time registration (or partially torn-down state).
     if (map["getLayer"](sourceID)) {
       map["removeLayer"](sourceID);
     };
@@ -262,6 +274,14 @@ export function addTemplateCanvas(sortID, tileName, templateSize, source, usage)
         [ geoCoords1[1], geoCoords2[0] ],
       ],
     });
+    // Find the insertion point before calling addLayer so we can use beforeId
+    // and skip a separate moveLayer call.
+    const hoverLayerName = "pixel-hover";
+    const allLayers = map["getLayersOrder"]();
+    const nextLayer = allLayers.find(layer => (
+      (usage === "overlay" && layer.startsWith("bm-error-")) ||
+      layer === hoverLayerName + "-ghost"
+    ));
     map["addLayer"]({
       "id": sourceID,
       "source": sourceID,
@@ -270,31 +290,84 @@ export function addTemplateCanvas(sortID, tileName, templateSize, source, usage)
           "raster-resampling": "nearest",
           "raster-opacity": 1
       }
-    });
-    const layers = map["getLayersOrder"]();
+    }, nextLayer);
+    // add ghost layer once per session to prevent wplace inserting paint-preview
+    // and paint-crosshair right before the hover layer
+    if (!hoverGhostLayerAdded) {
+      if (!map["getLayer"](hoverLayerName + "-ghost")) {
+        map["addLayer"]({
+          "id": hoverLayerName + "-ghost",
+          "type": "raster",
+          "source": hoverLayerName,
+          "paint": {
+              "raster-resampling": "nearest",
+              "raster-opacity": 0.4
+          }
+        });
+      }
+      hoverGhostLayerAdded = true;
+    } else {
+      const currentLayers = map["getLayersOrder"]();
+      if (currentLayers && currentLayers.length && currentLayers[currentLayers.length - 1] !== hoverLayerName + "-ghost") {
+        map["moveLayer"](hoverLayerName + "-ghost");
+      }
+    }
+  }, sourceID, geoCoords1, geoCoords2, usage, bmCanvas);
+}
+
+/** Register a single canvas covering the full template extent (one MapTiler source+layer per template).
+ * coords = [tileX, tileY, offsetX, offsetY] of the template's top-left pixel.
+ * size = [width, height] in template pixels (before drawMultResult scaling).
+ * source can be OffscreenCanvas or ImageBitmap.
+ */
+export function addTemplateFullCanvas(sortID, coords, [width, height], source, usage) {
+  const geoCoords1 = coordsTileCoordsToGeoCoords([coords[0], coords[1]], [coords[2], coords[3]], false);
+  const geoCoords2 = coordsTileCoordsToGeoCoords([coords[0], coords[1]], [coords[2] + width, coords[3] + height], false);
+  if (!bmCanvas[usage]) bmCanvas[usage] = {};
+  let prefix = "BM";
+  const sourceID = `${prefix}-${usage}-full-${sortID}`;
+  bmCanvas[usage][sourceID] = [geoCoords1, geoCoords2];
+  syncTemplateCanvasSource({ id: sourceID }, source);
+  return controlMapTiler((map, sourceID, geoCoords1, geoCoords2, usage, bmCanvas) => {
+    document.head["__bmCanvas"] = bmCanvas;
+    if (map["getSource"](sourceID) && map["getLayer"](sourceID)) {
+      map["triggerRepaint"]?.();
+      return;
+    }
+    if (map["getLayer"](sourceID)) map["removeLayer"](sourceID);
+    if (map["getSource"](sourceID)) map["removeSource"](sourceID);
     const hoverLayerName = "pixel-hover";
-    const prefix = "bm";
-    const nextLayer = layers.find(layer => (
-      (usage === "overlay" && layer.startsWith(prefix + "-error-")) ||
+    const allLayers = map["getLayersOrder"]();
+    const nextLayer = allLayers.find(layer => (
+      (usage === "overlay" && layer.startsWith("bm-error-")) ||
       layer === hoverLayerName + "-ghost"
     ));
-    map["moveLayer"](sourceID, nextLayer);
-    // add ghost layer to prevent wplace inserting paint-preview and paint-crosshair right before the hover layer
-    if (!map["getLayer"](hoverLayerName + "-ghost")) {
-      map["addLayer"]({
-        "id": hoverLayerName + "-ghost",
-        "type": "raster",
-        "source": hoverLayerName,
-        "paint": {
-            "raster-resampling": "nearest",
-            "raster-opacity": 0.4
-        }
-      });
-    } else {
-      const layers = map["getLayersOrder"]();
-      if (layers && layers.length && layers[layers.length - 1] !== hoverLayerName + "-ghost") {
-        map["moveLayer"](hoverLayerName + "-ghost"); // move to top
+    map["addSource"](sourceID, {
+      "type": "canvas",
+      "canvas": sourceID,
+      "coordinates": [
+        [geoCoords1[1], geoCoords1[0]],
+        [geoCoords2[1], geoCoords1[0]],
+        [geoCoords2[1], geoCoords2[0]],
+        [geoCoords1[1], geoCoords2[0]],
+      ],
+    });
+    map["addLayer"]({
+      "id": sourceID,
+      "source": sourceID,
+      "type": "raster",
+      "paint": { "raster-resampling": "nearest", "raster-opacity": 1 },
+    }, nextLayer);
+    if (!hoverGhostLayerAdded) {
+      if (!map["getLayer"](hoverLayerName + "-ghost")) {
+        map["addLayer"]({
+          "id": hoverLayerName + "-ghost",
+          "type": "raster",
+          "source": hoverLayerName,
+          "paint": { "raster-resampling": "nearest", "raster-opacity": 0.4 },
+        });
       }
+      hoverGhostLayerAdded = true;
     }
   }, sourceID, geoCoords1, geoCoords2, usage, bmCanvas);
 }
@@ -338,6 +411,23 @@ export function removeLayer(usage = null, sortID = null) {
 
 export function setUsageLayersOpacity(usage, opacity) {
   const sourceIDs = Object.keys(bmCanvas[usage] ?? {});
+  if (!sourceIDs.length) return;
+  controlMapTiler((map, sourceIDs, opacity) => {
+    sourceIDs.forEach(sourceID => {
+      if (map['getLayer'](sourceID)) {
+        map['setPaintProperty'](sourceID, 'raster-opacity', opacity);
+      }
+    });
+  }, sourceIDs, opacity);
+}
+
+/** Set opacity for all overlay layers belonging to a specific template sortID.
+ * Used to show/hide a template without removing and re-registering its layers.
+ */
+export function setTemplateSortIDLayersOpacity(sortID, opacity) {
+  const suffix = `-${sortID}`;
+  // matches both per-tile IDs (BM-overlay-tileKey-sortID) and full-canvas IDs (BM-overlay-full-sortID)
+  const sourceIDs = Object.keys(bmCanvas['overlay'] ?? {}).filter(id => id.endsWith(suffix));
   if (!sourceIDs.length) return;
   controlMapTiler((map, sourceIDs, opacity) => {
     sourceIDs.forEach(sourceID => {
@@ -404,11 +494,15 @@ export function forceRefreshTiles() {
   if (suppressForcedTileRefresh) {
     return;
   }
+  profiler.start('forceRefreshTiles');
   try {
     return controlMapTiler(map => {
       return map["refreshTiles"]("pixel-art-layer");
     });
-  } catch (ignored) {};
+  } catch (ignored) {
+  } finally {
+    profiler.end('forceRefreshTiles');
+  }
 }
 
 /** The theme list used by wplace.live

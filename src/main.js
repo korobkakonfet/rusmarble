@@ -2,6 +2,7 @@
  * @since 0.0.0
  */
 import "./polyfill.js";
+import { profiler, initProfiler } from './profiler.js';
 import Overlay from './Overlay.js';
 // import Observers from './observers.js';
 import ApiManager from './apiManager.js';
@@ -16,7 +17,7 @@ import { createArchiveTemplateUi } from './archiveTemplateUi.js';
 import { layoutLanguageOptions, normalizeLayoutLanguage, translateLayout, getLayoutThemeLabel as getLocalizedLayoutThemeLabel, getTemplateDisplayLabel as getLocalizedTemplateDisplayLabel, getTemplateCreateModeLabel, getChatBanTypeLabel, getColorSortLabel } from './layoutI18n.js';
 import { encodeChunkSampleBytes } from './templateChunkUtils.js';
 import { consoleLog, consoleWarn, consoleError, isDebugLoggingEnabled, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels } from './utils.js';
-import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getCurrentTileSize, setForcedTileRefreshSuppressed, applyArchiveBgLayerToMap} from './utilsMaptiler.js';
+import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getCurrentTileSize, setForcedTileRefreshSuppressed, applyArchiveBgLayerToMap, setTemplateSortIDLayersOpacity} from './utilsMaptiler.js';
 // import { getCenterGeoCoords, addTemplate } from './utilsMaptiler.js';
 
 const name = GM_info.script.name.toString(); // Name of userscript
@@ -5721,7 +5722,7 @@ async function jumpToNextUnpaintedTemplatePixel(options = null) {
     const excludedCoordsKeys = new Set(jumpCycleVisitedCoordsKeys);
     excludedCoordsKeys.add(originPoint.coords.join(','));
     const displayedColorSet = new Set(displayedColors);
-    let bestCandidate = findNearestCachedTemplatePixel(originPoint, displayedColorSet, excludedCoordsKeys);
+    let bestCandidate = profiler.measure('findNearestCachedTemplatePixel', () => findNearestCachedTemplatePixel(originPoint, displayedColorSet, excludedCoordsKeys));
     const tileCandidatesMap = new Map();
     for (const template of activeTemplates) {
       const tileKeys = template.getChunkKeys?.() ?? Object.keys(template.chunkedBuffer ?? template.chunked ?? {});
@@ -5754,15 +5755,15 @@ async function jumpToNextUnpaintedTemplatePixel(options = null) {
         break;
       }
       try {
-        const liveTilePixels = await getLiveTilePixels(tileCandidate.tileX, tileCandidate.tileY);
-        const tileCandidateBest = await findNearestTemplatePixelInTile(
+        const liveTilePixels = await profiler.measureAsync('getLiveTilePixels', () => getLiveTilePixels(tileCandidate.tileX, tileCandidate.tileY));
+        const tileCandidateBest = await profiler.measureAsync('findNearestTemplatePixelInTile', () => findNearestTemplatePixelInTile(
           tileCandidate,
           liveTilePixels,
           originPoint,
           displayedColorSet,
           excludedCoordsKeys,
           memorySavingMode
-        );
+        ));
         if (tileCandidateBest && (!bestCandidate || tileCandidateBest.distanceSq < bestCandidate.distanceSq)) {
           bestCandidate = tileCandidateBest;
         }
@@ -7683,6 +7684,7 @@ async function buildOverlayMain() {
       .buildElement()
     .buildElement()
   .buildOverlay(document.body);
+  initProfiler();
   syncDistanceToolUi();
 
   applyLayoutTheme(templateManager.getLayoutTheme());
@@ -8114,9 +8116,9 @@ async function buildOverlayMain() {
     progressUiRefreshQueued = true;
     requestAnimationFrame(() => {
       progressUiRefreshQueued = false;
-      const progressSnapshot = templateManager.getOverallPerColorProgress();
-      buildColorFilterList(progressSnapshot);
-      buildTemplateFilterList(progressSnapshot);
+      const progressSnapshot = profiler.measure('getOverallPerColorProgress', () => templateManager.getOverallPerColorProgress());
+      profiler.measure('buildColorFilterList', () => buildColorFilterList(progressSnapshot));
+      profiler.measure('buildTemplateFilterList', () => buildTemplateFilterList(progressSnapshot));
     });
   };
   window.scheduleProgressUiRefresh = scheduleProgressUiRefresh;
@@ -8660,13 +8662,16 @@ async function buildOverlayMain() {
         buildColorFilterList();
         forceRefreshTiles();
         if (toggle.checked) {
+          // Show existing layers instantly, then refresh to catch any newly-visible tiles
+          setTemplateSortIDLayersOpacity(template.sortID, 1);
           await templateManager.queueOverlayRefreshAfterUi(template.sortID, {
             visibleFirst: true,
             followUpFull: true,
             immediate: true,
           });
         } else {
-          removeLayer(null, template.sortID);
+          // Hide layers without removing them — re-enable is then instant (no re-registration)
+          setTemplateSortIDLayersOpacity(template.sortID, 0);
         }
       });
 
