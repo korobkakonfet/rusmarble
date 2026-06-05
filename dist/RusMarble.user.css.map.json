@@ -347,5 +347,7 @@
   "bm-help": "bm-5p",
   "bm-link": "bm-5q",
   "bm-fg": "bm-5r",
-  "bm-bg": "bm-5s"
+  "bm-bg": "bm-5s",
+  "bm-profiler-hud": "bm-9H",
+  "bm-prof-body": "bm-ah"
 }
