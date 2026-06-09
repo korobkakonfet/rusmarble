@@ -54,6 +54,18 @@ export function isMapTilerLoaded() {
   return isMapFound;
 }
 
+/** Returns true only when the map is found AND its style has finished loading.
+ * Safe to call even before the map object is found.
+ */
+export function isMapStyleLoaded() {
+  if (!isMapTilerLoaded()) return false;
+  try {
+    return controlMapTiler(map => map['isStyleLoaded']?.() ?? true) === true;
+  } catch (_) {
+    return false;
+  }
+}
+
 /** Wplace like breaking things
  * @since 0.85.43
  * @deprecated Not in use since 0.86.1
@@ -253,6 +265,18 @@ export function addTemplateCanvas(sortID, tileName, templateSize, source, usage)
     // syncTemplateCanvasSource above — MapTiler canvas sources auto-read from the HTML canvas
     // element on repaint, so no remove/re-add cycle is needed.
     if (map["getSource"](sourceID) && map["getLayer"](sourceID)) {
+      // Fix ordering if layer ended up below pixel-art-layer (e.g. after wplace setStyle calls)
+      const currentLayers = map["getLayersOrder"]?.() ?? [];
+      const artIdx = currentLayers.indexOf("pixel-art-layer");
+      const thisIdx = currentLayers.indexOf(sourceID);
+      if (artIdx >= 0 && thisIdx < artIdx) {
+        const hoverLayerName2 = "pixel-hover";
+        const fixNextLayer = currentLayers.find(l => (
+          (usage === "overlay" && l.startsWith("BM-error-")) ||
+          l === hoverLayerName2 + "-ghost"
+        ));
+        map["moveLayer"](sourceID, fixNextLayer);
+      }
       map["triggerRepaint"]?.();
       return;
     }
@@ -331,6 +355,17 @@ export function addTemplateFullCanvas(sortID, coords, [width, height], source, u
   return controlMapTiler((map, sourceID, geoCoords1, geoCoords2, usage, bmCanvas) => {
     document.head["__bmCanvas"] = bmCanvas;
     if (map["getSource"](sourceID) && map["getLayer"](sourceID)) {
+      const currentLayers = map["getLayersOrder"]?.() ?? [];
+      const artIdx = currentLayers.indexOf("pixel-art-layer");
+      const thisIdx = currentLayers.indexOf(sourceID);
+      if (artIdx >= 0 && thisIdx < artIdx) {
+        const hoverLayerName2 = "pixel-hover";
+        const fixNextLayer = currentLayers.find(l => (
+          (usage === "overlay" && l.startsWith("BM-error-")) ||
+          l === hoverLayerName2 + "-ghost"
+        ));
+        map["moveLayer"](sourceID, fixNextLayer);
+      }
       map["triggerRepaint"]?.();
       return;
     }
@@ -371,6 +406,72 @@ export function addTemplateFullCanvas(sortID, coords, [width, height], source, u
     }
   }, sourceID, geoCoords1, geoCoords2, usage, bmCanvas);
 }
+
+/** Register a styledata listener that re-adds any bmCanvas sources/layers after a style change.
+ * Must be called once after the map is found (via doAfterMapFound).
+ * Without this, wplace's map.setStyle() calls during initialization wipe custom overlay layers.
+ */
+export function registerBmCanvasRestoreOnStyleChange() {
+  if (!isMapTilerLoaded()) {
+    doAfterMapFound(registerBmCanvasRestoreOnStyleChange);
+    return;
+  }
+  controlMapTiler((map, bmCanvas) => {
+    document.head["__bmCanvas"] = bmCanvas;
+    const handlerName = "bmCanvasRestore";
+    const existing = (map["_listeners"]?.["styledata"] ?? []).find(l => l.name === handlerName);
+    if (existing) return;
+    const bmCanvasRestore = () => {
+      const canvas = document.head["__bmCanvas"];
+      if (!canvas) return;
+      const hoverLayerName = "pixel-hover";
+      ["overlay", "error"].forEach(usage => {
+        if (!canvas[usage]) return;
+        let prefix = "BM";
+        const layers = map["getLayersOrder"]?.() ?? [];
+        const nextLayer = layers.find(layer => (
+          (usage === "overlay" && layer.startsWith(prefix + "-error-")) ||
+          layer === hoverLayerName + "-ghost"
+        ));
+        const layerOrder = map["getLayersOrder"]?.() ?? [];
+        const artLayerIdx = layerOrder.indexOf("pixel-art-layer");
+        Object.entries(canvas[usage]).forEach(([sourceID, [geoCoords1, geoCoords2]]) => {
+          if (!map["getSource"](sourceID)) {
+            map["addSource"](sourceID, {
+              "type": "canvas",
+              "canvas": sourceID,
+              "coordinates": [
+                [geoCoords1[1], geoCoords1[0]],
+                [geoCoords2[1], geoCoords1[0]],
+                [geoCoords2[1], geoCoords2[0]],
+                [geoCoords1[1], geoCoords2[0]],
+              ],
+            });
+          }
+          if (!map["getLayer"](sourceID)) {
+            map["addLayer"]({
+              "id": sourceID,
+              "type": "raster",
+              "source": sourceID,
+              "paint": { "raster-resampling": "nearest", "raster-opacity": 1 },
+            }, nextLayer);
+          } else if (artLayerIdx >= 0) {
+            // Layer exists but may be below pixel-art-layer — fix ordering
+            const currentOrder = map["getLayersOrder"]?.() ?? [];
+            const thisIdx = currentOrder.indexOf(sourceID);
+            const currentArtIdx = currentOrder.indexOf("pixel-art-layer");
+            if (currentArtIdx >= 0 && thisIdx < currentArtIdx) {
+              map["moveLayer"](sourceID, nextLayer);
+            }
+          }
+        });
+      });
+    };
+    bmCanvasRestore.name = handlerName;
+    map["on"]("styledata", bmCanvasRestore);
+  }, bmCanvas);
+}
+
 
 /** remove layers from a specified template from Maptiler's Source
  * @param {string?} usage
@@ -670,10 +771,14 @@ export function setTheme(themeName) {
                 consoleLog("moveLayer", sourceID, nextLayer);
                 map["moveLayer"](sourceID, nextLayer);
               } else {
-                // check index order
-                const thisIndex = layers.indexOf(sourceID);
-                const nextIndex = nextLayer === undefined ? layers.length : layers.indexOf(nextLayer);
-                if (thisIndex > nextIndex) {
+                // check index order — move if above ghost OR below pixel-art-layer
+                const currentLayers2 = map["getLayersOrder"]?.() ?? [];
+                const thisIndex = currentLayers2.indexOf(sourceID);
+                const nextIndex = nextLayer === undefined ? currentLayers2.length : currentLayers2.indexOf(nextLayer);
+                const artIndex = currentLayers2.indexOf(artLayerName);
+                const belowArt = artIndex >= 0 && thisIndex < artIndex;
+                const aboveGhost = thisIndex > nextIndex;
+                if (belowArt || aboveGhost) {
                   consoleLog("moveLayer", sourceID, nextLayer);
                   map["moveLayer"](sourceID, nextLayer);
                 }
