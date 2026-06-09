@@ -41,7 +41,10 @@
       "Bash(npm install *)",
       "Bash(git checkout *)",
       "Bash(git rebase *)",
-      "Bash(npm version *)"
+      "Bash(npm version *)",
+      "Bash(sed -n '11,30p' /mnt/c/Users/sashak/WebstormProjects/Wplace-BlueMarble-Userscripts/src/utilsMaptiler.js)",
+      "Bash(sed -n '839,870p' /mnt/c/Users/sashak/WebstormProjects/Wplace-BlueMarble-Userscripts/src/utilsMaptiler.js)",
+      "Bash(awk -F: '$2 < 800 && $2 > 570')"
     ]
   }
 }

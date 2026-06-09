@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sed *)",
+      "Bash(npm run build)",
+      "Bash(npm run build *)",
+      "Bash(npm run patch)",
+      "Bash(npm run build:wasm)",
+      "Bash(npm run benchmark)",
+      "Bash(npm run test:png)"
+    ]
+  }
+}
