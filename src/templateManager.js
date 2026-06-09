@@ -11,6 +11,7 @@ import {
   mergeSerializedPaletteProgress,
   mergeSerializedTemplateProgress,
   mergeTemplateExampleReservoir,
+  decodeChunkSampleBuffer,
   readChunkSampleHeader,
   renderSampleDataToImage,
 } from './templateChunkUtils.js';
@@ -914,7 +915,13 @@ export default class TemplateManager {
         state.running = false;
         if (state.needsRun) {
           state.needsRun = false;
-          this.createOverlayOnMap(state.pendingSortID ?? null, state.pendingOptions ?? null);
+          if (followUpFull) {
+            // Full rebuild supersedes any queued scoped render — don't drop the follow-up.
+            state.pendingOptions = null;
+            this.createOverlayOnMap(pending ?? null);
+          } else {
+            this.createOverlayOnMap(state.pendingSortID ?? null, state.pendingOptions ?? null);
+          }
         } else if (followUpFull) {
           this.createOverlayOnMap(pending ?? null);
         }
@@ -950,6 +957,35 @@ export default class TemplateManager {
       });
     }
     return Promise.resolve();
+  }
+
+  /** Render overlay after the map is ready. Used on startup to restore crosses from storage.
+   * Polls until the map has bounds (confirming it is truly initialized), then renders.
+   * Uses the same code path as toggle-on (queueOverlayRefreshAfterUi) for reliability.
+   */
+  _createOverlayAfterMapReady(sortID = null) {
+    doAfterMapFound(() => {
+      const poll = (attempts = 0) => {
+        const bounds = getMapBounds?.();
+        const ready = bounds && bounds.sw && bounds.ne;
+        if (!ready && attempts < 20) {
+          setTimeout(() => poll(attempts + 1), 250);
+          return;
+        }
+        try { window.__bmStartupRenderFired = (window.__bmStartupRenderFired || 0) + 1; } catch(_) {}
+        this.overlay?.handleDisplayStatus?.('Rendering crosses from storage...');
+        this.queueOverlayRefreshAfterUi(sortID, {
+          visibleFirst: true,
+          followUpFull: true,
+          immediate: true,
+        }).then(() => {
+          this.overlay?.handleDisplayStatus?.('');
+        }).catch(() => {
+          this.overlay?.handleDisplayStatus?.('Startup render failed');
+        });
+      };
+      poll();
+    });
   }
 
   /** Pre-extract chunk samples for any tile that has a bitmap but no sample buffer.
@@ -1060,6 +1096,8 @@ export default class TemplateManager {
     profiler.start('overlay:phase1');
     const phase12Results = await Promise.all(templates.map(async (template) => {
       if (!template.enabled) return null;
+      // If scoped render (tilePrefixes) with skipExisting and full-canvas already mounted, skip.
+      if (skipExisting && tilePrefixSet && mountedOverlaySourceIDs?.has(`BM-overlay-full-${template.sortID}`)) return null;
       const tileKeys = this._getTemplateTileKeys(template, tilePrefixSet);
       if (!tileKeys.length) return null;
 
@@ -1349,10 +1387,12 @@ export default class TemplateManager {
           ctx.beginPath(); ctx.rect(0, 0, t.resultWidth, t.resultHeight); ctx.clip();
           ctx.clearRect(0, 0, t.resultWidth, t.resultHeight);
           const image = ctx.createImageData(t.resultWidth, t.resultHeight);
+          const sampleDataForFallback = t.sampleData ??
+            (t.rawBuffer instanceof Uint8Array ? decodeChunkSampleBuffer(t.rawBuffer) : null);
           if (useCheckerboardRender) {
-            renderSampleDataToImage({ sampleData: t.sampleData, imageData: image, resultWidth: t.resultWidth, drawSize: drawMultResult, maskPoints, maskRowSpans, includeDefaceCheckerboard: true });
+            renderSampleDataToImage({ sampleData: sampleDataForFallback, imageData: image, resultWidth: t.resultWidth, drawSize: drawMultResult, maskPoints, maskRowSpans, includeDefaceCheckerboard: true });
           } else if (!allColorsDisabled) {
-            renderSampleDataToImage({ sampleData: t.sampleData, imageData: image, resultWidth: t.resultWidth, drawSize: drawMultResult, maskPoints, maskRowSpans, displayedColorSet, includeDefaceCheckerboard: false });
+            renderSampleDataToImage({ sampleData: sampleDataForFallback, imageData: image, resultWidth: t.resultWidth, drawSize: drawMultResult, maskPoints, maskRowSpans, displayedColorSet, includeDefaceCheckerboard: false });
           }
           ctx.putImageData(image, 0, 0);
         }
@@ -1627,7 +1667,7 @@ export default class TemplateManager {
       try {
         window.postMessage({ source: 'blue-marble', bmEvent: 'bm-rebuild-template-list' }, '*');
       } catch (_) {}
-      this.createOverlayOnMapVisibleOnly();
+      this._createOverlayAfterMapReady();
     }
   }
 
@@ -1840,6 +1880,7 @@ export default class TemplateManager {
       const suffixIndex = sourceID.lastIndexOf('-');
       if (suffixIndex < 'BM-overlay-'.length) return false;
       const tileKey = sourceID.slice('BM-overlay-'.length, suffixIndex);
+      if (!tileKey.includes(',')) return false; // full-canvas source — never prune
       const prefix = tileKey.split(',').slice(0, 2).join(',');
       return !visiblePrefixes.has(prefix);
     });

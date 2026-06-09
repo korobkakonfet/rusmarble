@@ -17,7 +17,7 @@ import { createArchiveTemplateUi } from './archiveTemplateUi.js';
 import { layoutLanguageOptions, normalizeLayoutLanguage, translateLayout, getLayoutThemeLabel as getLocalizedLayoutThemeLabel, getTemplateDisplayLabel as getLocalizedTemplateDisplayLabel, getTemplateCreateModeLabel, getChatBanTypeLabel, getColorSortLabel } from './layoutI18n.js';
 import { encodeChunkSampleBytes } from './templateChunkUtils.js';
 import { consoleLog, consoleWarn, consoleError, isDebugLoggingEnabled, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels } from './utils.js';
-import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getCurrentTileSize, setForcedTileRefreshSuppressed, applyArchiveBgLayerToMap, setTemplateSortIDLayersOpacity} from './utilsMaptiler.js';
+import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getCurrentTileSize, setForcedTileRefreshSuppressed, applyArchiveBgLayerToMap, setTemplateSortIDLayersOpacity, registerBmCanvasRestoreOnStyleChange} from './utilsMaptiler.js';
 // import { getCenterGeoCoords, addTemplate } from './utilsMaptiler.js';
 
 const name = GM_info.script.name.toString(); // Name of userscript
@@ -4513,6 +4513,7 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
 
   consoleLog(storageTemplates);
   templateManager.importJSON(storageTemplates); // Loads the templates
+  registerBmCanvasRestoreOnStyleChange(); // Re-adds overlay layers after any map style reload
 
   await waitForBody();
   observeWplaceTheme();
@@ -7196,6 +7197,7 @@ async function buildOverlayMain() {
                 Object.values(t.colorPalette).forEach(v => v.enabled = true);
               })
               syncToggleList();
+              removeLayer("overlay");
               templateManager.createOverlayOnMapVisibleFirst();
               buildColorFilterList();
               instance.handleDisplayStatus('Enabled all colors');
