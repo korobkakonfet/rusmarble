@@ -9,8 +9,6 @@
       "Bash(node *)",
       "Bash(rtk find *)",
       "Bash(find /nix -name \"node\")",
-      "Bash(export PATH=\"/mnt/c/Users/sashak/AppData/Local/npm-cache/_npx/1838e33cf768caf6/node_modules/.bin:$PATH\")",
-      "Bash(/mnt/c/Users/sashak/AppData/Local/npm-cache/_npx/1838e33cf768caf6/node_modules/node/bin/node /mnt/c/Users/sashak/WebstormProjects/Wplace-BlueMarble-Userscripts/build/benchmark.js)",
       "Bash(python3 *)",
       "Bash(rtk npm *)",
       "Bash(node.exe build/benchmark.js)",
@@ -35,18 +33,15 @@
       "Bash(curl -s --max-time 5 -o /dev/null -w \"%{http_code}\" \"https://wplace.eralyon.net/tiles/v71/5/32/32.png\")",
       "Bash(curl -s --max-time 5 -o /dev/null -w \"%{http_code}\" \"https://wplace.eralyon.net/versions.json\")",
       "Bash(curl -s --max-time 5 \"https://wplace.eralyon.net/versions.json\")",
-      "Bash(/mnt/c/Users/sashak/WebstormProjects/Wplace-BlueMarble-Userscripts/node_modules/.bin/esbuild --version)",
-      "Bash(cmd.exe /c \"cd C:\\\\\\\\Users\\\\\\\\sashak\\\\\\\\WebstormProjects\\\\\\\\Wplace-BlueMarble-Userscripts && npm run build:dev 2>&1\")",
       "WebSearch",
       "Bash(npm install *)",
       "Bash(git checkout *)",
       "Bash(git rebase *)",
       "Bash(npm version *)",
-      "Bash(sed -n '11,30p' /mnt/c/Users/sashak/WebstormProjects/Wplace-BlueMarble-Userscripts/src/utilsMaptiler.js)",
-      "Bash(sed -n '839,870p' /mnt/c/Users/sashak/WebstormProjects/Wplace-BlueMarble-Userscripts/src/utilsMaptiler.js)",
       "Bash(awk -F: '$2 < 800 && $2 > 570')",
       "Bash(npm ci *)",
-      "Bash(echo \"exit: $?\")"
+      "Bash(echo \"exit: $?\")",
+      "Bash(xargs git log -1 --oneline)"
     ]
   }
 }
