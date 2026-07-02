@@ -4687,6 +4687,7 @@ function observeBlack() {
     return;
   }
   let syncQueued = false;
+  let anchorRetries = 0; // retries when the paint-panel <h2> anchor isn't rendered yet
   const hasObservedControls = () => {
     if (!document.getElementById('BM-zoom-1x')) return false;
     if (!document.getElementById('bm-button-move')) return false;
@@ -4734,7 +4735,16 @@ function observeBlack() {
         // Attempts to find the "Paint Pixel" element for anchoring
         const paintPixel = black.parentNode.parentNode.parentNode.parentNode.querySelector('h2');
 
-        paintPixel.parentNode?.appendChild(move); // Adds the move button
+        // The <h2> is sometimes not rendered yet on the first open of the paint
+        // panel. Bailing here without re-queuing used to leave the buttons missing
+        // until the panel was closed and reopened. Retry (bounded) instead.
+        if (!paintPixel || !paintPixel.parentNode) {
+          if (anchorRetries++ < 30) setTimeout(queueObserveBlackSync, 100);
+          return;
+        }
+        anchorRetries = 0;
+
+        paintPixel.parentNode.appendChild(move); // Adds the move button
       }
 
 
@@ -8389,12 +8399,45 @@ async function buildOverlayMain() {
         }
       });
 
+      const enforceTranspButton = document.createElement('a');
+      enforceTranspButton.className = 'bm-icon-link';
+      enforceTranspButton.style.fontSize = '12px';
+      enforceTranspButton.style.opacity = template.enforceTransparentAsDeface ? '1' : '0.35';
+      enforceTranspButton.title = template.enforceTransparentAsDeface
+        ? t('templates.enforceTransparentAsDeface.disableTitle')
+        : t('templates.enforceTransparentAsDeface.enableTitle');
+      enforceTranspButton.textContent = '⬜';
+      enforceTranspButton.onclick = async () => {
+        const next = !template.enforceTransparentAsDeface;
+        template.enforceTransparentAsDeface = next;
+        const templateJSON = templateManager.templatesJSON?.templates?.[template.storageKey];
+        if (templateJSON) {
+          if (next) {
+            templateJSON.enforceTransparentAsDeface = true;
+          } else {
+            delete templateJSON.enforceTransparentAsDeface;
+          }
+        }
+        // Invalidate raster cache for this template so crosses render on next draw
+        templateManager.invalidateOverlayRasterCacheForTemplate(template.sortID);
+        await templateManager.storeTemplates();
+        templateManager.clearTileProgress(template);
+        buildTemplateFilterList();
+        forceRefreshTiles();
+        overlayMain.handleDisplayStatus(
+          next
+            ? `"${templateName}": transparent pixels will now be erased.`
+            : `"${templateName}": transparent pixels no longer enforced.`
+        );
+      };
+
       row.appendChild(toggle);
       row.appendChild(removeButton);
       row.appendChild(teleportButton);
       if (!isRemote) {
         row.appendChild(positionButton);
       }
+      row.appendChild(enforceTranspButton);
       row.appendChild(label);
       const targetContainer = isRemote && remoteStream !== DEFAULT_REMOTE_TEMPLATE_STREAM
         ? ensureStreamGroupContainer(remoteStream, streamEntryGroups.get(remoteStream)?.length ?? 0)

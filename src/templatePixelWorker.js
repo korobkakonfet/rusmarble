@@ -50,6 +50,7 @@ const renderChunkPixels = ({
   maskRowSpans,
   displayedColors,
   includeDefaceCheckerboard,
+  enforceTransparentAsDeface,
 }) => {
   const pixels = new Uint8ClampedArray(resultWidth * resultHeight * 4);
   renderSampleDataToImage({
@@ -61,6 +62,7 @@ const renderChunkPixels = ({
     maskRowSpans: toUint16RowSpans(maskRowSpans),
     displayedColorSet: cloneDisplayedColorSet(displayedColors),
     includeDefaceCheckerboard,
+    enforceTransparentAsDeface,
   });
   return pixels;
 };
@@ -181,6 +183,7 @@ const handlers = {
       maskRowSpans: toUint16RowSpans(payload.maskRowSpans),
       displayedColors: payload.displayedColors,
       includeDefaceCheckerboard: payload.includeDefaceCheckerboard === true,
+      enforceTransparentAsDeface: payload.enforceTransparentAsDeface === true,
     };
     const results = (payload.chunks ?? []).map((chunk) => {
       const sampleData = decodeChunkSampleBuffer(chunk.sampleData);
@@ -211,6 +214,7 @@ const handlers = {
       maskRowSpans: toUint16RowSpans(payload.maskRowSpans),
       displayedColors: payload.displayedColors,
       includeDefaceCheckerboard: payload.includeDefaceCheckerboard === true,
+      enforceTransparentAsDeface: payload.enforceTransparentAsDeface === true,
     };
     const canvas = new OffscreenCanvas(canvasWidth, canvasHeight);
     const ctx = canvas.getContext('2d');

@@ -1293,6 +1293,7 @@ export default class TemplateManager {
           maskRowSpans: serializedMaskRowSpans,
           displayedColors: useCheckerboardRender ? null : displayedColors,
           includeDefaceCheckerboard: useCheckerboardRender,
+          enforceTransparentAsDeface: template.enforceTransparentAsDeface === true,
         }, { generation: overlayGenerationId, transferList: mergeTransferList });
 
         if (this._activeOverlayGenerationId !== overlayGenerationId) return null;
@@ -1319,6 +1320,7 @@ export default class TemplateManager {
           maskRowSpans: serializedMaskRowSpans,
           displayedColors: useCheckerboardRender ? null : displayedColors,
           includeDefaceCheckerboard: useCheckerboardRender,
+          enforceTransparentAsDeface: template.enforceTransparentAsDeface === true,
         }, { generation: overlayGenerationId, transferList: batchTransferList });
 
         if (this._activeOverlayGenerationId !== overlayGenerationId) return null;
@@ -1390,9 +1392,9 @@ export default class TemplateManager {
           const sampleDataForFallback = t.sampleData ??
             (t.rawBuffer instanceof Uint8Array ? decodeChunkSampleBuffer(t.rawBuffer) : null);
           if (useCheckerboardRender) {
-            renderSampleDataToImage({ sampleData: sampleDataForFallback, imageData: image, resultWidth: t.resultWidth, drawSize: drawMultResult, maskPoints, maskRowSpans, includeDefaceCheckerboard: true });
+            renderSampleDataToImage({ sampleData: sampleDataForFallback, imageData: image, resultWidth: t.resultWidth, drawSize: drawMultResult, maskPoints, maskRowSpans, includeDefaceCheckerboard: true, enforceTransparentAsDeface: template.enforceTransparentAsDeface === true });
           } else if (!allColorsDisabled) {
-            renderSampleDataToImage({ sampleData: sampleDataForFallback, imageData: image, resultWidth: t.resultWidth, drawSize: drawMultResult, maskPoints, maskRowSpans, displayedColorSet, includeDefaceCheckerboard: false });
+            renderSampleDataToImage({ sampleData: sampleDataForFallback, imageData: image, resultWidth: t.resultWidth, drawSize: drawMultResult, maskPoints, maskRowSpans, displayedColorSet, includeDefaceCheckerboard: false, enforceTransparentAsDeface: template.enforceTransparentAsDeface === true });
           }
           ctx.putImageData(image, 0, 0);
         }
@@ -1560,6 +1562,7 @@ export default class TemplateManager {
         templateInstance.remoteHighlightedAt = templateValue.remoteHighlightedAt ?? null;
         templateInstance.remoteOrder = templateValue.remoteOrder ?? null;
         templateInstance.timeArchiveMeta = normalizeTimeArchiveMeta(templateValue.timeArchiveMeta);
+        templateInstance.enforceTransparentAsDeface = templateValue.enforceTransparentAsDeface === true;
 
         for (const tileKey of chunkKeys) {
           const tileCoords = tileKey.split(',').map(Number);
@@ -1906,6 +1909,15 @@ export default class TemplateManager {
 
   getOverlayDisplayedColorsHash(displayedColors) {
     return Array.isArray(displayedColors) ? displayedColors.join(';') : '';
+  }
+
+  invalidateOverlayRasterCacheForTemplate(sortID) {
+    const sortIDStr = String(sortID);
+    for (const key of this._overlayRasterCache.keys()) {
+      if (key.includes(`||${sortIDStr}||`)) {
+        this._overlayRasterCache.delete(key);
+      }
+    }
   }
 
   getOverlayRasterCacheKey(tileKey, sortID, drawSize, displayMode, displayedColorsHash) {

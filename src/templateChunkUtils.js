@@ -240,6 +240,7 @@ export const renderSampleDataToImage = ({
   maskRowSpans,
   displayedColorSet = null,
   includeDefaceCheckerboard = false,
+  enforceTransparentAsDeface = false,
 }) => {
   if (!sampleData || !imageData?.data || !Number.isFinite(resultWidth) || !Number.isFinite(drawSize)) {
     return imageData;
@@ -306,6 +307,30 @@ export const renderSampleDataToImage = ({
       }
     }
   }
+
+  // Post-pass: fill transparent grid positions with checkerboard when mode is active.
+  // Any output pixel block that is still fully transparent after the sample render pass
+  // corresponds to a transparent template pixel.
+  if (enforceTransparentAsDeface && (includeDefaceCheckerboard || !displayedColorSet)) {
+    const logicalWidth = sampleData.width | 0;
+    const logicalHeight = sampleData.height | 0;
+    for (let ly = 0; ly < logicalHeight; ly++) {
+      const baseY = ly * safeDrawSize;
+      for (let lx = 0; lx < logicalWidth; lx++) {
+        const baseX = lx * safeDrawSize;
+        const centerOffset = (baseY + (safeDrawSize >> 1)) * safeResultWidth + baseX + (safeDrawSize >> 1);
+        if ((pixelData32[centerOffset] >>> 24) !== 0) continue;
+        for (let offsetY = 0; offsetY < safeDrawSize; offsetY++) {
+          const rowOffset = (baseY + offsetY) * safeResultWidth + baseX;
+          const parity = offsetY & 1;
+          for (let offsetX = 0; offsetX < safeDrawSize; offsetX++) {
+            pixelData32[rowOffset + offsetX] = ((offsetX + parity) & 1) === 0 ? checkerDark : checkerLight;
+          }
+        }
+      }
+    }
+  }
+
   return imageData;
 };
 
