@@ -99,6 +99,7 @@ export default class Template {
     this.forcePaletteConversion = Boolean(forcePaletteConversion);
     this.paletteConversionOptions = normalizeTemplatePaletteConversionOptions(paletteConversionOptions || templatePaletteConversionDefaults);
     this.sampleNormalizeToPalette = Boolean(sampleNormalizeToPalette);
+    this.enforceTransparentAsDeface = false;
     this.enabled = true;
     this.pixelCount = 0; // Total pixel count in template
     this.requiredPixelCount = 0; // Total number of non-transparent, non-#deface pixels
