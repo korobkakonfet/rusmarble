@@ -269,3 +269,51 @@ fs.writeFileSync('dist/RusMarble.bookmarklet.min.js', "javascript:" + resultBook
 if (blueMetaContent) {
   fs.copyFileSync('dist/RusMarble.bookmarklet.min.js', 'dist/BlueMarble.bookmarklet.min.js');
 }
+
+// Updates the README badges locally (version + compression) so they are committed
+// alongside the build instead of being patched/pushed back by the CI. Production only.
+if (isProduction) {
+  try {
+    updateReadmeBadges();
+    console.log(`README badges updated ${consoleStyle.GREEN}successfully${consoleStyle.RESET}`);
+  } catch (error) {
+    console.warn(`${consoleStyle.YELLOW}Warning! Could not update README badges${consoleStyle.RESET}:`, error?.message ?? error);
+  }
+}
+
+/** Recursively sums the byte size of every file under a directory. */
+function dirByteSize(dir) {
+  if (!fs.existsSync(dir)) return 0;
+  let total = 0;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) total += dirByteSize(full);
+    else if (entry.isFile()) total += fs.statSync(full).size;
+  }
+  return total;
+}
+
+/** Rewrites the Latest_Version and Compression shields.io badges in docs/README.md. */
+function updateReadmeBadges() {
+  const readmePath = 'docs/README.md';
+  if (!fs.existsSync(readmePath)) return;
+
+  const version = JSON.parse(fs.readFileSync('package.json', 'utf8')).version;
+  let readme = fs.readFileSync(readmePath, 'utf8');
+
+  // Version badge, e.g. Latest_Version-0.87.67-lightblue
+  readme = readme.replace(/(Latest_Version-)[^-\s)"]*(-lightblue)/, `$1${version}$2`);
+
+  // Compression badge: same formula the CI used.
+  const distSize = dirByteSize('dist');
+  const srcSize = dirByteSize('src') + dirByteSize('dist/assets');
+  if (srcSize > 0) {
+    const percentage = (100 - (distSize * 100) / srcSize).toFixed(2);
+    readme = readme.replace(
+      /https:\/\/img\.shields\.io\/badge\/Compression-[^"')\s]*/,
+      `https://img.shields.io/badge/Compression-${percentage}%25-blue`
+    );
+  }
+
+  fs.writeFileSync(readmePath, readme, 'utf8');
+}
