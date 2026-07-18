@@ -350,5 +350,9 @@
   "bm-link": "bm-5s",
   "bm-fg": "bm-5t",
   "bm-bg": "bm-5u",
-  "bm-button-paint-stride": "bm-7H"
+  "bm-button-paint-stride": "bm-7H",
+  "bm-input-paint-delay-min": "bm-7e",
+  "bm-input-paint-delay-max": "bm-7f",
+  "bm-button-paint-fill": "bm-8q",
+  "bm-smartplace-ctl": "bm-9p"
 }

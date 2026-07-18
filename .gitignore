@@ -401,3 +401,10 @@ FodyWeavers.xsd
 # JetBrains Rider
 *.sln.iml
 .claude/settings.local.json
+
+# Private local-only patches
+*.local.patch
+
+# Experimental build — deployed via nginx (wplace.zaebal.me), not committed
+dist/RusMarble.exp.user.js
+dist/RusMarble.exp.meta.js

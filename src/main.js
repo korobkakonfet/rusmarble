@@ -2872,13 +2872,6 @@ function initChat() {
       return '';
     }
   };
-  const getAuthToken = () => {
-    try {
-      return localStorage.getItem('auth_token') || '';
-    } catch (_) {
-      return '';
-    }
-  };
   let rateLimitUntilTs = 0;
   let rateLimitTimer = null;
   let bannedInfo = null;
@@ -3501,7 +3494,6 @@ function initChat() {
       return;
     }
     const device_id = getDeviceId();
-    const auth_token = getAuthToken();
     const payload = {
       type: 'chat',
       text,
@@ -3509,8 +3501,7 @@ function initChat() {
       username: user,
       name: user,
       Lt: user,
-      ...(device_id ? { device_id } : {}),
-      ...(auth_token ? { auth_token } : {})
+      ...(device_id ? { device_id } : {})
     };
     if (replyToId) {
       payload.reply_to = replyToId;
@@ -4074,16 +4065,30 @@ inject(() => {
   const hookedMapFuncs = {
     "values": Map.prototype.values
   };
-  const hookedMapValues = function () {
-    const temp = hookedMapFuncs.values.call(this);
-    Array.from(temp).forEach(x => {
-        if (x && x["maps"] instanceof Set) {
-            Array.from(x["maps"]).forEach(y => {
-                if (y && y["flyTo"]) (document.head["__bmmap"] = y, restoreMapPrototype());
-            });
-        };
-    })
-    return temp;
+  const hookedMapValues = function (...args) {
+    // Wrap the iterator lazily so we inspect each value as wplace consumes it, without
+    // exhausting the iterator we return (the old Array.from() approach returned a spent iterator).
+    const iterator = hookedMapFuncs.values.apply(this, args);
+    return {
+      [Symbol.iterator]() { return this; },
+      next() {
+        const result = iterator.next();
+        if (!result.done) {
+          const value = result.value;
+          if (value && value["maps"] instanceof Set) {
+            // Legacy structure: a Set of maplibre maps.
+            for (const y of value["maps"]) {
+              if (y && y["flyTo"]) { document.head["__bmmap"] = y; restoreMapPrototype(); break; }
+            }
+          } else if (value && value["_map"] && value["_map"]["flyTo"]) {
+            // Current wplace (Svelte 5) structure: a wrapper object exposing the map as `_map`.
+            document.head["__bmmap"] = value["_map"];
+            restoreMapPrototype();
+          }
+        }
+        return result;
+      },
+    };
   };
   const restoreMapPrototype = function () {
     for (const key in hookedMapFuncs) {
@@ -4509,6 +4514,7 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   registerBmCanvasRestoreOnStyleChange(); // Re-adds overlay layers after any map style reload
 
   await waitForBody();
+  observeStaleSelectionPins();
   observeWplaceTheme();
   await buildOverlayMain(); // Builds the main overlay
   applyLayoutLanguage(currentLayoutLanguage);
@@ -4677,6 +4683,35 @@ function createZoomButtons() {
   };
 
   [0, 1, 2, 3, 4, 5, 10, 25].forEach( zoom => createZoomButton(zoom) );
+}
+
+let staleSelectionPinObserver = null;
+
+/** Clean up wplace's native pixel-selection pins (`.maplibregl-marker.z-20`).
+ * Since the Svelte 5 rebuild, wplace no longer clears the selection marker when
+ * the pixel-info window closes, and repeated selections stack duplicate pins at
+ * the same spot. This keeps at most one pin while the info window is open and
+ * removes all of them once it closes. The window is uniquely identified by the
+ * bottom-sheet container `.absolute.bottom-0.left-0.z-30.w-full`.
+ * @since 0.87.66
+ */
+function observeStaleSelectionPins() {
+  if (staleSelectionPinObserver) return;
+  const PIN_SELECTOR = '.maplibregl-marker.z-20[role="button"]';
+  const INFO_WINDOW_SELECTOR = '.absolute.bottom-0.left-0.z-30.w-full';
+  const prune = () => {
+    const pins = Array.from(document.querySelectorAll(PIN_SELECTOR));
+    if (pins.length === 0) return;
+    const infoWindowOpen = !!document.querySelector(INFO_WINDOW_SELECTOR);
+    if (!infoWindowOpen) {
+      pins.forEach(pin => pin.remove()); // no window open: no selection pin should linger
+      return;
+    }
+    pins.slice(0, -1).forEach(pin => pin.remove()); // keep only the newest pin
+  };
+  staleSelectionPinObserver = new MutationObserver(prune);
+  staleSelectionPinObserver.observe(document.body, { childList: true, subtree: true });
+  prune();
 }
 
 /** Observe the black color, and add the "Move" button.
