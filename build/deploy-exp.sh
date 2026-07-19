@@ -13,7 +13,7 @@
 #
 # Options:
 #   --host HOST      Remote SSH target.        Default: root@het
-#   --static-dir P   Remote static directory.  Default: /opt/wplacetgbot/static
+#   --static-dir P   Remote static directory.  Default: /opt/wplace-exp-static
 #   --nginx-site P   Remote nginx site config. Default: /etc/nginx/sites-available/wplace.zaebal.me
 #   --build          Run `node build/build-ex.js` before deploying
 #   --help, -h       Show this help
@@ -29,7 +29,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 HOST="root@het"
-STATIC_DIR="/opt/wplacetgbot/static"
+# Standalone dir OUTSIDE /opt/wplacetgbot: the bot's app dir gets re-synced/cleaned
+# on redeploy, which would delete an exp static subdir living under it.
+STATIC_DIR="/opt/wplace-exp-static"
 NGINX_SITE="/etc/nginx/sites-available/wplace.zaebal.me"
 DO_BUILD=0
 
