@@ -29,6 +29,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 HOST="user@server"
+# Keep the static dir standalone (not under any app dir that gets re-synced/cleaned on redeploy).
 STATIC_DIR="/opt/exp-static"
 NGINX_SITE="/etc/nginx/sites-available/wplace.zaebal.me"
 DO_BUILD=0
