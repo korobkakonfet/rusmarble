@@ -1,4 +1,4 @@
-import { consoleLog, consoleError } from "./utils.js";
+import { consoleLog, consoleError, consoleWarn } from "./utils.js";
 import { profiler } from './profiler.js';
 
 let suppressForcedTileRefresh = false;
@@ -166,6 +166,21 @@ export function getPixelPerWplacePixel() {
     // scale: 1 means (tileSize = 512) pixel on canvas covers the full longitude (i.e. 2048000 wplace pixels)
     return map["transform"]["tileSize"] * map["transform"]["scale"] / 2048000;
   });
+}
+
+/** Whether the map camera is currently animating (pan, zoom or rotate).
+ * Readings of the camera centre and scale are only meaningful while it is still.
+ * @returns {boolean}
+ * @since 0.90.0
+ */
+export function isMapMoving() {
+  try {
+    return controlMapTiler(map => Boolean(
+      map["isMoving"]?.() || map["isZooming"]?.() || map["isRotating"]?.()
+    )) === true;
+  } catch (_) {
+    return false;
+  }
 }
 
 /** Get the current map bounds.
@@ -962,6 +977,82 @@ export function panMap(offset) {
 const ARCHIVE_BACKGROUND_LAYER_ID = 'bm-archive-background';
 const ARCHIVE_PROTOCOL = 'wpa'; // custom MapLibre protocol — not prefixed bm- to avoid CSS mangler
 let archiveProtocolRegistered = false;
+/** The archive serves a standard z0-11 XYZ pyramid with 512px tiles (same config the
+ * wplace.eralyon.net viewer itself uses), unlike wplace's own single-zoom art layer.
+ * @since 0.87.70
+ */
+const ARCHIVE_MAX_ZOOM = 11;
+const ARCHIVE_TILE_SIZE = 512;
+
+/** Fetch one tile through GM_xmlhttpRequest, resolving to null on any non-200 / failure.
+ * @since 0.87.70
+ */
+function fetchArchiveTileBuffer(url) {
+  return new Promise((resolve) => {
+    GM_xmlhttpRequest({
+      method: 'GET',
+      url,
+      responseType: 'arraybuffer',
+      onload: (response) => {
+        const ok = response.status >= 200 && response.status < 300 && response.response?.byteLength;
+        resolve(ok ? response.response : null);
+      },
+      onerror: () => resolve(null),
+      ontimeout: () => resolve(null),
+    });
+  });
+}
+
+/** Composite a sparse diff tile over its base tile, mirroring the archive viewer's
+ * `merged://` protocol. Archive versions like `v82.025` only ship changed tiles, so the
+ * base version (`v82`) must supply everything else.
+ * @since 0.87.70
+ */
+async function mergeArchiveTiles(baseBuffer, diffBuffer) {
+  const toBitmap = (buffer) => createImageBitmap(new Blob([buffer], { type: 'image/png' }));
+  const [baseBitmap, diffBitmap] = await Promise.all([toBitmap(baseBuffer), toBitmap(diffBuffer)]);
+  try {
+    const canvas = new OffscreenCanvas(
+      Math.max(baseBitmap.width, diffBitmap.width),
+      Math.max(baseBitmap.height, diffBitmap.height)
+    );
+    const context = canvas.getContext('2d');
+    context.imageSmoothingEnabled = false;
+    context.drawImage(baseBitmap, 0, 0);
+    context.drawImage(diffBitmap, 0, 0); // diff wins
+    const blob = await canvas.convertToBlob({ type: 'image/png' });
+    return await blob.arrayBuffer();
+  } finally {
+    baseBitmap.close?.();
+    diffBitmap.close?.();
+  }
+}
+
+/** Resolve one archive tile URL, merging base + diff versions when needed.
+ * @since 0.87.70
+ */
+async function loadArchiveTile(url) {
+  // .../tiles/<version>/<z>/<x>/<y>.png — a version containing a dot is a diff on its base.
+  const match = url.match(/\/tiles\/([^/]+)\/\d+\/\d+\/\d+\.png/);
+  const version = match?.[1] || '';
+  const baseVersion = version.includes('.') ? version.split('.')[0] : null;
+
+  if (!baseVersion) {
+    const buffer = await fetchArchiveTileBuffer(url);
+    if (!buffer) throw new Error('archive tile unavailable');
+    return buffer;
+  }
+
+  const baseUrl = url.replace(`/tiles/${version}/`, `/tiles/${baseVersion}/`);
+  const [baseBuffer, diffBuffer] = await Promise.all([
+    fetchArchiveTileBuffer(baseUrl),
+    fetchArchiveTileBuffer(url),
+  ]);
+  if (!baseBuffer && !diffBuffer) throw new Error('archive tile unavailable');
+  if (!diffBuffer) return baseBuffer;
+  if (!baseBuffer) return diffBuffer;
+  return await mergeArchiveTiles(baseBuffer, diffBuffer);
+}
 
 /**
  * Apply the archive background raster layer directly to an already-resolved map instance.
@@ -972,50 +1063,28 @@ let archiveProtocolRegistered = false;
  */
 export function applyArchiveBgLayerToMap(map, tileUrl) {
   const id = ARCHIVE_BACKGROUND_LAYER_ID;
-  consoleError('[archive bg] applyArchiveBgLayerToMap, tileUrl=', tileUrl);
   try {
     if (!tileUrl) {
       if (map['getLayer'](id)) map['setLayoutProperty'](id, 'visibility', 'none');
       return;
     }
 
-    const zoom = map['getZoom']?.();
-    const center = map['getCenter']?.();
-    const style = map['getStyle']?.();
-    const allLayers = style?.layers?.map(l => l.id) ?? [];
-    consoleError('[archive bg] map zoom=', zoom, 'center=', center);
-    consoleError('[archive bg] all layer ids=', allLayers);
-
     // Register custom MapLibre protocol once — handles tile fetches directly via GM_xmlhttpRequest,
     // bypassing CORS and avoiding the fetch-override/message-passing chain entirely.
     if (!archiveProtocolRegistered) {
       const MapClass = Object.getPrototypeOf(map).constructor;
-      consoleError('[archive bg] MapClass.addProtocol=', typeof MapClass['addProtocol']);
       if (typeof MapClass['addProtocol'] === 'function') {
         MapClass['addProtocol'](ARCHIVE_PROTOCOL, (params, callback) => {
           const url = params.url.replace(ARCHIVE_PROTOCOL + '://', 'https://');
-          consoleError('[archive protocol] fetching:', url);
-          GM_xmlhttpRequest({
-            method: 'GET',
-            url,
-            responseType: 'arraybuffer',
-            onload: (response) => {
-              consoleError('[archive protocol] onload status=', response.status, 'byteLength=', response.response?.byteLength, 'url=', url);
-              if (response.status < 200 || response.status >= 300) {
-                callback(new Error(`HTTP ${response.status}`));
-                return;
-              }
-              callback(null, response.response, null, null);
-            },
-            onerror: (err) => { consoleError('[archive protocol] onerror:', url, err); callback(new Error('network error')); },
-            ontimeout: () => { consoleError('[archive protocol] ontimeout:', url); callback(new Error('timeout')); },
-          });
+          loadArchiveTile(url).then(
+            (buffer) => callback(null, buffer, null, null),
+            (err) => callback(err instanceof Error ? err : new Error(String(err)))
+          );
           return { cancel: () => {} };
         });
         archiveProtocolRegistered = true;
-        consoleError('[archive bg] custom protocol registered:', ARCHIVE_PROTOCOL);
       } else {
-        consoleError('[archive bg] addProtocol not found on MapClass — falling back to https tiles');
+        consoleWarn('[archive bg] addProtocol not found on MapClass — falling back to https tiles');
       }
     }
 
@@ -1023,38 +1092,27 @@ export function applyArchiveBgLayerToMap(map, tileUrl) {
     const sourceTileUrl = archiveProtocolRegistered
       ? tileUrl.replace('https://', ARCHIVE_PROTOCOL + '://')
       : tileUrl;
-    consoleError('[archive bg] sourceTileUrl=', sourceTileUrl);
 
-    if (!map['getSource'](id)) {
-      consoleError('[archive bg] adding source');
+    const existing = map['getSource'](id);
+    if (existing && existing['setTiles']) {
+      existing['setTiles']([sourceTileUrl]);
+    } else {
+      if (existing) {
+        if (map['getLayer'](id)) map['removeLayer'](id);
+        map['removeSource'](id);
+      }
       map['addSource'](id, {
         'type': 'raster',
         'tiles': [sourceTileUrl],
-        'minzoom': 11,
-        'maxzoom': 11,
-        'tileSize': 1000,
+        'minzoom': 0,
+        'maxzoom': ARCHIVE_MAX_ZOOM,
+        'tileSize': ARCHIVE_TILE_SIZE,
       });
-    } else {
-      consoleError('[archive bg] updating source tiles');
-      const src = map['getSource'](id);
-      if (src['setTiles']) {
-        src['setTiles']([sourceTileUrl]);
-      } else {
-        map['removeLayer'](id);
-        map['removeSource'](id);
-        map['addSource'](id, {
-          'type': 'raster',
-          'tiles': [sourceTileUrl],
-          'minzoom': 11,
-          'maxzoom': 11,
-          'tileSize': 1000,
-        });
-      }
     }
+
     if (!map['getLayer'](id)) {
       const layers = map['getLayersOrder']?.() ?? [];
       const beforeLayer = layers.find(l => l === 'pixel-art-layer');
-      consoleError('[archive bg] adding layer, beforeLayer=', beforeLayer, 'layersOrder=', layers);
       map['addLayer']({
         'id': id,
         'type': 'raster',
@@ -1066,33 +1124,6 @@ export function applyArchiveBgLayerToMap(map, tileUrl) {
       }, beforeLayer);
     }
     map['setLayoutProperty'](id, 'visibility', 'visible');
-
-    // Verify layer state after adding
-    const addedLayer = map['getLayer'](id);
-    const addedSource = map['getSource'](id);
-    consoleError('[archive bg] layer set visible, layer=', addedLayer, 'source=', addedSource);
-    consoleError('[archive bg] source tiles=', addedSource?.['tiles']);
-    consoleError('[archive bg] layer visibility=', map['getLayoutProperty']?.(id, 'visibility'));
-    consoleError('[archive bg] layer paint opacity=', map['getPaintProperty']?.(id, 'raster-opacity'));
-
-    // Listen for tile events
-    map['on']?.('error', (e) => {
-      if (e?.sourceId === id || (typeof e?.error?.message === 'string' && e.error.message.includes('archive'))) {
-        consoleError('[archive bg] map error event:', e?.error?.message, e);
-      }
-    });
-    map['on']?.('sourcedataloading', (e) => {
-      if (e?.sourceId === id) consoleError('[archive bg] sourcedataloading:', e?.sourceId, e?.dataType);
-    });
-    map['on']?.('sourcedata', (e) => {
-      if (e?.sourceId === id) consoleError('[archive bg] sourcedata:', e?.sourceId, e?.dataType, 'isSourceLoaded=', e?.isSourceLoaded);
-    });
-    map['once']?.('render', () => {
-      const src = map['getSource'](id);
-      const layer = map['getLayer'](id);
-      consoleError('[archive bg] first render after add — source=', !!src, 'layer=', !!layer, 'visibility=', map['getLayoutProperty']?.(id, 'visibility'));
-    });
-
   } catch (err) {
     consoleError('[archive bg] ERROR:', err?.message || err);
   }

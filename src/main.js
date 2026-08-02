@@ -12,6 +12,7 @@ import { templateWorkerManager } from './templateWorkerManager.js';
 import { buildUserSettingsSection } from './userSettings.js';
 import { createTemplateSync, normalizeRemoteOrder } from './templateSync.js';
 import { createMapCommentManager } from './mapComments.js';
+import { createHqTemplateManager } from './hqTemplate.js';
 import { createTemplateCreationUi } from './templateCreationUi.js';
 import { createArchiveTemplateUi } from './archiveTemplateUi.js';
 import { layoutLanguageOptions, normalizeLayoutLanguage, translateLayout, getLayoutThemeLabel as getLocalizedLayoutThemeLabel, getTemplateDisplayLabel as getLocalizedTemplateDisplayLabel, getTemplateCreateModeLabel, getChatBanTypeLabel, getColorSortLabel } from './layoutI18n.js';
@@ -55,6 +56,7 @@ const TEMPLATE_FOCUS_ZOOM_MAX = 22;
 let chatSocket = null;
 let chatInitialized = false;
 let mapCommentManager = null;
+let hqTemplateManager = null;
 let templateManagerRef = null;
 let observeBlackObserver = null;
 const reportCommentsState = {
@@ -1491,6 +1493,35 @@ function destroyMapCommentsManager() {
   mapCommentManager = null;
 }
 
+function ensureHqTemplateManager() {
+  if (isSafeModeActive()) return null;
+  if (hqTemplateManager) return hqTemplateManager;
+  try {
+    hqTemplateManager = createHqTemplateManager({
+      getLanguage: () => currentLayoutLanguage,
+      // Resolved lazily: the HQ manager can be created before templateSync exists.
+      remote: {
+        listEntries: () => templateSync.fetchRemoteTemplateEntries(),
+        fetchFile: (templateName, stream) => templateSync.fetchRemoteTemplateFile(templateName, stream),
+      },
+    });
+  } catch (error) {
+    hqTemplateManager = null;
+    consoleWarn('Headquarters template overlay initialization failed.', error);
+  }
+  return hqTemplateManager;
+}
+
+function destroyHqTemplateManager() {
+  if (!hqTemplateManager) return;
+  try {
+    hqTemplateManager['destroy']?.();
+  } catch (error) {
+    consoleWarn('Failed to destroy headquarters template overlay.', error);
+  }
+  hqTemplateManager = null;
+}
+
 function setMapCommentsEnabled(enabled) {
   const manager = ensureMapCommentsManager();
   if (!manager) return;
@@ -1521,29 +1552,24 @@ function gmRequestWithTimeout(url, responseType, timeoutMs) {
 
 async function fetchLatestArchiveVersion() {
   if (cachedArchiveBackgroundVersion) return cachedArchiveBackgroundVersion;
-  consoleError('[archive bg] fetching archive index from', TEMPLATE_ARCHIVE_BASE_URL);
   try {
     const response = await gmRequestWithTimeout(`${TEMPLATE_ARCHIVE_BASE_URL}/`, 'text', 15000);
-    consoleError('[archive bg] index response status:', response?.status);
     const html = String(response?.responseText || response?.response || '');
-    consoleError('[archive bg] index html length:', html.length);
     const listMatch = html.match(/const\s+WPLACE_VERSIONS\s*=\s*\[([\s\S]*?)\];/);
-    if (!listMatch) { consoleError('[archive bg] WPLACE_VERSIONS not found in index page'); return null; }
+    if (!listMatch) { consoleWarn('[archive bg] WPLACE_VERSIONS not found in index page'); return null; }
     const entryRegex = /\{[^{}]*version:\s*['"]([^'"]+)['"][^{}]*\}/g;
     let lastVersion = null, match;
     while ((match = entryRegex.exec(listMatch[1])) !== null) lastVersion = String(match[1]).trim();
-    if (!lastVersion) { consoleError('[archive bg] version list was empty'); return null; }
-    consoleError('[archive bg] latest version:', lastVersion);
+    if (!lastVersion) { consoleWarn('[archive bg] version list was empty'); return null; }
     cachedArchiveBackgroundVersion = lastVersion;
     return lastVersion;
   } catch (err) {
-    consoleError('[archive bg] failed to fetch archive index:', err?.message || err);
+    consoleWarn('[archive bg] failed to fetch archive index:', err?.message || err);
     return null;
   }
 }
 
 async function applyArchiveBackground(enabled) {
-  consoleError('[archive bg] applyArchiveBackground called, enabled=', enabled);
   if (!enabled) {
     doAfterMapFound(() => {
       const map = resolveTemplateOverlayMapInstance();
@@ -1552,13 +1578,10 @@ async function applyArchiveBackground(enabled) {
     return;
   }
   const version = await fetchLatestArchiveVersion();
-  consoleError('[archive bg] resolved version:', version);
-  if (!version) { consoleError('[archive bg] no version, aborting'); return; }
-  const tileUrl = `https://wplace.eralyon.net/tiles/${version}/11/{x}/{y}.png`;
-  consoleError('[archive bg] calling applyArchiveBgLayerToMap with:', tileUrl);
+  if (!version) { consoleWarn('[archive bg] no archive version resolved, aborting'); return; }
+  const tileUrl = `https://wplace.eralyon.net/tiles/${version}/{z}/{x}/{y}.png`;
   doAfterMapFound(() => {
     const map = resolveTemplateOverlayMapInstance();
-    consoleError('[archive bg] doAfterMapFound fired, map=', !!map);
     if (!map) return;
     applyArchiveBgLayerToMap(map, tileUrl);
   });
@@ -4364,6 +4387,7 @@ function applySafeModeState() {
       window.setChatEnabled?.(false);
     } catch (_) {}
     destroyMapCommentsManager();
+    destroyHqTemplateManager();
     return;
   }
 
@@ -4379,6 +4403,7 @@ function applySafeModeState() {
   if (templateManager.isMapCommentsEnabled()) {
     setMapCommentsEnabled(true);
   }
+  ensureHqTemplateManager();
   templateSync.startTemplateUpdatePolling();
   startNotificationPolling();
 }
@@ -4498,7 +4523,7 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
 
   currentLayoutLanguage = normalizeLayoutLanguage(templateManager.getLayoutLanguage?.());
   setMapCommentsEnabled(templateManager.isMapCommentsEnabled());
-  consoleError('[archive bg] isArchiveBackgroundEnabled=', templateManager.isArchiveBackgroundEnabled());
+  ensureHqTemplateManager();
   if (templateManager.isArchiveBackgroundEnabled()) applyArchiveBackground(true);
 
   // load templates after user settings
@@ -5080,6 +5105,9 @@ function clickElementLikeUser(element) {
   }
 }
 
+/** Smallest number of colour swatches that identifies a palette container. */
+const MIN_PALETTE_SWATCHES = 8;
+
 function getPaintPaletteRoot() {
   const headings = Array.from(document.querySelectorAll('h1, h2, h3, [role="heading"]'))
     .filter((heading) => heading instanceof HTMLElement)
@@ -5091,7 +5119,40 @@ function getPaintPaletteRoot() {
       return root;
     }
   }
-  return null;
+  return getPaintPaletteRootFromSwatches();
+}
+
+/** Locates the paint palette by its colour swatches.
+ *
+ * The heading lookup depends on wplace's copy ("Paint pixel") and on the
+ * `.rounded-t-box` class, both of which move with their UI — when either
+ * changes, the palette is open but undetectable, and opening paint mode fails
+ * with "Paint palette did not open." The `#color-<id>` swatch ids are far more
+ * stable: colour selection already clicks them by id, so anything that breaks
+ * them breaks painting outright.
+ *
+ * Climbs from the first visible swatch to the nearest ancestor holding most of
+ * them, preferring one that also contains the palette-expand row so
+ * isExtendedPaintPaletteOpen() and the expand-button lookup keep working
+ * against the returned element.
+ * @returns {HTMLElement|null} The palette root, or null if not open.
+ */
+function getPaintPaletteRootFromSwatches() {
+  const swatches = Array.from(document.querySelectorAll('[id^="color-"]'))
+    .filter((swatch) => swatch instanceof HTMLElement)
+    .filter((swatch) => isElementActuallyVisible(swatch));
+  if (swatches.length < MIN_PALETTE_SWATCHES) return null;
+
+  let candidate = null;
+  let node = swatches[0];
+  for (let depth = 0; depth < 10 && node instanceof HTMLElement; depth++, node = node.parentElement) {
+    if (!isElementActuallyVisible(node)) continue;
+    if (node.querySelectorAll('[id^="color-"]').length < MIN_PALETTE_SWATCHES) continue;
+    candidate = node;
+    if (node.querySelector('div.relative.h-12')) break;
+  }
+  if (!candidate) return null;
+  return candidate.closest('.rounded-t-box') ?? candidate;
 }
 
 function isExtendedPaintPaletteOpen(root = getPaintPaletteRoot()) {
@@ -6817,7 +6878,6 @@ async function buildOverlayMain() {
               instance.updateInnerHTML('bm-input-ty', emptyIfUndefined(coords?.[1]));
               instance.updateInnerHTML('bm-input-px', emptyIfUndefined(coords?.[2]));
               instance.updateInnerHTML('bm-input-py', emptyIfUndefined(coords?.[3]));
-              apiManager.updateDownloadButton();
               persistCoords();
             }
           }
@@ -6850,27 +6910,26 @@ async function buildOverlayMain() {
               coords[i].value = splitText[i]; //add the split vales
             }
 
-            apiManager.updateDownloadButton();
             persistCoords();
 
             event.preventDefault(); //prevent the pasting of the original paste that would overide the split value
           })
-          const handler = () => (apiManager.updateDownloadButton(), persistCoords());
+          const handler = () => persistCoords();
           input.addEventListener('input', handler);
           input.addEventListener('change', handler);
         }).buildElement()
         .addInput({'type': 'number', 'id': 'bm-input-ty', 'placeholder': t('coords.placeholder.ty'), 'min': 0, 'max': 2047, 'step': 1, 'required': true, 'value': (savedCoords.ty ?? '')}, (instance, input) => {
-          const handler = () => (apiManager.updateDownloadButton(), persistCoords());
+          const handler = () => persistCoords();
           input.addEventListener('input', handler);
           input.addEventListener('change', handler);
         }).buildElement()
         .addInput({'type': 'number', 'id': 'bm-input-px', 'placeholder': t('coords.placeholder.px'), 'min': 0, 'max': 2047, 'step': 1, 'required': true, 'value': (savedCoords.px ?? '')}, (instance, input) => {
-          const handler = () => (apiManager.updateDownloadButton(), persistCoords());
+          const handler = () => persistCoords();
           input.addEventListener('input', handler);
           input.addEventListener('change', handler);
         }).buildElement()
         .addInput({'type': 'number', 'id': 'bm-input-py', 'placeholder': t('coords.placeholder.py'), 'min': 0, 'max': 2047, 'step': 1, 'required': true, 'value': (savedCoords.py ?? '')}, (instance, input) => {
-          const handler = () => (apiManager.updateDownloadButton(), persistCoords());
+          const handler = () => persistCoords();
           input.addEventListener('input', handler);
           input.addEventListener('change', handler);
         }).buildElement()
@@ -7092,7 +7151,6 @@ async function buildOverlayMain() {
                     if (Number.isFinite(Number(textTemplate.previewPixelY))) {
                       coordPxY.value = String(normalizePreviewTilePixel(textTemplate.previewPixelY));
                     }
-                    apiManager.updateDownloadButton();
                     persistCoords();
                   } else if (createMode === TEMPLATE_CREATE_MODE_RUSSIAN_FLAG) {
                     const flagTemplate = await openRussianFlagTemplateBuilder({
@@ -7122,7 +7180,6 @@ async function buildOverlayMain() {
                       coordTlY.value = String(Number(flagTemplate.createCoords[1]) || 0);
                       coordPxX.value = String(normalizePreviewTilePixel(flagTemplate.createCoords[2]));
                       coordPxY.value = String(normalizePreviewTilePixel(flagTemplate.createCoords[3]));
-                      apiManager.updateDownloadButton();
                       persistCoords();
                     }
                     templateName = String(flagTemplate.templateName || '').trim() || buildRussianFlagTemplateName({
@@ -7486,7 +7543,6 @@ async function buildOverlayMain() {
     ty.value = String(normalized[1]);
     px.value = String(normalized[2]);
     py.value = String(normalized[3]);
-    apiManager.updateDownloadButton();
     persistCoords();
     return true;
   };

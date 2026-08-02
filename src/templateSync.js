@@ -1077,10 +1077,51 @@ export function createTemplateSync({
       .filter((name) => !!name);
   };
 
+  /** Lists every remote template together with the stream it lives in.
+   * `fetchRemoteTemplateNames` drops the stream, which callers need to fetch the image.
+   * @returns {Promise<Array<{name: string, stream: string}>>} The remote template entries.
+   */
+  const fetchRemoteTemplateEntries = async () => {
+    const url = `${templateSyncBaseUrl}/templates?stream=all`;
+    const response = await gmRequestWithTimeout(url, 'json', 'Template entries');
+    assertResponseOk(response, 'Template entries');
+    const data = getResponseData(response, 'Template entries') ?? {};
+    const items = Array.isArray(data) ? data : (Array.isArray(data?.['templates']) ? data['templates'] : []);
+    const entries = [];
+    for (const item of items) {
+      const { templateName, remoteStream } = parseTemplateEntry(item, DEFAULT_TEMPLATE_STREAM);
+      if (templateName) entries.push({ name: templateName, stream: remoteStream });
+    }
+    return entries;
+  };
+
+  /** Downloads a remote template's image without registering it as a map template.
+   * @param {string} templateName - The remote template name.
+   * @param {string} [remoteStream] - The stream the template lives in.
+   * @returns {Promise<File>} The template image as a PNG file.
+   */
+  const fetchRemoteTemplateFile = async (templateName, remoteStream = DEFAULT_TEMPLATE_STREAM) => {
+    const trimmedName = String(templateName ?? '').trim();
+    if (!trimmedName) throw new Error('Template name is required.');
+    const normalizedStream = normalizeRemoteStream(remoteStream);
+    const label = `Template image "${trimmedName}" (${normalizedStream})`;
+    const response = await gmRequestWithTimeout(
+      getTemplateImageUrl(trimmedName, normalizedStream),
+      'blob',
+      label
+    );
+    assertResponseOk(response, label);
+    const imageBlob = response.response;
+    if (!imageBlob) throw new Error(`${label} failed: empty blob`);
+    return new File([imageBlob], `${trimmedName}.png`, { type: imageBlob?.type || 'image/png' });
+  };
+
   return {
     checkTemplateUpdates,
     importTemplateByName,
     fetchRemoteTemplateNames,
+    fetchRemoteTemplateEntries,
+    fetchRemoteTemplateFile,
     startTemplateUpdatePolling,
     stopTemplateUpdatePolling,
     resetTemplateUpdateBadge,

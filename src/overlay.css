@@ -1988,3 +1988,43 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   display: block;
   color: var(--bm-muted);
 }
+
+/* ---- Headquarters (HQ) canvas template overlay ---- */
+
+.bm-hq-overlay {
+  position: absolute;
+  image-rendering: pixelated;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.bm-hq-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bm-hq-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.bm-hq-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.bm-hq-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bm-hq-file {
+  display: none;
+}

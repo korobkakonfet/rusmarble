@@ -402,8 +402,9 @@ FodyWeavers.xsd
 *.sln.iml
 .claude/settings.local.json
 
-# Private local-only patches
+# Private local-only patches and their notes
 *.local.patch
+*.local.md
 
 # Experimental build — deployed via nginx (wplace.zaebal.me), not committed
 dist/RusMarble.exp.user.js

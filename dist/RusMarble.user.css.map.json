@@ -345,5 +345,12 @@
   "bm-help": "bm-5r",
   "bm-link": "bm-5s",
   "bm-fg": "bm-5t",
-  "bm-bg": "bm-5u"
+  "bm-bg": "bm-5u",
+  "bm-hq-overlay": "bm-a8",
+  "bm-hq-inline": "bm-ah",
+  "bm-hq-panel": "bm-aw",
+  "bm-hq-file": "bm-aE",
+  "bm-hq-body": "bm-aF",
+  "bm-hq-row": "bm-aK",
+  "bm-hq-remote-names": "bm-8P"
 }
