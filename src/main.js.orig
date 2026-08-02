@@ -12,7 +12,6 @@ import { templateWorkerManager } from './templateWorkerManager.js';
 import { buildUserSettingsSection } from './userSettings.js';
 import { createTemplateSync, normalizeRemoteOrder } from './templateSync.js';
 import { createMapCommentManager } from './mapComments.js';
-import { createHqTemplateManager } from './hqTemplate.js';
 import { createTemplateCreationUi } from './templateCreationUi.js';
 import { createArchiveTemplateUi } from './archiveTemplateUi.js';
 import { layoutLanguageOptions, normalizeLayoutLanguage, translateLayout, getLayoutThemeLabel as getLocalizedLayoutThemeLabel, getTemplateDisplayLabel as getLocalizedTemplateDisplayLabel, getTemplateCreateModeLabel, getChatBanTypeLabel, getColorSortLabel } from './layoutI18n.js';
@@ -56,7 +55,6 @@ const TEMPLATE_FOCUS_ZOOM_MAX = 22;
 let chatSocket = null;
 let chatInitialized = false;
 let mapCommentManager = null;
-let hqTemplateManager = null;
 let templateManagerRef = null;
 let observeBlackObserver = null;
 const reportCommentsState = {
@@ -1493,35 +1491,6 @@ function destroyMapCommentsManager() {
   mapCommentManager = null;
 }
 
-function ensureHqTemplateManager() {
-  if (isSafeModeActive()) return null;
-  if (hqTemplateManager) return hqTemplateManager;
-  try {
-    hqTemplateManager = createHqTemplateManager({
-      getLanguage: () => currentLayoutLanguage,
-      // Resolved lazily: the HQ manager can be created before templateSync exists.
-      remote: {
-        listEntries: () => templateSync.fetchRemoteTemplateEntries(),
-        fetchFile: (templateName, stream) => templateSync.fetchRemoteTemplateFile(templateName, stream),
-      },
-    });
-  } catch (error) {
-    hqTemplateManager = null;
-    consoleWarn('Headquarters template overlay initialization failed.', error);
-  }
-  return hqTemplateManager;
-}
-
-function destroyHqTemplateManager() {
-  if (!hqTemplateManager) return;
-  try {
-    hqTemplateManager['destroy']?.();
-  } catch (error) {
-    consoleWarn('Failed to destroy headquarters template overlay.', error);
-  }
-  hqTemplateManager = null;
-}
-
 function setMapCommentsEnabled(enabled) {
   const manager = ensureMapCommentsManager();
   if (!manager) return;
@@ -1552,24 +1521,29 @@ function gmRequestWithTimeout(url, responseType, timeoutMs) {
 
 async function fetchLatestArchiveVersion() {
   if (cachedArchiveBackgroundVersion) return cachedArchiveBackgroundVersion;
+  consoleError('[archive bg] fetching archive index from', TEMPLATE_ARCHIVE_BASE_URL);
   try {
     const response = await gmRequestWithTimeout(`${TEMPLATE_ARCHIVE_BASE_URL}/`, 'text', 15000);
+    consoleError('[archive bg] index response status:', response?.status);
     const html = String(response?.responseText || response?.response || '');
+    consoleError('[archive bg] index html length:', html.length);
     const listMatch = html.match(/const\s+WPLACE_VERSIONS\s*=\s*\[([\s\S]*?)\];/);
-    if (!listMatch) { consoleWarn('[archive bg] WPLACE_VERSIONS not found in index page'); return null; }
+    if (!listMatch) { consoleError('[archive bg] WPLACE_VERSIONS not found in index page'); return null; }
     const entryRegex = /\{[^{}]*version:\s*['"]([^'"]+)['"][^{}]*\}/g;
     let lastVersion = null, match;
     while ((match = entryRegex.exec(listMatch[1])) !== null) lastVersion = String(match[1]).trim();
-    if (!lastVersion) { consoleWarn('[archive bg] version list was empty'); return null; }
+    if (!lastVersion) { consoleError('[archive bg] version list was empty'); return null; }
+    consoleError('[archive bg] latest version:', lastVersion);
     cachedArchiveBackgroundVersion = lastVersion;
     return lastVersion;
   } catch (err) {
-    consoleWarn('[archive bg] failed to fetch archive index:', err?.message || err);
+    consoleError('[archive bg] failed to fetch archive index:', err?.message || err);
     return null;
   }
 }
 
 async function applyArchiveBackground(enabled) {
+  consoleError('[archive bg] applyArchiveBackground called, enabled=', enabled);
   if (!enabled) {
     doAfterMapFound(() => {
       const map = resolveTemplateOverlayMapInstance();
@@ -1578,10 +1552,13 @@ async function applyArchiveBackground(enabled) {
     return;
   }
   const version = await fetchLatestArchiveVersion();
-  if (!version) { consoleWarn('[archive bg] no archive version resolved, aborting'); return; }
-  const tileUrl = `https://wplace.eralyon.net/tiles/${version}/{z}/{x}/{y}.png`;
+  consoleError('[archive bg] resolved version:', version);
+  if (!version) { consoleError('[archive bg] no version, aborting'); return; }
+  const tileUrl = `https://wplace.eralyon.net/tiles/${version}/11/{x}/{y}.png`;
+  consoleError('[archive bg] calling applyArchiveBgLayerToMap with:', tileUrl);
   doAfterMapFound(() => {
     const map = resolveTemplateOverlayMapInstance();
+    consoleError('[archive bg] doAfterMapFound fired, map=', !!map);
     if (!map) return;
     applyArchiveBgLayerToMap(map, tileUrl);
   });
@@ -4387,7 +4364,6 @@ function applySafeModeState() {
       window.setChatEnabled?.(false);
     } catch (_) {}
     destroyMapCommentsManager();
-    destroyHqTemplateManager();
     return;
   }
 
@@ -4403,7 +4379,6 @@ function applySafeModeState() {
   if (templateManager.isMapCommentsEnabled()) {
     setMapCommentsEnabled(true);
   }
-  ensureHqTemplateManager();
   templateSync.startTemplateUpdatePolling();
   startNotificationPolling();
 }
@@ -4485,6 +4460,7 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
       'hideCompletedColors': false,
       'sortBy': 'total-desc',
       'anchor': 'lt', // Top left
+      'smartPlace': false, // Hidden in settings
       'memorySavingMode': false,
       'eventEnabled': false,
       'eventProvider': '',
@@ -4519,11 +4495,17 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   } else {
     templateManager.setUserSettings(userSettings);
   }
+  // Apply query param overrides (e.g. ?smartPlace=1)
   const _qp = new URLSearchParams(window.location.search);
+  if (_qp.has('sm')) {
+    const val = _qp.get('sm');
+    templateManager.userSettings.smartPlace = val !== '0' && val !== 'false';
+    GM.setValue('bmUserSettings', JSON.stringify(templateManager.userSettings));
+  }
 
   currentLayoutLanguage = normalizeLayoutLanguage(templateManager.getLayoutLanguage?.());
   setMapCommentsEnabled(templateManager.isMapCommentsEnabled());
-  ensureHqTemplateManager();
+  consoleError('[archive bg] isArchiveBackgroundEnabled=', templateManager.isArchiveBackgroundEnabled());
   if (templateManager.isArchiveBackgroundEnabled()) applyArchiveBackground(true);
 
   // load templates after user settings
@@ -4748,9 +4730,11 @@ function observeBlack() {
   }
   let syncQueued = false;
   let anchorRetries = 0; // retries when the paint-panel <h2> anchor isn't rendered yet
+  const smartPlaceEnabled = () => templateManager.userSettings?.smartPlace ?? false;
   const hasObservedControls = () => {
     if (!document.getElementById('BM-zoom-1x')) return false;
     if (!document.getElementById('bm-button-move')) return false;
+    if (smartPlaceEnabled() && !document.getElementById('bm-button-paint')) return false;
     return true;
   };
   const isRelevantObserveBlackNode = (node) => (
@@ -4807,6 +4791,390 @@ function observeBlack() {
         paintPixel.parentNode.appendChild(move); // Adds the move button
       }
 
+      if (smartPlaceEnabled()) {
+        let paint = document.querySelector('#bm-button-paint'); // Tries to find the paint button
+
+        // If the paint button does not exist, we make new ones
+        if (!paint) {
+          const SMART_PLACE_ORDERS = ['nearest', 'ltr', 'rtl', 'ttb', 'btt'];
+          let smartPlaceOrder = templateManager.userSettings?.smartPlaceOrder ?? 'nearest';
+          const SMART_PLACE_STRIDES = [1, 2, 3, 4]; // 1 = paint every pixel; N = checkerboard, 1 of every N
+          let smartPlaceStride = templateManager.userSettings?.smartPlaceStride ?? 1;
+          if (!SMART_PLACE_STRIDES.includes(smartPlaceStride)) smartPlaceStride = 1;
+          let smartPlaceStopped = false;
+          let smartPlacePainting = false; // guards against overlapping paint runs
+          // Tracks painted pixel coords -> timestamp. Entries expire so that pixels
+          // whose click silently failed (misaim, throttling, wrong color) are retried
+          // on a later press instead of being remembered as done forever.
+          const smartPlacePainted = new Map();
+          const SMART_PLACE_PAINTED_TTL = 45000; // ms
+          const smartPlaceStatus = (text) => {
+            try { overlayMain?.handleDisplayStatus?.(text); } catch (_) {}
+          };
+          const wasRecentlyPainted = (key) => {
+            const t = smartPlacePainted.get(key);
+            if (t === undefined) return false;
+            if (Date.now() - t > SMART_PLACE_PAINTED_TTL) { smartPlacePainted.delete(key); return false; }
+            return true;
+          };
+
+          const sortExamplesByOrder = (examples, order, refCoord) => {
+            const toW = ([tileCoord, subCoord]) => [
+              tileCoord[0] * templateManager.tileSize + subCoord[0],
+              tileCoord[1] * templateManager.tileSize + subCoord[1],
+            ];
+            if (order === 'ltr') {
+              return examples.sort(([, c1], [, c2]) => toW(c1)[0] - toW(c2)[0]);
+            } else if (order === 'rtl') {
+              return examples.sort(([, c1], [, c2]) => toW(c2)[0] - toW(c1)[0]);
+            } else if (order === 'ttb') {
+              return examples.sort(([, c1], [, c2]) => toW(c1)[1] - toW(c2)[1]);
+            } else if (order === 'btt') {
+              return examples.sort(([, c1], [, c2]) => toW(c2)[1] - toW(c1)[1]);
+            }
+            // nearest (default)
+            const ref = toW(refCoord);
+            return examples.sort(([, c1], [, c2]) => {
+              const w1 = toW(c1), w2 = toW(c2);
+              const d1 = Math.sqrt((w1[0]-ref[0])**2 + (w1[1]-ref[1])**2) * (1 + Math.random() * 0.05);
+              const d2 = Math.sqrt((w2[0]-ref[0])**2 + (w2[1]-ref[1])**2) * (1 + Math.random() * 0.05);
+              return d1 - d2;
+            });
+          };
+
+          const collectExamples = () => {
+            const result = [];
+            try {
+              const toggleStatus = new Set(templateManager.getDisplayedColorsSorted());
+              const bgMode = templateManager.isBackgroundModeEnabled();
+              for (const stats of templateManager.tileProgress.values()) {
+                if (!stats?.palette) continue;
+                Object.entries(stats.palette).forEach(([colorKey, content]) => {
+                  if (!toggleStatus.has(colorKey)) return;
+                  const colorId = rgbToMeta.get(colorKey)?.id;
+                  if (!colorId) return;
+                  if (!templateManager.isColorUnlocked(colorId)) return;
+                  const examples = bgMode && Array.isArray(content.examplesUnpainted) && content.examplesUnpainted.length > 0
+                    ? content.examplesUnpainted
+                    : content.examplesEnabled;
+                  if (!Array.isArray(examples)) return;
+                  for (const example of examples) result.push([colorId, example]);
+                });
+              }
+            } catch (e) {
+              console.warn('[BM smartPlace] collectExamples failed:', e);
+            }
+            return result;
+          };
+
+          const paint_onclick = function() {
+            if (smartPlacePainting) { smartPlaceStatus('Smart Place: already painting…'); return; }
+            const currentCharges = Math.floor(apiManager.getCurrentCharges());
+            if (!Number.isFinite(currentCharges) || currentCharges <= 0) {
+              smartPlaceStatus('Smart Place: no charges available');
+              return;
+            }
+            smartPlaceStopped = false;
+            smartPlacePainting = true;
+            // Safety net: never leave the guard stuck if a path returns without clearing it.
+            const releaseGuard = () => { smartPlacePainting = false; };
+
+            // Use already up-to-date tileProgress (updated on every tile load)
+            setTimeout(() => {
+             try {
+              let examples = collectExamples();
+              let exampleCoord;
+              if (examples.length === 0) { smartPlaceStatus('Smart Place: nothing to paint (check enabled/unlocked colors)'); releaseGuard(); return; }
+              try {
+                const geoCoords = getCenterGeoCoords();
+                const tileCoords = coordsGeoCoordsToTileCoords(geoCoords[0], geoCoords[1]);
+                exampleCoord = [
+                  tileCoords[0][0] * templateManager.tileSize + tileCoords[1][0],
+                  tileCoords[0][1] * templateManager.tileSize + tileCoords[1][1],
+                ];
+              } catch {
+                const example = examples[Math.floor(Math.random() * examples.length)][1];
+                exampleCoord = [
+                  example[0][0] * templateManager.tileSize + example[1][0],
+                  example[0][1] * templateManager.tileSize + example[1][1],
+                ];
+              }
+
+              const canvas = document.querySelector("canvas.maplibregl-canvas");
+              if (!canvas) { smartPlaceStatus('Smart Place: map canvas not found'); releaseGuard(); return; }
+              // Always filter to only on-screen pixels (no teleport, coords are relative to current view)
+              {
+                const _pxPerW = !isMapTilerLoaded() ? (512 * 2 ** (13 + 0)) / 2048000 : getPixelPerWplacePixel();
+                // Zoom guard: when zoomed out each wplace pixel is sub-pixel on screen, so
+                // every synthetic click lands within the same tiny area and wplace can't
+                // resolve individual pixels — the loop "runs" but nothing is placed. Require
+                // at least ~1 screen px per wplace pixel before dispatching.
+                const MIN_PX_PER_WPLACE = 1;
+                if (isMapTilerLoaded() && (!Number.isFinite(_pxPerW) || _pxPerW < MIN_PX_PER_WPLACE)) {
+                  smartPlaceStatus('Smart Place: zoom in closer to place pixels');
+                  releaseGuard();
+                  return;
+                }
+                examples = examples.filter(([, coord1]) => {
+                  const wx = coord1[0][0] * templateManager.tileSize + coord1[1][0];
+                  const wy = coord1[0][1] * templateManager.tileSize + coord1[1][1];
+                  return (
+                    Math.abs(wx - exampleCoord[0]) * _pxPerW * 2 < canvas.offsetWidth &&
+                    Math.abs(wy - exampleCoord[1]) * _pxPerW * 2 < canvas.offsetHeight
+                  );
+                });
+                if (examples.length === 0) { smartPlaceStatus('Smart Place: no target pixels on screen (pan/zoom to them)'); releaseGuard(); return; }
+              }
+
+              // Skip pixels painted very recently (entries expire, so failed clicks retry)
+              examples = examples.filter(([, coord]) => {
+                const key = coord[0][0] + ',' + coord[0][1] + ',' + coord[1][0] + ',' + coord[1][1];
+                return !wasRecentlyPainted(key);
+              });
+              if (examples.length === 0) { smartPlaceStatus('Smart Place: on-screen pixels already painted (press ↺ to retry)'); releaseGuard(); return; }
+
+              // Stride/checkerboard mode: only paint 1 of every N pixels.
+              // Keeps pixels where (worldX + worldY) % N === 0 (diagonal checkerboard).
+              if (smartPlaceStride > 1) {
+                examples = examples.filter(([, coord]) => {
+                  const wx = coord[0][0] * templateManager.tileSize + coord[1][0];
+                  const wy = coord[0][1] * templateManager.tileSize + coord[1][1];
+                  return (((wx + wy) % smartPlaceStride) + smartPlaceStride) % smartPlaceStride === 0;
+                });
+                if (examples.length === 0) { smartPlaceStatus('Smart Place: no pixels match the density (▦) filter'); releaseGuard(); return; }
+              }
+
+              const refTile = examples[0][1];
+              examples = sortExamplesByOrder(examples, smartPlaceOrder, refTile);
+              if (examples.length > currentCharges) {
+                examples = examples.slice(0, currentCharges);
+              }
+
+              // Use current camera position as reference — no teleport
+              const geoCoords = getCenterGeoCoords();
+              // Use the non-truncated (fractional) camera center as the reference.
+              // Truncating it made every click land at world coord `pixelIndex + frac(center)`,
+              // which sits on a pixel boundary whenever the camera's fractional center is near
+              // 0 or 1 — the browser then hit-tests the neighbouring pixel, so pixels landed
+              // one off until the map was nudged. Keeping the fraction + aiming at the pixel
+              // centre (exW + 0.5 below) keeps every click half a pixel from any boundary.
+              const refCoord = coordsGeoCoordsToTileCoords(geoCoords[0], geoCoords[1], false);
+              const wplaceBad = !isMapTilerLoaded();
+              const humanize = templateManager.userSettings?.smartPlaceHumanize ?? false;
+              setTimeout(() => {
+              try {
+              const pxPerW = wplaceBad ? (512 * 2 ** (13 + 0)) / 2048000 : getPixelPerWplacePixel(); // teleport zoom is 13
+              const refW = [
+                refCoord[0][0] * templateManager.tileSize + refCoord[1][0],
+                refCoord[0][1] * templateManager.tileSize + refCoord[1][1],
+              ]; // reference Wplace coord
+              const cliC = [canvas.offsetWidth / 2, canvas.offsetHeight / 2]; // reference canvas coord
+
+              const markPainted = (coord) => {
+                const key = coord[0][0] + ',' + coord[0][1] + ',' + coord[1][0] + ',' + coord[1][1];
+                smartPlacePainted.set(key, Date.now());
+              };
+              const clickAt = (cx, cy) => canvas.dispatchEvent(new MouseEvent("click", {
+                bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0,
+              }));
+              // Slight random offset around the pixel centre, in screen space but scaled to
+              // the current zoom so it stays within ±0.25 of a wplace pixel (never reaching a
+              // boundary). Applied on every placement, including the bulk/"nuke" path.
+              const jitter = () => (Math.random() - 0.5) * 0.5 * pxPerW;
+
+              const total = examples.length;
+              const placeExample = (example) => {
+                const exW = [
+                  example[0][0] * templateManager.tileSize + example[1][0],
+                  example[0][1] * templateManager.tileSize + example[1][1],
+                ];
+                clickAt(
+                  cliC[0] + (exW[0] + 0.5 - refW[0]) * pxPerW + jitter(),
+                  cliC[1] + (exW[1] + 0.5 - refW[1]) * pxPerW + jitter(),
+                );
+                markPainted(example);
+              };
+              smartPlaceStatus('Smart Place: painting ' + total + ' pixel' + (total === 1 ? '' : 's') + '…');
+
+              if (humanize) {
+                // Humanized: paced asynchronously with per-click delays + a settle after
+                // each colour switch, so it looks organic.
+                let currentSegmentColorId = null;
+                const dispatchOne = (i) => {
+                  if (smartPlaceStopped) { releaseGuard(); smartPlaceStatus('Smart Place: stopped'); return; }
+                  if (i >= examples.length) { releaseGuard(); smartPlaceStatus('Smart Place: placed ' + total + ' pixel' + (total === 1 ? '' : 's')); return; }
+                  const [colorId, example] = examples[i];
+                  const doClick = () => {
+                    placeExample(example);
+                    setTimeout(() => dispatchOne(i + 1), getHumanizeDelay());
+                  };
+                  if (currentSegmentColorId !== colorId) {
+                    const colorBtn = document.getElementById("color-" + colorId);
+                    if (!colorBtn) { setTimeout(() => dispatchOne(i + 1), getHumanizeDelay()); return; }
+                    currentSegmentColorId = colorId;
+                    colorBtn.click();
+                    setTimeout(doClick, getHumanizeDelay()); // let the colour selection register first
+                  } else {
+                    doClick();
+                  }
+                };
+                dispatchOne(0);
+              } else {
+                // "Nuke": synchronous bulk placement in one tick — the proven fast path.
+                // wplace only registers the burst reliably when the clicks land together,
+                // so this MUST stay synchronous (do not convert to setTimeout pacing).
+                let currentColorId = null;
+                for (let i = 0; i < examples.length; i++) {
+                  if (smartPlaceStopped) break;
+                  const [colorId, example] = examples[i];
+                  if (currentColorId !== colorId) {
+                    const colorBtn = document.getElementById("color-" + colorId);
+                    if (!colorBtn) continue;
+                    currentColorId = colorId;
+                    colorBtn.click();
+                  }
+                  placeExample(example);
+                }
+                releaseGuard();
+                smartPlaceStatus(smartPlaceStopped ? 'Smart Place: stopped' : 'Smart Place: placed ' + total + ' pixel' + (total === 1 ? '' : 's'));
+              }
+              } catch (e) {
+                console.warn('[BM smartPlace] dispatch failed:', e);
+                smartPlaceStatus('Smart Place: error (see console)');
+                releaseGuard();
+              }
+              }, wplaceBad ? 10000 : 0);
+             } catch (e) {
+              console.warn('[BM smartPlace] paint failed:', e);
+              smartPlaceStatus('Smart Place: error (see console)');
+              releaseGuard();
+             }
+            }, 0);
+          };
+
+          paint = document.createElement('button');
+          paint.id = 'bm-button-paint';
+          paint.textContent = 'Paint';
+          paint.className = 'btn btn-soft';
+          paint.onclick = () => paint_onclick();
+
+          const orderBtn = document.createElement('button');
+          orderBtn.id = 'bm-button-paint-order';
+          orderBtn.className = 'btn btn-soft';
+          orderBtn.title = 'Paint order';
+          const orderLabels = { nearest: '⊙', ltr: '→', rtl: '←', ttb: '↓', btt: '↑' };
+          orderBtn.textContent = orderLabels[smartPlaceOrder] ?? '⊙';
+          orderBtn.onclick = () => {
+            const idx = SMART_PLACE_ORDERS.indexOf(smartPlaceOrder);
+            smartPlaceOrder = SMART_PLACE_ORDERS[(idx + 1) % SMART_PLACE_ORDERS.length];
+            orderBtn.textContent = orderLabels[smartPlaceOrder];
+            templateManager.userSettings.smartPlaceOrder = smartPlaceOrder;
+            GM.setValue('bmUserSettings', JSON.stringify(templateManager.userSettings));
+          };
+
+          const strideBtn = document.createElement('button');
+          strideBtn.id = 'bm-button-paint-stride';
+          strideBtn.className = 'btn btn-soft';
+          strideBtn.title = 'Paint density: 1 = every pixel, 2/3/4 = only 1 of every N (checkerboard)';
+          const strideLabel = (n) => n === 1 ? '▦1' : '▦' + n;
+          strideBtn.textContent = strideLabel(smartPlaceStride);
+          strideBtn.onclick = () => {
+            const idx = SMART_PLACE_STRIDES.indexOf(smartPlaceStride);
+            smartPlaceStride = SMART_PLACE_STRIDES[(idx + 1) % SMART_PLACE_STRIDES.length];
+            strideBtn.textContent = strideLabel(smartPlaceStride);
+            templateManager.userSettings.smartPlaceStride = smartPlaceStride;
+            GM.setValue('bmUserSettings', JSON.stringify(templateManager.userSettings));
+          };
+
+          let humanizeEnabled = templateManager.userSettings?.smartPlaceHumanize ?? false;
+          let humanizeDelayMin = templateManager.userSettings?.smartPlaceDelayMin ?? 10;
+          let humanizeDelayMax = templateManager.userSettings?.smartPlaceDelayMax ?? 30;
+          const getHumanizeDelay = () => humanizeDelayMin + Math.random() * (humanizeDelayMax - humanizeDelayMin);
+
+          const humanizeBtn = document.createElement('button');
+          humanizeBtn.id = 'bm-button-paint-humanize';
+          humanizeBtn.className = 'btn btn-soft';
+          humanizeBtn.title = 'Humanize (delays + jitter)';
+          humanizeBtn.textContent = humanizeEnabled ? '🤖off' : '🤖';
+          humanizeBtn.onclick = () => {
+            humanizeEnabled = !humanizeEnabled;
+            humanizeBtn.textContent = humanizeEnabled ? '🤖off' : '🤖';
+            templateManager.userSettings.smartPlaceHumanize = humanizeEnabled;
+            GM.setValue('bmUserSettings', JSON.stringify(templateManager.userSettings));
+          };
+
+          const delayMinInput = document.createElement('input');
+          delayMinInput.type = 'number';
+          delayMinInput.value = humanizeDelayMin;
+          delayMinInput.min = 0;
+          delayMinInput.id = 'bm-input-paint-delay-min';
+          delayMinInput.title = 'Min delay (ms)';
+          delayMinInput.style.cssText = 'width:48px;font-size:small;';
+          delayMinInput.onchange = () => {
+            humanizeDelayMin = Math.max(0, Number(delayMinInput.value) || 0);
+            templateManager.userSettings.smartPlaceDelayMin = humanizeDelayMin;
+            GM.setValue('bmUserSettings', JSON.stringify(templateManager.userSettings));
+          };
+
+          const delayMaxInput = document.createElement('input');
+          delayMaxInput.type = 'number';
+          delayMaxInput.value = humanizeDelayMax;
+          delayMaxInput.min = 0;
+          delayMaxInput.id = 'bm-input-paint-delay-max';
+          delayMaxInput.title = 'Max delay (ms)';
+          delayMaxInput.style.cssText = 'width:48px;font-size:small;';
+          delayMaxInput.onchange = () => {
+            humanizeDelayMax = Math.max(0, Number(delayMaxInput.value) || 0);
+            templateManager.userSettings.smartPlaceDelayMax = humanizeDelayMax;
+            GM.setValue('bmUserSettings', JSON.stringify(templateManager.userSettings));
+          };
+
+          // Attempts to find the "Paint Pixel" element for anchoring
+          const paintPixel = black.parentNode.parentNode.parentNode.parentNode.querySelector('h2');
+          if (!paintPixel || !paintPixel.parentNode) {
+            if (anchorRetries++ < 30) setTimeout(queueObserveBlackSync, 100);
+            return;
+          }
+          anchorRetries = 0;
+
+          const stopBtn = document.createElement('button');
+          stopBtn.id = 'bm-button-paint-stop';
+          stopBtn.className = 'btn btn-soft';
+          stopBtn.title = 'Stop painting';
+          stopBtn.textContent = '■';
+          stopBtn.onclick = () => { smartPlaceStopped = true; };
+
+          const clearBtn = document.createElement('button');
+          clearBtn.id = 'bm-button-paint-clear';
+          clearBtn.className = 'btn btn-soft';
+          clearBtn.title = 'Clear painted pixels memory (start fresh)';
+          clearBtn.textContent = '↺';
+          clearBtn.onclick = () => { smartPlacePainted.clear(); };
+
+          // Tag every smart-place control with a shared marker class + accent styling
+          // so the whole group is easy to locate/select in the DOM (e.g. via
+          // `document.querySelectorAll('.bm-smartplace-ctl')`).
+          const smartPlaceControls = [
+            paint, orderBtn, strideBtn, humanizeBtn,
+            delayMinInput, delayMaxInput, stopBtn, clearBtn,
+          ];
+          for (const ctl of smartPlaceControls) {
+            ctl.classList.add('bm-smartplace-ctl');
+            ctl.dataset.bmSmartplace = '1';
+            ctl.style.outline = '1px solid rgba(129, 140, 248, 0.9)';
+            ctl.style.outlineOffset = '1px';
+          }
+
+          paintPixel.parentNode?.appendChild(paint);
+          paintPixel.parentNode?.appendChild(orderBtn);
+          paintPixel.parentNode?.appendChild(strideBtn);
+          paintPixel.parentNode?.appendChild(humanizeBtn);
+          paintPixel.parentNode?.appendChild(delayMinInput);
+          paintPixel.parentNode?.appendChild(delayMaxInput);
+          paintPixel.parentNode?.appendChild(stopBtn);
+          paintPixel.parentNode?.appendChild(clearBtn);
+        }
+      };
 
       // Hook color change to force refresh
       Array.from(black.parentNode.parentNode.getElementsByTagName('button')).forEach((button) => {
@@ -5105,9 +5473,6 @@ function clickElementLikeUser(element) {
   }
 }
 
-/** Smallest number of colour swatches that identifies a palette container. */
-const MIN_PALETTE_SWATCHES = 8;
-
 function getPaintPaletteRoot() {
   const headings = Array.from(document.querySelectorAll('h1, h2, h3, [role="heading"]'))
     .filter((heading) => heading instanceof HTMLElement)
@@ -5119,40 +5484,7 @@ function getPaintPaletteRoot() {
       return root;
     }
   }
-  return getPaintPaletteRootFromSwatches();
-}
-
-/** Locates the paint palette by its colour swatches.
- *
- * The heading lookup depends on wplace's copy ("Paint pixel") and on the
- * `.rounded-t-box` class, both of which move with their UI — when either
- * changes, the palette is open but undetectable, and opening paint mode fails
- * with "Paint palette did not open." The `#color-<id>` swatch ids are far more
- * stable: colour selection already clicks them by id, so anything that breaks
- * them breaks painting outright.
- *
- * Climbs from the first visible swatch to the nearest ancestor holding most of
- * them, preferring one that also contains the palette-expand row so
- * isExtendedPaintPaletteOpen() and the expand-button lookup keep working
- * against the returned element.
- * @returns {HTMLElement|null} The palette root, or null if not open.
- */
-function getPaintPaletteRootFromSwatches() {
-  const swatches = Array.from(document.querySelectorAll('[id^="color-"]'))
-    .filter((swatch) => swatch instanceof HTMLElement)
-    .filter((swatch) => isElementActuallyVisible(swatch));
-  if (swatches.length < MIN_PALETTE_SWATCHES) return null;
-
-  let candidate = null;
-  let node = swatches[0];
-  for (let depth = 0; depth < 10 && node instanceof HTMLElement; depth++, node = node.parentElement) {
-    if (!isElementActuallyVisible(node)) continue;
-    if (node.querySelectorAll('[id^="color-"]').length < MIN_PALETTE_SWATCHES) continue;
-    candidate = node;
-    if (node.querySelector('div.relative.h-12')) break;
-  }
-  if (!candidate) return null;
-  return candidate.closest('.rounded-t-box') ?? candidate;
+  return null;
 }
 
 function isExtendedPaintPaletteOpen(root = getPaintPaletteRoot()) {
@@ -6878,6 +7210,7 @@ async function buildOverlayMain() {
               instance.updateInnerHTML('bm-input-ty', emptyIfUndefined(coords?.[1]));
               instance.updateInnerHTML('bm-input-px', emptyIfUndefined(coords?.[2]));
               instance.updateInnerHTML('bm-input-py', emptyIfUndefined(coords?.[3]));
+              apiManager.updateDownloadButton();
               persistCoords();
             }
           }
@@ -6910,26 +7243,27 @@ async function buildOverlayMain() {
               coords[i].value = splitText[i]; //add the split vales
             }
 
+            apiManager.updateDownloadButton();
             persistCoords();
 
             event.preventDefault(); //prevent the pasting of the original paste that would overide the split value
           })
-          const handler = () => persistCoords();
+          const handler = () => (apiManager.updateDownloadButton(), persistCoords());
           input.addEventListener('input', handler);
           input.addEventListener('change', handler);
         }).buildElement()
         .addInput({'type': 'number', 'id': 'bm-input-ty', 'placeholder': t('coords.placeholder.ty'), 'min': 0, 'max': 2047, 'step': 1, 'required': true, 'value': (savedCoords.ty ?? '')}, (instance, input) => {
-          const handler = () => persistCoords();
+          const handler = () => (apiManager.updateDownloadButton(), persistCoords());
           input.addEventListener('input', handler);
           input.addEventListener('change', handler);
         }).buildElement()
         .addInput({'type': 'number', 'id': 'bm-input-px', 'placeholder': t('coords.placeholder.px'), 'min': 0, 'max': 2047, 'step': 1, 'required': true, 'value': (savedCoords.px ?? '')}, (instance, input) => {
-          const handler = () => persistCoords();
+          const handler = () => (apiManager.updateDownloadButton(), persistCoords());
           input.addEventListener('input', handler);
           input.addEventListener('change', handler);
         }).buildElement()
         .addInput({'type': 'number', 'id': 'bm-input-py', 'placeholder': t('coords.placeholder.py'), 'min': 0, 'max': 2047, 'step': 1, 'required': true, 'value': (savedCoords.py ?? '')}, (instance, input) => {
-          const handler = () => persistCoords();
+          const handler = () => (apiManager.updateDownloadButton(), persistCoords());
           input.addEventListener('input', handler);
           input.addEventListener('change', handler);
         }).buildElement()
@@ -7151,6 +7485,7 @@ async function buildOverlayMain() {
                     if (Number.isFinite(Number(textTemplate.previewPixelY))) {
                       coordPxY.value = String(normalizePreviewTilePixel(textTemplate.previewPixelY));
                     }
+                    apiManager.updateDownloadButton();
                     persistCoords();
                   } else if (createMode === TEMPLATE_CREATE_MODE_RUSSIAN_FLAG) {
                     const flagTemplate = await openRussianFlagTemplateBuilder({
@@ -7180,6 +7515,7 @@ async function buildOverlayMain() {
                       coordTlY.value = String(Number(flagTemplate.createCoords[1]) || 0);
                       coordPxX.value = String(normalizePreviewTilePixel(flagTemplate.createCoords[2]));
                       coordPxY.value = String(normalizePreviewTilePixel(flagTemplate.createCoords[3]));
+                      apiManager.updateDownloadButton();
                       persistCoords();
                     }
                     templateName = String(flagTemplate.templateName || '').trim() || buildRussianFlagTemplateName({
@@ -7543,6 +7879,7 @@ async function buildOverlayMain() {
     ty.value = String(normalized[1]);
     px.value = String(normalized[2]);
     py.value = String(normalized[3]);
+    apiManager.updateDownloadButton();
     persistCoords();
     return true;
   };
@@ -9440,5 +9777,10 @@ async function buildOverlayMain() {
     } catch (_) {}
   }, 0);
 
+  unsafeWindow.bmEnableSmartPlace = async () => {
+    templateManager.userSettings.smartPlace = true;
+    await GM.setValue('bmUserSettings', JSON.stringify(templateManager.userSettings));
+    console.log('[BM] smartPlace enabled. Reload to apply.');
+  };
 
 }

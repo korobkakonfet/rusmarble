@@ -354,5 +354,14 @@
   "bm-input-paint-delay-min": "bm-7e",
   "bm-input-paint-delay-max": "bm-7f",
   "bm-button-paint-fill": "bm-8q",
-  "bm-smartplace-ctl": "bm-9p"
+  "bm-smartplace-ctl": "bm-9p",
+  "bm-button-paint-jump": "bm-8m",
+  "bm-smartplace": "bm-ak",
+  "bm-hq-overlay": "bm-a8",
+  "bm-hq-inline": "bm-ah",
+  "bm-hq-panel": "bm-aw",
+  "bm-hq-file": "bm-aE",
+  "bm-hq-body": "bm-aF",
+  "bm-hq-row": "bm-aK",
+  "bm-hq-remote-names": "bm-8P"
 }

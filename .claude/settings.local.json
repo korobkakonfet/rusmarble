@@ -41,7 +41,23 @@
       "Bash(awk -F: '$2 < 800 && $2 > 570')",
       "Bash(npm ci *)",
       "Bash(echo \"exit: $?\")",
-      "Bash(xargs git log -1 --oneline)"
+      "Bash(xargs git log -1 --oneline)",
+      "Bash(rtk pip *)",
+      "Bash(git filter-repo *)",
+      "Bash(chmod +x git-filter-repo)",
+      "Bash(./git-filter-repo --version)",
+      "Bash(rtk proxy *)",
+      "Bash(git clone *)",
+      "Bash(git -C /tmp/claude-1000/-mnt-c-Users-sashak-WebstormProjects-Wplace-BlueMarble-Userscripts/18d17a36-1656-4059-b6d8-b3c50b7203ee/scratchpad/repo-backup.git rev-parse HEAD)",
+      "Bash(git grep *)",
+      "Bash(git apply *)",
+      "Bash(git check-ignore *)",
+      "Bash(git -C /mnt/c/Users/sashak/WebstormProjects/Wplace-BlueMarble-Userscripts ls-files)",
+      "Bash(npm run *)",
+      "Bash(echo \"patch applies to HEAD: $\\(git apply -R --check experimental.local.patch && echo 'yes \\(reverse ok\\)'\\)\")",
+      "Bash(awk '{print $5, $9}')",
+      "Bash(rtk diff *)",
+      "Bash(echo \"exit=$?\")"
     ]
   }
 }
