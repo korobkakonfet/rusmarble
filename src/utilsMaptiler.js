@@ -977,11 +977,23 @@ export function panMap(offset) {
 const ARCHIVE_BACKGROUND_LAYER_ID = 'bm-archive-background';
 const ARCHIVE_PROTOCOL = 'wpa'; // custom MapLibre protocol — not prefixed bm- to avoid CSS mangler
 let archiveProtocolRegistered = false;
+let archiveBgRestoreRegistered = false;
+/** Last source tile URL applied, so the styledata handler can rebuild the layer after
+ * wplace replaces the map style. Null while the background is disabled.
+ * @since 0.87.71
+ */
+let archiveBgActiveTileUrl = null;
 /** The archive serves a standard z0-11 XYZ pyramid with 512px tiles (same config the
  * wplace.eralyon.net viewer itself uses), unlike wplace's own single-zoom art layer.
  * @since 0.87.70
  */
 const ARCHIVE_MAX_ZOOM = 11;
+/** Above this map zoom the live canvas is what matters, so the archive layer stops drawing
+ * entirely — MapLibre renders a layer only while `zoom < maxzoom`. Below it wplace shows no
+ * live canvas at all, which is where the archive background is actually useful.
+ * @since 0.87.71
+ */
+const ARCHIVE_BACKGROUND_LAYER_MAX_ZOOM = 10.603287908412021;
 const ARCHIVE_TILE_SIZE = 512;
 
 /** Fetch one tile through GM_xmlhttpRequest, resolving to null on any non-200 / failure.
@@ -1029,9 +1041,14 @@ async function mergeArchiveTiles(baseBuffer, diffBuffer) {
 }
 
 /** Resolve one archive tile URL, merging base + diff versions when needed.
+ *
+ * Used by both tile paths: the MapLibre protocol handler (when `addProtocol` is reachable)
+ * and the GM_xmlhttpRequest proxy in main.js that serves the plain-https fallback. Archive
+ * versions like `v82.097` ship only changed pixels, so skipping this merge renders a nearly
+ * empty canvas.
  * @since 0.87.70
  */
-async function loadArchiveTile(url) {
+export async function loadArchiveTile(url) {
   // .../tiles/<version>/<z>/<x>/<y>.png — a version containing a dot is a diff on its base.
   const match = url.match(/\/tiles\/([^/]+)\/\d+\/\d+\/\d+\.png/);
   const version = match?.[1] || '';
@@ -1054,6 +1071,85 @@ async function loadArchiveTile(url) {
   return await mergeArchiveTiles(baseBuffer, diffBuffer);
 }
 
+/** Resolve the layer the archive background must be inserted before, so it renders *above*
+ * wplace's live canvas but still below BlueMarble's own template/error overlays and the hover
+ * layer. At low zoom `pixel-art-layer` is absent entirely — there the archive is simply drawn
+ * under the BM overlays, or on top if none exist yet.
+ * @since 0.87.71
+ */
+function findArchiveBgBeforeLayer(map) {
+  const layers = map['getLayersOrder']?.() ?? [];
+  const isAboveArchive = (layer) => layer.startsWith('BM-') || layer.startsWith('pixel-hover');
+  const artIdx = layers.indexOf('pixel-art-layer');
+  const searchFrom = artIdx >= 0 ? artIdx + 1 : 0;
+  return layers.slice(searchFrom).find(isAboveArchive);
+}
+
+/** (Re)create the archive source + layer for a tile URL. Recreates rather than calling
+ * `setTiles` when the URL changed, because `setTiles` leaves already-rendered tiles of the
+ * previous archive version on screen.
+ * @since 0.87.71
+ */
+function addArchiveBgLayer(map, sourceTileUrl) {
+  const id = ARCHIVE_BACKGROUND_LAYER_ID;
+  const existing = map['getSource'](id);
+  const urlChanged = existing && existing['tiles']?.[0] !== sourceTileUrl;
+
+  if (!existing || urlChanged) {
+    if (existing) {
+      if (map['getLayer'](id)) map['removeLayer'](id);
+      map['removeSource'](id);
+    }
+    map['addSource'](id, {
+      'type': 'raster',
+      'tiles': [sourceTileUrl],
+      'minzoom': 0,
+      'maxzoom': ARCHIVE_MAX_ZOOM,
+      'tileSize': ARCHIVE_TILE_SIZE,
+    });
+  }
+
+  const beforeLayer = findArchiveBgBeforeLayer(map);
+  if (!map['getLayer'](id)) {
+    map['addLayer']({
+      'id': id,
+      'type': 'raster',
+      'source': id,
+      'minzoom': 0,
+      'maxzoom': ARCHIVE_BACKGROUND_LAYER_MAX_ZOOM,
+      'paint': {
+        'raster-resampling': 'nearest',
+        'raster-opacity': 1,
+      },
+    }, beforeLayer);
+  } else {
+    // A layer that survived a style rebuild may predate the zoom cap — reassert it.
+    map['setLayerZoomRange']?.(id, 0, ARCHIVE_BACKGROUND_LAYER_MAX_ZOOM);
+    // Layer survived but may have drifted below pixel-art-layer after a style rebuild.
+    const order = map['getLayersOrder']?.() ?? [];
+    const artIdx = order.indexOf('pixel-art-layer');
+    if (artIdx >= 0 && order.indexOf(id) < artIdx) map['moveLayer'](id, beforeLayer);
+  }
+  map['setLayoutProperty'](id, 'visibility', 'visible');
+}
+
+/** wplace rebuilds the map style (dropping every custom source/layer) on theme and locale
+ * changes; mirror the bmCanvas restore handler so the archive background comes back.
+ * @since 0.87.71
+ */
+function registerArchiveBgRestoreOnStyleChange(map) {
+  if (archiveBgRestoreRegistered) return;
+  archiveBgRestoreRegistered = true;
+  map['on']('styledata', () => {
+    if (!archiveBgActiveTileUrl) return;
+    try {
+      addArchiveBgLayer(map, archiveBgActiveTileUrl);
+    } catch (err) {
+      consoleWarn('[archive bg] restore after style change failed:', err?.message || err);
+    }
+  });
+}
+
 /**
  * Apply the archive background raster layer directly to an already-resolved map instance.
  * The caller is responsible for obtaining the map (e.g. via resolveTemplateOverlayMapInstance).
@@ -1065,6 +1161,7 @@ export function applyArchiveBgLayerToMap(map, tileUrl) {
   const id = ARCHIVE_BACKGROUND_LAYER_ID;
   try {
     if (!tileUrl) {
+      archiveBgActiveTileUrl = null;
       if (map['getLayer'](id)) map['setLayoutProperty'](id, 'visibility', 'none');
       return;
     }
@@ -1093,37 +1190,9 @@ export function applyArchiveBgLayerToMap(map, tileUrl) {
       ? tileUrl.replace('https://', ARCHIVE_PROTOCOL + '://')
       : tileUrl;
 
-    const existing = map['getSource'](id);
-    if (existing && existing['setTiles']) {
-      existing['setTiles']([sourceTileUrl]);
-    } else {
-      if (existing) {
-        if (map['getLayer'](id)) map['removeLayer'](id);
-        map['removeSource'](id);
-      }
-      map['addSource'](id, {
-        'type': 'raster',
-        'tiles': [sourceTileUrl],
-        'minzoom': 0,
-        'maxzoom': ARCHIVE_MAX_ZOOM,
-        'tileSize': ARCHIVE_TILE_SIZE,
-      });
-    }
-
-    if (!map['getLayer'](id)) {
-      const layers = map['getLayersOrder']?.() ?? [];
-      const beforeLayer = layers.find(l => l === 'pixel-art-layer');
-      map['addLayer']({
-        'id': id,
-        'type': 'raster',
-        'source': id,
-        'paint': {
-          'raster-resampling': 'nearest',
-          'raster-opacity': 1,
-        },
-      }, beforeLayer);
-    }
-    map['setLayoutProperty'](id, 'visibility', 'visible');
+    archiveBgActiveTileUrl = sourceTileUrl;
+    registerArchiveBgRestoreOnStyleChange(map);
+    addArchiveBgLayer(map, sourceTileUrl);
   } catch (err) {
     consoleError('[archive bg] ERROR:', err?.message || err);
   }

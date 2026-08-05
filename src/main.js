@@ -18,7 +18,7 @@ import { createArchiveTemplateUi } from './archiveTemplateUi.js';
 import { layoutLanguageOptions, normalizeLayoutLanguage, translateLayout, getLayoutThemeLabel as getLocalizedLayoutThemeLabel, getTemplateDisplayLabel as getLocalizedTemplateDisplayLabel, getTemplateCreateModeLabel, getChatBanTypeLabel, getColorSortLabel } from './layoutI18n.js';
 import { encodeChunkSampleBytes } from './templateChunkUtils.js';
 import { consoleLog, consoleWarn, consoleError, isDebugLoggingEnabled, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels } from './utils.js';
-import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getCurrentTileSize, setForcedTileRefreshSuppressed, applyArchiveBgLayerToMap, setTemplateSortIDLayersOpacity, registerBmCanvasRestoreOnStyleChange} from './utilsMaptiler.js';
+import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getCurrentTileSize, setForcedTileRefreshSuppressed, applyArchiveBgLayerToMap, loadArchiveTile, setTemplateSortIDLayersOpacity, registerBmCanvasRestoreOnStyleChange} from './utilsMaptiler.js';
 // import { getCenterGeoCoords, addTemplate } from './utilsMaptiler.js';
 
 const name = GM_info.script.name.toString(); // Name of userscript
@@ -1533,6 +1533,12 @@ function setMapCommentsEnabled(enabled) {
 }
 
 let cachedArchiveBackgroundVersion = null;
+let cachedArchiveBackgroundVersionAt = 0;
+/** The archive publishes a new version once a day; re-check periodically so long-lived
+ * tabs don't stay pinned to the version resolved at page load.
+ * @since 0.87.71
+ */
+const ARCHIVE_VERSION_CACHE_MS = 30 * 60 * 1000;
 
 function gmRequestWithTimeout(url, responseType, timeoutMs) {
   return new Promise((resolve, reject) => {
@@ -1551,7 +1557,8 @@ function gmRequestWithTimeout(url, responseType, timeoutMs) {
 }
 
 async function fetchLatestArchiveVersion() {
-  if (cachedArchiveBackgroundVersion) return cachedArchiveBackgroundVersion;
+  const isFresh = Date.now() - cachedArchiveBackgroundVersionAt < ARCHIVE_VERSION_CACHE_MS;
+  if (cachedArchiveBackgroundVersion && isFresh) return cachedArchiveBackgroundVersion;
   try {
     const response = await gmRequestWithTimeout(`${TEMPLATE_ARCHIVE_BASE_URL}/`, 'text', 15000);
     const html = String(response?.responseText || response?.response || '');
@@ -1562,10 +1569,11 @@ async function fetchLatestArchiveVersion() {
     while ((match = entryRegex.exec(listMatch[1])) !== null) lastVersion = String(match[1]).trim();
     if (!lastVersion) { consoleWarn('[archive bg] version list was empty'); return null; }
     cachedArchiveBackgroundVersion = lastVersion;
+    cachedArchiveBackgroundVersionAt = Date.now();
     return lastVersion;
   } catch (err) {
     consoleWarn('[archive bg] failed to fetch archive index:', err?.message || err);
-    return null;
+    return cachedArchiveBackgroundVersion; // fall back to the last known version, if any
   }
 }
 
@@ -4436,33 +4444,21 @@ window.addEventListener('message', (event) => {
   if (!d || d.source !== 'blue-marble' || d.type !== 'bm-archive-tile-req') return;
   const { url, reqId } = d;
   if (!url || !reqId) return;
-  consoleError('[archive tile] GM handler: fetching', url);
-  GM_xmlhttpRequest({
-    method: 'GET',
-    url,
-    responseType: 'arraybuffer',
-    onload: (response) => {
-      consoleError('[archive tile] GM handler: onload status=', response.status, 'byteLength=', response.response?.byteLength, 'url=', url);
-      if (response.status < 200 || response.status >= 300) {
-        window.postMessage({ source: 'blue-marble', type: 'bm-archive-tile-data', reqId, error: true }, '*');
-        return;
-      }
-      const buffer = response.response;
+  // loadArchiveTile resolves the base snapshot + cumulative diff and composites them; a raw
+  // fetch of `url` would return only the diff's handful of changed pixels.
+  loadArchiveTile(url).then(
+    (buffer) => {
       window.postMessage(
         { source: 'blue-marble', type: 'bm-archive-tile-data', reqId, buffer },
         '*',
         buffer instanceof ArrayBuffer ? [buffer] : []
       );
     },
-    onerror: (err) => {
-      consoleError('[archive tile] GM handler: onerror for', url, err);
+    (err) => {
+      consoleWarn('[archive tile] failed for', url, err?.message || err);
       window.postMessage({ source: 'blue-marble', type: 'bm-archive-tile-data', reqId, error: true }, '*');
-    },
-    ontimeout: () => {
-      consoleError('[archive tile] GM handler: ontimeout for', url);
-      window.postMessage({ source: 'blue-marble', type: 'bm-archive-tile-data', reqId, error: true }, '*');
-    },
-  });
+    }
+  );
 });
 
 GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
