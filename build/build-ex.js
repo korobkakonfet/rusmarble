@@ -17,7 +17,7 @@ import { execSync } from 'child_process';
 import { consoleStyle } from './utils.js';
 
 const PATCH_FILE = process.env.PATCH_FILE ?? 'experimental.local.patch';
-const PATCHED_FILES = ['src/main.js', 'src/templateManager.js'];
+const PATCHED_FILES = ['src/main.js', 'src/templateManager.js', 'src/hqTemplate.js'];
 const SMART_OUT = 'dist/RusMarble.exp.user.js';
 const SMART_META_OUT = 'dist/RusMarble.exp.meta.js';
 // The exp build is gitignored, so it can't be served from GitHub raw like the

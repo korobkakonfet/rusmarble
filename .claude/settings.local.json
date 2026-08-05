@@ -57,7 +57,10 @@
       "Bash(echo \"patch applies to HEAD: $\\(git apply -R --check experimental.local.patch && echo 'yes \\(reverse ok\\)'\\)\")",
       "Bash(awk '{print $5, $9}')",
       "Bash(rtk diff *)",
-      "Bash(echo \"exit=$?\")"
+      "Bash(echo \"exit=$?\")",
+      "Read(//tmp/**)",
+      "Bash(curl -s https://wplace.eralyon.net/ -o arch.html)",
+      "Bash(xargs -P 16 -I{} sh -c 'curl -s -m 30 -o js/$\\(basename {}\\) https://wplace.live/{}')"
     ]
   }
 }
