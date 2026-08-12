@@ -197,6 +197,12 @@ export function createTemplateSync({
   let templateFlagSyncInFlight = false;
   let autoSyncPromptKey = null;
   let autoSyncInFlight = false;
+  // Serialization for template import. syncTemplateByName decides whether a template already exists
+  // locally, then awaits several network round trips before creating it — so two overlapping syncs
+  // (auto-update poll + manual sync button) both see "missing" and both create it. These keep any
+  // two imports of the same template, and any two full server syncs, from ever overlapping.
+  let serverSyncChain = Promise.resolve();
+  const inFlightTemplateImports = new Map();
 
   const setTemplateUpdateBadge = (count) => {
     const badge = document.getElementById('bm-sync-templates-badge');
@@ -481,8 +487,15 @@ export function createTemplateSync({
       await dedupeRemoteTemplatesOnce();
       let changedCount = 0;
       const promptPieces = [];
-      for (const stream of getConfiguredStreams()) {
-        const { templateItems } = await fetchTemplateListForStream(stream, 'Template list (poll)');
+      // Same as syncTemplatesFromServer: overlap the per-stream listing requests, then process
+      // the results in order since the handlers below mutate shared template state.
+      const polledListings = await Promise.all(
+        getConfiguredStreams().map(async (stream) => ({
+          stream,
+          templateItems: (await fetchTemplateListForStream(stream, 'Template list (poll)'))?.templateItems,
+        }))
+      );
+      for (const { stream, templateItems } of polledListings) {
         await syncRemoteTemplateFlags(templateItems, stream);
         await pruneMissingRemoteTemplates(templateItems, stream);
         for (const entry of templateItems) {
@@ -615,12 +628,24 @@ export function createTemplateSync({
     const imageUpdatedAt = entryMeta?.['image_updated_at'] ?? null;
     const listOrder = normalizeRemoteOrder(entryMeta?.['order']);
 
-    logSync(`Fetching template meta for "${trimmedName}" from stream "${normalizedStream}"...`, { statusHandler });
-    const metaResponse = await gmRequestWithTimeout(
+    // Meta and image are independent — the image URL only needs the name and stream — so fire
+    // both and let them overlap instead of paying two serial round trips per template.
+    logSync(`Fetching template meta and image for "${trimmedName}" from stream "${normalizedStream}"...`, { statusHandler });
+    const metaRequest = gmRequestWithTimeout(
       getTemplateMetaUrl(trimmedName, normalizedStream),
       "json",
       `Template meta "${trimmedName}" (${normalizedStream})`
     );
+    const imageRequest = gmRequestWithTimeout(
+      getTemplateImageUrl(trimmedName, normalizedStream),
+      "blob",
+      `Template image "${trimmedName}" (${normalizedStream})`
+    );
+    // The meta checks below can throw before the image is awaited; without this the in-flight
+    // image request would surface as an unhandled rejection.
+    imageRequest.catch(() => {});
+
+    const metaResponse = await metaRequest;
     assertResponseOk(metaResponse, `Template meta "${trimmedName}" (${normalizedStream})`);
     const meta = getResponseData(metaResponse, `Template meta "${trimmedName}" (${normalizedStream})`) ?? {};
     const coords = Array.isArray(meta?.['coords']) ? meta['coords'].map(Number) : null;
@@ -636,12 +661,7 @@ export function createTemplateSync({
     const metaOrder = normalizeRemoteOrder(meta?.['order']);
     const order = metaOrder !== null ? metaOrder : listOrder;
 
-    logSync(`Fetching template image for "${trimmedName}" from stream "${normalizedStream}"...`, { statusHandler });
-    const imageResponse = await gmRequestWithTimeout(
-      getTemplateImageUrl(trimmedName, normalizedStream),
-      "blob",
-      `Template image "${trimmedName}" (${normalizedStream})`
-    );
+    const imageResponse = await imageRequest;
     assertResponseOk(imageResponse, `Template image "${trimmedName}" (${normalizedStream})`);
     const imageBlob = imageResponse.response;
     if (!imageBlob) {
@@ -664,7 +684,7 @@ export function createTemplateSync({
     };
   };
 
-  const syncTemplateByName = async ({
+  const runSyncTemplateByName = async ({
     templateName,
     entryMeta = null,
     remoteStream = DEFAULT_TEMPLATE_STREAM,
@@ -767,7 +787,6 @@ export function createTemplateSync({
         payload.file,
         trimmedName,
         payload.coords,
-        templateManager.getAnchor(),
         {
           convertToPalette: true,
           normalizeSamplesToPalette: true,
@@ -833,6 +852,32 @@ export function createTemplateSync({
         onError(errorMessage);
       }
       throw err;
+    }
+  };
+
+  /** Serializing wrapper: one import per (stream, name) at a time.
+   * Concurrent callers await the in-flight import instead of starting a second one, which is what
+   * produced duplicate templates when the auto-update poll and a manual sync overlapped.
+   */
+  const syncTemplateByName = async (options = {}) => {
+    const trimmedName = String(options?.templateName ?? '').trim();
+    if (!trimmedName) return runSyncTemplateByName(options);
+    const normalizedStream = normalizeRemoteStream(
+      options?.entryMeta?.['stream'] ?? options?.remoteStream ?? DEFAULT_TEMPLATE_STREAM
+    );
+    const key = `${normalizedStream}:${trimmedName}`;
+    const pending = inFlightTemplateImports.get(key);
+    if (pending) {
+      // Await the in-flight import, then re-run so this caller's own options (force, UI refresh,
+      // replaceExistingMatches) still apply — by then the existence check sees the imported copy.
+      try { await pending; } catch (_) {}
+    }
+    const run = runSyncTemplateByName(options);
+    inFlightTemplateImports.set(key, run);
+    try {
+      return await run;
+    } finally {
+      if (inFlightTemplateImports.get(key) === run) inFlightTemplateImports.delete(key);
     }
   };
 
@@ -941,7 +986,6 @@ export function createTemplateSync({
         payload.file,
         trimmedName,
         payload.coords,
-        templateManager.getAnchor(),
         {
           convertToPalette: true,
           normalizeSamplesToPalette: true,
@@ -994,7 +1038,7 @@ export function createTemplateSync({
     }
   };
 
-  const syncTemplatesFromServer = async ({
+  const runSyncTemplatesFromServer = async ({
     onStatus,
     onError,
     syncToggleList,
@@ -1010,8 +1054,16 @@ export function createTemplateSync({
       const streams = getConfiguredStreams();
       let importedCount = 0;
       let hasServerTemplates = false;
-      for (const stream of streams) {
-        const { templateItems } = await fetchTemplateListForStream(stream, 'Template list');
+      // Stream listings don't depend on each other — fetch them together rather than one
+      // round trip after another. Template creation below stays sequential because it mutates
+      // shared manager state (sortID allocation, templatesArray).
+      const streamListings = await Promise.all(
+        streams.map(async (stream) => ({
+          stream,
+          templateItems: (await fetchTemplateListForStream(stream, 'Template list'))?.templateItems,
+        }))
+      );
+      for (const { stream, templateItems } of streamListings) {
         if (!Array.isArray(templateItems) || templateItems.length === 0) {
           continue;
         }
@@ -1064,6 +1116,21 @@ export function createTemplateSync({
       }
       throw err;
     }
+  };
+
+  /** Serializing wrapper: full server syncs run one at a time.
+   * Chained rather than dropped, so a manual sync clicked mid-auto-sync still runs (and still
+   * reports its own status) — it just waits its turn, by which point there is nothing left to
+   * import and it finishes immediately.
+   */
+  const syncTemplatesFromServer = async (options = {}) => {
+    const run = serverSyncChain.then(
+      () => runSyncTemplatesFromServer(options),
+      () => runSyncTemplatesFromServer(options)
+    );
+    // Keep the chain alive regardless of this run's outcome; the caller still sees the rejection.
+    serverSyncChain = run.catch(() => {});
+    return run;
   };
 
   const fetchRemoteTemplateNames = async () => {

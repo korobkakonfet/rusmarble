@@ -51,6 +51,7 @@ const renderChunkPixels = ({
   displayedColors,
   includeDefaceCheckerboard,
   enforceTransparentAsDeface,
+  transparentEraseColor,
 }) => {
   const pixels = new Uint8ClampedArray(resultWidth * resultHeight * 4);
   renderSampleDataToImage({
@@ -63,6 +64,7 @@ const renderChunkPixels = ({
     displayedColorSet: cloneDisplayedColorSet(displayedColors),
     includeDefaceCheckerboard,
     enforceTransparentAsDeface,
+    transparentEraseColor,
   });
   return pixels;
 };
@@ -120,7 +122,97 @@ const filterBitmapPixelsJs = ({
   return pixels;
 };
 
+/** Decode a tile PNG straight to pixels inside the worker.
+ * Mirrors createBitmapPreservingPixels: the explicit options keep Chromium variants from
+ * colour-managing the tile differently, which would produce phantom "wrong pixel" counts.
+ */
+const decodeTilePixelsInWorker = async (tileBytes, tileSize) => {
+  const blob = new Blob([tileBytes]);
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(blob, {
+      colorSpaceConversion: 'none',
+      premultiplyAlpha: 'none',
+      imageOrientation: 'none',
+    });
+  } catch (_) {
+    bitmap = await createImageBitmap(blob);
+  }
+  const canvas = new OffscreenCanvas(tileSize, tileSize);
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  context.imageSmoothingEnabled = false;
+  context.clearRect(0, 0, tileSize, tileSize);
+  context.drawImage(bitmap, 0, 0, tileSize, tileSize);
+  bitmap.close();
+  const pixels = context.getImageData(0, 0, tileSize, tileSize).data;
+  canvas.width = 0;
+  canvas.height = 0;
+  return pixels;
+};
+
 const handlers = {
+  /** Count progress for every template chunk that lands on one map tile, in a single call.
+   * Doing all chunks together means the tile's pixels are decoded once and never copied: the
+   * per-chunk variant had to hand the main thread's buffer over by transfer, forcing a fresh
+   * 1MB clone for each additional template on the same tile.
+   * @since 0.87.71
+   */
+  async scanTileProgressBatch(payload) {
+    const tileSize = payload.tileSize;
+    // tileBytes is the encoded PNG — pass it through untouched; coercing it to Uint8ClampedArray
+    // would copy the whole buffer for no reason.
+    const tilePixels = payload.tileBytes
+      ? await decodeTilePixelsInWorker(payload.tileBytes, tileSize)
+      : toUint8Clamped(payload.tilePixels);
+
+    // collectTemplateProgressFromSamples accumulates into these, so sharing them across entries
+    // merges the chunks for free — no cross-entry merge pass needed.
+    const paletteStats = {};
+    const templateStats = {};
+    const displayedColors = cloneDisplayedColorSet(payload.displayedColors);
+    let paintedCount = 0;
+    let wrongCount = 0;
+    let requiredCount = 0;
+    const errorMaps = [];
+
+    for (const entry of (payload.entries || [])) {
+      const sampleData = decodeChunkSampleBuffer(entry.sampleData);
+      if (!sampleData) continue;
+      const errorWidth = Math.max(0, Math.trunc(Number(entry.errorWidth) || 0));
+      const errorHeight = Math.max(0, Math.trunc(Number(entry.errorHeight) || 0));
+      const errorData = entry.includeErrorMap && errorWidth > 0 && errorHeight > 0
+        ? new Uint8ClampedArray(errorWidth * errorHeight * 4)
+        : null;
+
+      const result = collectTemplateProgressFromSamples({
+        sampleData,
+        tilePixels,
+        tileSize,
+        offsetX: entry.offsetX,
+        offsetY: entry.offsetY,
+        tileCoords: payload.tileCoords,
+        templateEnabled: entry.templateEnabled !== false,
+        templateKey: entry.templateKey,
+        paletteStats,
+        templateStats,
+        exampleMax: payload.exampleMax,
+        errorMapOnlyEnabledColors: payload.errorMapOnlyEnabledColors === true,
+        displayedColors,
+        errorData,
+        errorWidth,
+      });
+
+      paintedCount += result.paintedCount || 0;
+      wrongCount += result.wrongCount || 0;
+      requiredCount += result.requiredCount || 0;
+      if (errorData) {
+        errorMaps.push({ tileKey: entry.tileKey, sortID: entry.sortID, errorWidth, errorHeight, errorData });
+      }
+    }
+
+    return { paintedCount, wrongCount, requiredCount, paletteStats, templateStats, errorMaps };
+  },
+
   scanTileProgress(payload) {
     const sampleData = decodeChunkSampleBuffer(payload.sampleData);
     const paletteStats = {};
@@ -184,6 +276,7 @@ const handlers = {
       displayedColors: payload.displayedColors,
       includeDefaceCheckerboard: payload.includeDefaceCheckerboard === true,
       enforceTransparentAsDeface: payload.enforceTransparentAsDeface === true,
+      transparentEraseColor: payload.transparentEraseColor ?? null,
     };
     const results = (payload.chunks ?? []).map((chunk) => {
       const sampleData = decodeChunkSampleBuffer(chunk.sampleData);
@@ -215,6 +308,7 @@ const handlers = {
       displayedColors: payload.displayedColors,
       includeDefaceCheckerboard: payload.includeDefaceCheckerboard === true,
       enforceTransparentAsDeface: payload.enforceTransparentAsDeface === true,
+      transparentEraseColor: payload.transparentEraseColor ?? null,
     };
     const canvas = new OffscreenCanvas(canvasWidth, canvasHeight);
     const ctx = canvas.getContext('2d');
@@ -597,14 +691,15 @@ const handlers = {
   },
 };
 
-self.onmessage = (event) => {
+self.onmessage = async (event) => {
   const { id, type, payload } = event.data || {};
   try {
     const handler = handlers[type];
     if (typeof handler !== 'function') {
       throw new Error(`Unknown template worker message type: ${type}`);
     }
-    const result = handler(payload || {});
+    // Await so handlers that decode images in-worker can be async; sync handlers are unaffected.
+    const result = await handler(payload || {});
     const transferList = [];
     if (result?.errorData instanceof Uint8ClampedArray) {
       transferList.push(result.errorData.buffer);
@@ -627,6 +722,11 @@ self.onmessage = (event) => {
     }
     if (result?.bitmap instanceof ImageBitmap) {
       transferList.push(result.bitmap);
+    }
+    if (Array.isArray(result?.errorMaps)) {
+      result.errorMaps.forEach((entry) => {
+        if (entry?.errorData instanceof Uint8ClampedArray) transferList.push(entry.errorData.buffer);
+      });
     }
     self.postMessage({ id, ok: true, result }, transferList);
   } catch (error) {

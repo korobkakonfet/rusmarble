@@ -44,6 +44,11 @@ class TemplateWorkerManager {
   }
 
   canUseWorkers() {
+    // Escape hatch for diagnosing worker-specific breakage from the page console:
+    //   document.head.__bmDisableWorkers = true  (then pan or toggle a template to re-render)
+    // On document.head, not window — @grant sandboxes the script in its own window, which the
+    // page's console cannot reach.
+    if (typeof document !== 'undefined' && document.head?.['__bmDisableWorkers'] === true) return false;
     if (this.failed) return false;
     if (this.supported === null) {
       this.supported = isTemplateWorkerRuntimeSupported();

@@ -1045,78 +1045,87 @@ span.bm-templatename:hover, a.bm-templatename:focus {
 .bm-template-position-joystick {
   position: fixed;
   z-index: 9106;
-  min-width: 114px;
-  padding: 6px;
+  min-width: 150px;
+  max-width: 220px;
+  padding: 8px;
   border-radius: 8px;
   background: var(--bm-panel-bg);
   color: var(--bm-fg);
-  display: grid;
-  grid-template-columns: repeat(3, 30px);
-  grid-template-rows: auto 30px 30px 30px;
-  gap: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   user-select: none;
 }
 
+.bm-template-position-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .bm-template-position-joystick-hint {
-  grid-column: 1 / 4;
   text-align: center;
   font-size: 9px;
+  line-height: 1.3;
   color: var(--bm-muted);
 }
 
-.bm-template-position-joystick-btn {
-  border: 1px solid var(--bm-glass-border);
+.bm-template-position-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.bm-template-position-actions button {
+  flex: 1;
+  border: 1px solid var(--bm-border-strong);
   border-radius: 6px;
   background: var(--bm-subtle-bg);
   color: var(--bm-fg);
-  padding: 0;
-  margin: 0;
+  font-size: 10px;
+  line-height: 1.2;
+  padding: 3px 5px;
   cursor: pointer;
-  font-size: 13px;
-  line-height: 1;
-  font-family: "Segoe UI Symbol", "Noto Sans Symbols 2", sans-serif;
 }
 
-.bm-template-position-joystick-btn:hover {
-  background: var(--bm-btn-hover);
-  color: var(--bm-btn-text);
+.bm-template-position-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 9105;
+  pointer-events: none;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  transform-origin: top left;
+  will-change: transform, width, height;
+  outline: 1px solid var(--bm-accent-strong, #4a90d9);
+  outline-offset: 0;
 }
 
-.bm-template-position-joystick-btn:active {
-  background: var(--bm-btn-active);
-}
-
-.bm-template-position-joystick-center {
-  grid-column: 2;
-  grid-row: 3;
+.bm-template-drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9107;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--bm-muted);
+  pointer-events: none;
+  background: var(--bm-glass-bg, rgba(0, 0, 0, 0.25));
+  outline: 3px dashed var(--bm-accent-strong, #4a90d9);
+  outline-offset: -12px;
 }
 
-.bm-template-position-joystick-up {
-  grid-column: 2;
-  grid-row: 2;
-  transform: rotate(0deg);
-}
-
-.bm-template-position-joystick-left {
-  grid-column: 1;
-  grid-row: 3;
-  transform: rotate(-90deg);
-}
-
-.bm-template-position-joystick-right {
-  grid-column: 3;
-  grid-row: 3;
-  transform: rotate(90deg);
-}
-
-.bm-template-position-joystick-down {
-  grid-column: 2;
-  grid-row: 4;
-  transform: rotate(180deg);
+.bm-template-drop-card {
+  padding: 12px 18px;
+  border-radius: 10px;
+  background: var(--bm-panel-bg);
+  color: var(--bm-fg);
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
 }
 
 .bm-template-count {
@@ -1264,6 +1273,49 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   text-decoration: none;
   vertical-align: middle;
   cursor: pointer;
+}
+
+/* Inline delete confirmation: replaces the 🗑️ in place, on the same line, so the confirm sits
+   under the cursor without reflowing the row onto a second line. */
+.bm-delete-anchor {
+  display: inline-flex;
+  align-items: center;
+}
+
+.bm-delete-confirm {
+  display: none;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.bm-delete-confirm.bm-delete-confirm-armed {
+  display: inline-flex;
+}
+
+.bm-delete-confirm-yes,
+.bm-delete-confirm-no {
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: 3px;
+}
+
+.bm-delete-confirm-yes {
+  color: #ff6b6b;
+}
+
+.bm-delete-confirm-yes:hover {
+  background: rgba(255, 107, 107, 0.22);
+}
+
+.bm-delete-confirm-no:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+/* Tints the row being deleted so it is obvious which template the confirm belongs to. */
+.bm-template-row-danger {
+  background: rgba(255, 107, 107, 0.12);
+  border-radius: 4px;
 }
 
 .bm-chat-float-toggle:hover {
@@ -1510,8 +1562,15 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   letter-spacing: 0.04em;
 }
 
+#bm-text-template-window .bm-text-template-window-close,
+#bm-flag-template-window .bm-text-template-window-close,
+#bm-remote-template-window .bm-text-template-window-close,
 .bm-text-template-window-close {
   margin-left: auto;
+  display: flex;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
   border: 1px solid var(--bm-border-strong);
   border-radius: 6px;
   width: 22px;
@@ -1520,7 +1579,9 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   padding: 0;
   background: transparent;
   color: var(--bm-muted);
+  font-size: 11px;
   line-height: 1;
+  text-align: center;
   cursor: pointer;
 }
 
@@ -1637,6 +1698,33 @@ span.bm-templatename:hover, a.bm-templatename:focus {
 .bm-flag-template-window-preview {
   overflow: hidden;
   min-height: 260px;
+}
+
+/* The flag builder has far more controls than the text/remote builders. Only the
+   control grid scrolls, so the preview and the action buttons stay fully visible. */
+.bm-flag-template-window .bm-text-template-window-body {
+  overflow: hidden;
+  min-height: 0;
+}
+
+.bm-flag-template-window .bm-text-template-window-controls {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
+}
+
+.bm-flag-template-window .bm-flag-template-window-preview,
+.bm-flag-template-window .bm-flag-template-window-preview-controls,
+.bm-flag-template-window .bm-text-template-window-meta,
+.bm-flag-template-window .bm-text-template-window-error,
+.bm-flag-template-window .bm-text-template-window-actions {
+  flex: 0 0 auto;
+}
+
+.bm-flag-template-window .bm-flag-template-window-preview {
+  height: 260px;
 }
 
 .bm-text-template-window-preview::before {

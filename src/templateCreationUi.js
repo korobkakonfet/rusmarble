@@ -998,8 +998,11 @@ export const createTemplateCreationUi = (deps = {}) => {
       panel.style.height = `${TEMPLATE_FLAG_WINDOW_DEFAULT_H}px`;
       panel.style.minWidth = `${TEMPLATE_FLAG_WINDOW_MIN_W}px`;
       panel.style.minHeight = `${TEMPLATE_FLAG_WINDOW_MIN_H}px`;
-      panel.style.right = '20px';
-      panel.style.bottom = '20px';
+      panel.style.right = 'auto';
+      panel.style.bottom = 'auto';
+      panel.style.left = '0px';
+      panel.style.top = '0px';
+      panel.style.visibility = 'hidden';
 
       const head = document.createElement('div');
       head.className = 'bm-text-template-window-head';
@@ -1445,10 +1448,13 @@ export const createTemplateCreationUi = (deps = {}) => {
       };
       const getCurrentRect = () => syncRectFromPoints({ canonicalize: true });
       const getIgnoreMode = () => normalizeFlagIgnoreMode(ignoreModeSelect.value);
+      let orientationManuallySet = false;
       const getStripeOrientation = () => normalizeFlagStripeOrientation(orientationSelect.value);
       const getVerticalOrder = () => normalizeFlagVerticalOrder(verticalOrderSelect.value);
       const getSelectedStyle = () => getRussianFlagStyle(styleSelect.value);
       const syncOrientationFromRect = (rect) => {
+        // Once the user picks an orientation manually we stop auto-adapting it.
+        if (orientationManuallySet) return getStripeOrientation();
         if (!rect || !Number.isFinite(rect.width) || !Number.isFinite(rect.height)) return null;
         const nextOrientation = rect.height > rect.width
           ? TEMPLATE_FLAG_ORIENTATION_VERTICAL
@@ -2068,6 +2074,7 @@ export const createTemplateCreationUi = (deps = {}) => {
         queuePreviewRender();
       });
       orientationSelect.addEventListener('change', () => {
+        orientationManuallySet = true;
         updateStripeControls();
         updateActionState();
         queuePreviewRender();
@@ -2287,6 +2294,14 @@ export const createTemplateCreationUi = (deps = {}) => {
       });
 
       document.body.appendChild(panel);
+      // Center on screen using the rendered size, so the max-width/max-height
+      // clamps are taken into account.
+      const panelRect = panel.getBoundingClientRect();
+      const centeredLeft = Math.max(8, Math.round((window.innerWidth - panelRect.width) / 2));
+      const centeredTop = Math.max(8, Math.round((window.innerHeight - panelRect.height) / 2));
+      panel.style.left = `${centeredLeft}px`;
+      panel.style.top = `${centeredTop}px`;
+      panel.style.visibility = '';
       russianFlagTemplateBuilderSession = { panel, close };
       applyTheme();
       document.addEventListener('bm-layout-theme-changed', handleThemeChanged);

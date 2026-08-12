@@ -471,7 +471,7 @@ export default class Template {
    * @returns {Object} Collection of template bitmaps & buffers organized by tile coordinates
    * @since 0.65.4
    */
-  async createTemplateTiles(anchor, options = {}) {
+  async createTemplateTiles(options = {}) {
     if (this.shreadSize === null) {
       // initialize shreadSize (usually already assigned by the template manager)
       this.shreadSize = testCanvasSize(5000, 5000) ? 5 : 3; // Scale image factor for pixel art enhancement (must be odd)
@@ -492,19 +492,9 @@ export default class Template {
     this.imageHeight = Math.max(1, Math.trunc(imageHeight));
   
     const [tx, ty, px, py] = this.coords;
+    // Coordinates always name the template's top-left corner.
     let mapX = tx * this.tileSize + px;
     let mapY = ty * this.tileSize + py;
-    // process anchor
-    mapX -= Math.floor((imageWidth - 1) * {
-      "l": 0,
-      "m": 0.5,
-      "r": 1,
-    }[anchor[0]]);
-    mapY -= Math.floor((imageHeight - 1) * {
-      "t": 0,
-      "m": 0.5,
-      "b": 1,
-    }[anchor[1]]);
     if (mapX < 0) {
       mapX += 2048 * this.tileSize;
     }
@@ -632,14 +622,32 @@ export default class Template {
       for (let index = 0; index < chunkDescriptors.length; index += TEMPLATE_CHUNK_BATCH_SIZE) {
         const batchChunks = chunkDescriptors.slice(index, index + TEMPLATE_CHUNK_BATCH_SIZE);
         const serializedMaskRowSpans = cloneMaskRowSpans(templateMaskRowSpans);
-        const workerSourceData = sourceData.slice();
+
+        // Send only the rows this batch actually reads. Copying the whole image per batch meant
+        // a full RGBA duplicate of the source for every 8 chunks — on a 3000x3000 template that
+        // is 36MB copied and transferred, repeated for each batch. Chunks are generated
+        // row-major, so a batch maps to a contiguous band and the total copied across all
+        // batches is now roughly one image rather than one per batch.
+        let bandStartY = imageHeight;
+        let bandEndY = 0;
+        for (const chunk of batchChunks) {
+          if (chunk.sourceY < bandStartY) bandStartY = chunk.sourceY;
+          const chunkEndY = chunk.sourceY + chunk.drawSizeY;
+          if (chunkEndY > bandEndY) bandEndY = chunkEndY;
+        }
+        bandStartY = Math.max(0, Math.min(bandStartY, imageHeight));
+        bandEndY = Math.max(bandStartY, Math.min(bandEndY, imageHeight));
+        const rowStride = imageWidth * 4;
+        const workerSourceData = sourceData.slice(bandStartY * rowStride, bandEndY * rowStride);
+
         const workerResult = await templateWorkerManager.runTask('buildTemplateChunkBatch', {
           sourceData: workerSourceData,
           imageWidth,
           chunks: batchChunks.map((chunk) => ({
             tileKey: chunk.tileKey,
             sourceX: chunk.sourceX,
-            sourceY: chunk.sourceY,
+            // Rebase onto the band we sent; the worker indexes rows from 0.
+            sourceY: chunk.sourceY - bandStartY,
             drawSizeX: chunk.drawSizeX,
             drawSizeY: chunk.drawSizeY,
           })),
