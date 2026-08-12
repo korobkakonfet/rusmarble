@@ -23,6 +23,29 @@ const DEFAULT_TEMPLATE_EXAMPLE_LIMIT = 32;
 const SMART_TEMPLATE_EXAMPLE_LIMIT = Infinity;
 const TEMPLATE_OTHER_COLOR_KEY = 'other';
 const OVERLAY_RASTER_CACHE_MAX = 256;
+const DEFAULT_TRANSPARENT_ERASE_COLOR = '#ff0000';
+/** Max characters per stored buffer slice. GM.setValue rides Chrome's extension messaging
+ * channel, which rejects anything over 64MiB; base64 is single-byte so characters ~= bytes.
+ * 8MiB leaves generous headroom for the surrounding message envelope.
+ */
+const TEMPLATE_BUFFER_CHUNK_CHARS = 8 * 1024 * 1024;
+
+/** Records a render problem somewhere the production build can still surface it.
+ * Terser strips console.* from production, so console.warn is invisible to users. It also has to
+ * live on document.head rather than window: @grant puts the script in Tampermonkey's sandbox,
+ * which has its own window that the page's devtools console cannot read. document.head is the
+ * same node in both contexts, which is why __bmmap and __bmCanvas are bridged the same way.
+ * Readable from the console as document.head.__bmOverlayIssues.
+ */
+const noteOverlayIssue = (message, detail) => {
+  try {
+    if (typeof document === 'undefined' || !document.head) return;
+    if (!Array.isArray(document.head['__bmOverlayIssues'])) document.head['__bmOverlayIssues'] = [];
+    const issues = document.head['__bmOverlayIssues'];
+    issues.push({ at: new Date().toISOString(), message, detail: String(detail ?? '') });
+    if (issues.length > 50) issues.shift();
+  } catch (_) {}
+};
 const packRgb = (r, g, b) => ((r << 16) | (g << 8) | b);
 const parsePackedRgbKey = (key) => {
   if (typeof key !== 'string') return null;
@@ -291,10 +314,9 @@ export default class TemplateManager {
    * @param {File | ImageBitmap | ImageData} file - The file blob to create a template from
    * @param {string} name - The display name of the template
    * @param {Array<number, number, number, number>} coords - The coordinates of the top left corner of the template
-   * @param {string} anchor - The anchor of the template
    * @since 0.65.77
    */
-  async createTemplate(file, name, coords, anchor, options = {}) {
+  async createTemplate(file, name, coords, options = {}) {
     const deferPersist = options?.deferPersist === true;
     const deferListRebuild = options?.deferListRebuild === true;
     const deferOverlayRefresh = options?.deferOverlayRefresh === true;
@@ -343,7 +365,7 @@ export default class TemplateManager {
       templateChunkSamples,
       templateChunkSampleBuffers,
       templateTileKeys,
-    } = await template.createTemplateTiles(anchor || this.getAnchor(), createTileOptions); // Chunks the tiles
+    } = await template.createTemplateTiles(createTileOptions); // Chunks the tiles
     // Modify palette enabled status using the honored one
     const toggleStatus = this.getPaletteToggledStatus();
     for (const key of Object.keys(template.colorPalette)) {
@@ -498,15 +520,195 @@ export default class TemplateManager {
    * @since 0.72.7
    */
   async storeTemplates() {
-    const data = this.getPersistableTemplatesJSON();
-    let json;
-    if (templateWorkerManager.canUseWorkers()) {
-      const result = await templateWorkerManager.runTask('serializeJson', { data }).catch(() => null);
-      json = result?.json ?? JSON.stringify(data, templateJsonReplacer);
-    } else {
-      json = JSON.stringify(data, templateJsonReplacer);
+    // An explicit write supersedes any queued debounced one.
+    if (this._storeTemplatesTimer) {
+      clearTimeout(this._storeTemplatesTimer);
+      this._storeTemplatesTimer = null;
     }
-    await GM.setValue('bmTemplates', json);
+    this._storeTemplatesPending = false;
+
+    // Buffers live in their own per-template keys and only get rewritten when their contents
+    // actually changed, so a metadata-only save (an enabled flip, a palette toggle) never touches
+    // them. See _persistTemplateBuffers for how "changed" is decided.
+    await this._persistChangedTemplateBuffers();
+
+    const data = this.getPersistableTemplatesJSON();
+    // Metadata only — no Uint8Arrays reach this — so stringify on the main thread is cheap and
+    // avoids the structured-clone round trip to a worker.
+    await GM.setValue('bmTemplates', JSON.stringify(data, templateJsonReplacer));
+  }
+
+  /** Storage key holding one template's tile/sample buffers.
+   * With no part index this is the manifest key; with one it is a payload slice.
+   */
+  _getTemplateBuffersStorageKey(storageKey, part = null) {
+    const base = `bmTemplateBuffers:${storageKey}`;
+    return part === null ? base : `${base}:${part}`;
+  }
+
+  /** Reads a buffer manifest, tolerating both the chunked and pre-chunking layouts.
+   * @returns {Promise<{parts:number}|object|null>}
+   */
+  async _readTemplateBufferManifest(storageKey) {
+    const raw = await GM.getValue(this._getTemplateBuffersStorageKey(storageKey), '');
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /** Removes a template's buffer manifest and every payload slice it refers to. */
+  async _deleteTemplateBufferKeys(storageKey, knownParts = null) {
+    if (typeof GM.deleteValue !== 'function') return;
+    let parts = knownParts;
+    if (parts === null) {
+      const manifest = await this._readTemplateBufferManifest(storageKey).catch(() => null);
+      parts = Number.isFinite(manifest?.parts) ? manifest.parts : 0;
+    }
+    for (let index = 0; index < parts; index++) {
+      try { await GM.deleteValue(this._getTemplateBuffersStorageKey(storageKey, index)); } catch (_) {}
+    }
+    try { await GM.deleteValue(this._getTemplateBuffersStorageKey(storageKey)); } catch (_) {}
+  }
+
+  /** A cheap stand-in for the buffer payload's identity: which chunks exist and how big each is.
+   * Comparing this is O(tiles); comparing the actual bytes would be O(megabytes). It catches
+   * every way the buffers can change in practice — new template, re-import, repositioning
+   * (which rekeys the chunks), and lazily-added sample buffers.
+   */
+  _getTemplateBufferFingerprint(template) {
+    const sizeOf = (value) => {
+      if (!value) return 0;
+      if (value instanceof Uint8Array) return value.length;
+      if (typeof value === 'string') return value.length;
+      return 0;
+    };
+    const tileKeys = (template.getChunkKeys?.() ?? []).slice().sort();
+    const parts = [];
+    for (const tileKey of tileKeys) {
+      parts.push(`${tileKey}:${sizeOf(template.chunkedBuffer?.[tileKey])}:${sizeOf(template.chunkedSamplesBuffer?.[tileKey])}`);
+    }
+    return parts.join('|');
+  }
+
+  /** Writes the buffer blob for every template whose buffers changed since the last write. */
+  async _persistChangedTemplateBuffers() {
+    if (!this._persistedBufferFingerprints) this._persistedBufferFingerprints = new Map();
+    for (const template of (this.templatesArray || [])) {
+      const storageKey = template?.storageKey;
+      if (!storageKey) continue;
+      const fingerprint = this._getTemplateBufferFingerprint(template);
+      if (this._persistedBufferFingerprints.get(storageKey) === fingerprint) continue;
+
+      const tileKeys = template.getChunkKeys?.() ?? [];
+      const payload = {
+        tiles: template.getPersistableChunkBuffers?.(tileKeys) ?? {},
+        samples: template.getPersistableChunkSampleBuffers?.(tileKeys) ?? {},
+      };
+      // This one is genuinely large, so base64 + stringify goes to a worker when available.
+      let json;
+      if (templateWorkerManager.canUseWorkers()) {
+        const result = await templateWorkerManager.runTask('serializeJson', { data: payload }).catch(() => null);
+        json = result?.json ?? JSON.stringify(payload, templateJsonReplacer);
+      } else {
+        json = JSON.stringify(payload, templateJsonReplacer);
+      }
+      // GM.setValue crosses the extension messaging channel, which Chrome caps at 64MiB per
+      // message. A large template's base64 payload blows straight past that and the write fails
+      // with "Message exceeded maximum allowed size of 64MiB", so slice it into safe parts.
+      const previousParts = Number.isFinite(this._persistedBufferParts?.get(storageKey))
+        ? this._persistedBufferParts.get(storageKey)
+        : (Number((await this._readTemplateBufferManifest(storageKey).catch(() => null))?.parts) || 0);
+
+      const partCount = Math.max(1, Math.ceil(json.length / TEMPLATE_BUFFER_CHUNK_CHARS));
+      for (let index = 0; index < partCount; index++) {
+        const slice = json.slice(index * TEMPLATE_BUFFER_CHUNK_CHARS, (index + 1) * TEMPLATE_BUFFER_CHUNK_CHARS);
+        await GM.setValue(this._getTemplateBuffersStorageKey(storageKey, index), slice);
+      }
+      // Write the manifest only after every slice landed, so an interrupted save leaves the old
+      // manifest pointing at a complete payload rather than a half-written one.
+      await GM.setValue(this._getTemplateBuffersStorageKey(storageKey), JSON.stringify({ parts: partCount }));
+
+      // Drop slices left over from a previously larger payload.
+      for (let index = partCount; index < previousParts; index++) {
+        try { await GM.deleteValue?.(this._getTemplateBuffersStorageKey(storageKey, index)); } catch (_) {}
+      }
+
+      if (!this._persistedBufferParts) this._persistedBufferParts = new Map();
+      this._persistedBufferParts.set(storageKey, partCount);
+      this._persistedBufferFingerprints.set(storageKey, fingerprint);
+    }
+  }
+
+  /** Loads a template's buffers from its own storage keys. Returns null when absent. */
+  async _loadTemplateBuffers(storageKey) {
+    try {
+      const manifest = await this._readTemplateBufferManifest(storageKey);
+      if (!manifest || typeof manifest !== 'object') return null;
+
+      let parsed;
+      if (Number.isFinite(manifest.parts)) {
+        const slices = [];
+        for (let index = 0; index < manifest.parts; index++) {
+          const slice = await GM.getValue(this._getTemplateBuffersStorageKey(storageKey, index), '');
+          if (!slice) return null; // incomplete payload — treat as absent rather than corrupt
+          slices.push(slice);
+        }
+        parsed = JSON.parse(slices.join(''));
+        if (!this._persistedBufferParts) this._persistedBufferParts = new Map();
+        this._persistedBufferParts.set(storageKey, manifest.parts);
+      } else {
+        // Pre-chunking layout: the manifest key held the whole payload.
+        parsed = manifest;
+      }
+
+      if (!parsed || typeof parsed !== 'object') return null;
+      return {
+        tiles: (parsed.tiles && typeof parsed.tiles === 'object') ? parsed.tiles : {},
+        samples: (parsed.samples && typeof parsed.samples === 'object') ? parsed.samples : {},
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /** Coalescing wrapper around {@link storeTemplates}.
+   * Persisting re-serializes every template's tile/sample buffers (megabytes of base64), so
+   * calling it straight from a UI handler stalls the click. Cheap metadata flips (enabled flag,
+   * palette toggles) should use this instead: the in-memory JSON is already updated, and the
+   * expensive write is deferred and collapsed across bursts of toggles.
+   * @param {number} delayMs
+   */
+  storeTemplatesDebounced(delayMs = 800) {
+    if (this._storeTemplatesTimer) clearTimeout(this._storeTemplatesTimer);
+    this._storeTemplatesPending = true;
+    if (!this._storeTemplatesFlushHooked) {
+      this._storeTemplatesFlushHooked = true;
+      const flush = () => { this.flushStoreTemplates(); };
+      window.addEventListener('pagehide', flush);
+      window.addEventListener('beforeunload', flush);
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') flush();
+      });
+    }
+    this._storeTemplatesTimer = setTimeout(() => {
+      this._storeTemplatesTimer = null;
+      this._storeTemplatesPending = false;
+      this.storeTemplates().catch(() => {});
+    }, delayMs);
+  }
+
+  /** Immediately performs any pending debounced persist. */
+  flushStoreTemplates() {
+    if (this._storeTemplatesTimer) {
+      clearTimeout(this._storeTemplatesTimer);
+      this._storeTemplatesTimer = null;
+    }
+    if (!this._storeTemplatesPending) return Promise.resolve();
+    this._storeTemplatesPending = false;
+    return this.storeTemplates().catch(() => {});
   }
 
   getPersistableTemplatesJSON() {
@@ -528,10 +730,11 @@ export default class TemplateManager {
     for (const [storageKey, templateStore] of Object.entries(templates)) {
       const template = templateByKey.get(storageKey);
       if (!template) continue;
-      const tileKeys = template.getChunkKeys?.() ?? templateStore.tileKeys ?? [];
-      templateStore.tileKeys = tileKeys;
-      templateStore.tiles = template.getPersistableChunkBuffers?.(tileKeys) ?? templateStore.tiles ?? {};
-      templateStore.samples = template.getPersistableChunkSampleBuffers?.(tileKeys) ?? templateStore.samples ?? {};
+      templateStore.tileKeys = template.getChunkKeys?.() ?? templateStore.tileKeys ?? [];
+      // Buffers are persisted separately by _persistChangedTemplateBuffers. Dropping them here is
+      // what makes a metadata save cost kilobytes instead of megabytes.
+      delete templateStore.tiles;
+      delete templateStore.samples;
     }
     return {
       ...source,
@@ -557,6 +760,14 @@ export default class TemplateManager {
     if (templates && templates?.[storageKey]) {
       delete templates[storageKey];
     }
+
+    // Drop the template's separate buffer blob, otherwise it lingers in storage forever.
+    const knownParts = this._persistedBufferParts?.get(storageKey) ?? null;
+    this._persistedBufferFingerprints?.delete(storageKey);
+    this._persistedBufferParts?.delete(storageKey);
+    try {
+      await this._deleteTemplateBufferKeys(storageKey, knownParts);
+    } catch (_) {}
 
     // reset related tiles
     this.clearTileProgress(targetTemplate);
@@ -636,10 +847,30 @@ export default class TemplateManager {
     let paletteStats = {};
     let templateStats = {};
 
-    const tileBitmap = await createBitmapPreservingPixels(tileBlob);
     const isErrorMapShown = this.isErrorMapShown();
     const tileSize = this.tileSize;
     const exampleMax = this.getTemplateExampleLimit();
+
+    // ── Fast path: hand the encoded tile to a worker and stay off the main thread entirely ──
+    // The main thread never decodes the PNG, never allocates the 1MB pixel buffer, and never
+    // copies it per template. All chunks landing on this tile are counted in one call.
+    if (templateWorkerManager.canUseWorkers()) {
+      const batched = await this._countTemplateStatusInWorker({
+        tileBlob, tileCoords, tileSize, templatesTilesToHandle,
+        isErrorMapShown, exampleMax, errorMapOnlyEnabledColors, displayedColorList,
+        currentMemorySavingMode,
+      }).catch((exception) => {
+        console.warn('Worker tile progress scan failed; falling back to main thread:', exception);
+        return null;
+      });
+      if (batched) {
+        this._finishTileProgress(tileCoordsPadded, templateCount, batched, enabledTemplateCount);
+        return tileBlob;
+      }
+    }
+
+    // ── Fallback: decode and scan on the main thread (no worker support, or the worker failed) ──
+    const tileBitmap = await createBitmapPreservingPixels(tileBlob);
 
     let canvas = new OffscreenCanvas(tileSize, tileSize);
     const context = canvas.getContext('2d', { willReadFrequently: true });
@@ -707,7 +938,7 @@ export default class TemplateManager {
               encodedSampleBytes.buffer,
               workerTilePixels.buffer,
             ],
-          })
+          }).catch(() => null) // degrade to the main-thread scan below rather than losing the tile
           : null;
 
         if (workerResult) {
@@ -762,17 +993,110 @@ export default class TemplateManager {
       }
     }
 
+    cleanUpCanvas(canvas);
+
+    this._finishTileProgress(
+      tileCoordsPadded,
+      templateCount,
+      { paintedCount, wrongCount, requiredCount, paletteStats, templateStats },
+      enabledTemplateCount
+    );
+
+    return tileBlob;
+  }
+
+  /** Counts every template chunk on one map tile in a single worker call.
+   * The encoded tile is transferred rather than decoded here, so the main thread does no image
+   * decoding, no getImageData readback, and no per-template pixel copies.
+   * @returns {Promise<object|null>} accumulated stats, or null if there was nothing to scan
+   * @since 0.87.71
+   */
+  async _countTemplateStatusInWorker({
+    tileBlob, tileCoords, tileSize, templatesTilesToHandle,
+    isErrorMapShown, exampleMax, errorMapOnlyEnabledColors, displayedColorList,
+    currentMemorySavingMode,
+  }) {
+    const entries = [];
+    const transferList = [];
+
+    for (const templateTile of templatesTilesToHandle) {
+      const template = templateTile.template;
+      const sampleData = await template.getChunkSamples(templateTile.tileKey, {
+        memorySaving: currentMemorySavingMode,
+      });
+      if (!sampleData) continue;
+      const sampleBytes = encodeChunkSampleBytes(sampleData);
+      if (!sampleBytes) continue;
+
+      const templateTileEnabled = template.enabled ?? true;
+      entries.push({
+        sampleData: sampleBytes,
+        tileKey: templateTile.tileKey,
+        sortID: template.sortID,
+        templateKey: template.storageKey,
+        templateEnabled: templateTileEnabled,
+        offsetX: templateTile.pixelCoords[0],
+        offsetY: templateTile.pixelCoords[1],
+        includeErrorMap: isErrorMapShown && templateTileEnabled,
+        errorWidth: Math.max(0, Math.trunc(Number(sampleData.width) || 0)),
+        errorHeight: Math.max(0, Math.trunc(Number(sampleData.height) || 0)),
+      });
+      transferList.push(sampleBytes.buffer);
+    }
+
+    if (!entries.length) return null;
+
+    const tileBytes = new Uint8Array(await tileBlob.arrayBuffer());
+    transferList.push(tileBytes.buffer);
+
+    const result = await templateWorkerManager.runTask('scanTileProgressBatch', {
+      tileBytes,
+      tileSize,
+      tileCoords,
+      entries,
+      exampleMax,
+      errorMapOnlyEnabledColors,
+      displayedColors: displayedColorList,
+    }, { transferList });
+
+    if (!result) return null;
+
+    // The error map is an optional debug overlay; painting it is the only main-thread pixel work
+    // left, and only when the user has it turned on.
+    for (const errorMap of (result.errorMaps || [])) {
+      if (!(errorMap?.errorData instanceof Uint8ClampedArray)) continue;
+      if (!(errorMap.errorWidth > 0 && errorMap.errorHeight > 0)) continue;
+      const errorCanvas = new OffscreenCanvas(errorMap.errorWidth, errorMap.errorHeight);
+      const errorContext = errorCanvas.getContext('2d');
+      errorContext.putImageData(new ImageData(errorMap.errorData, errorMap.errorWidth, errorMap.errorHeight), 0, 0);
+      addTemplateCanvas(errorMap.sortID, errorMap.tileKey, [errorMap.errorWidth, errorMap.errorHeight], errorCanvas, "error");
+      cleanUpCanvas(errorCanvas);
+    }
+
+    return {
+      paintedCount: result.paintedCount || 0,
+      wrongCount: result.wrongCount || 0,
+      requiredCount: result.requiredCount || 0,
+      paletteStats: result.paletteStats || {},
+      templateStats: result.templateStats || {},
+    };
+  }
+
+  /** Records a tile's counted stats and refreshes the status line / progress UI.
+   * Shared by the worker and main-thread counting paths.
+   */
+  _finishTileProgress(tileCoordsPadded, templateCount, stats, enabledTemplateCount) {
     if (templateCount === 0) {
       if (this.tileProgress.has(tileCoordsPadded)) {
         this._deleteTileProgress(tileCoordsPadded);
       }
     } else {
       this._setTileProgress(tileCoordsPadded, {
-        painted: paintedCount,
-        required: requiredCount,
-        wrong: wrongCount,
-        palette: paletteStats,
-        template: templateStats,
+        painted: stats.paintedCount,
+        required: stats.requiredCount,
+        wrong: stats.wrongCount,
+        palette: stats.paletteStats,
+        template: stats.templateStats,
       });
     }
 
@@ -794,16 +1118,12 @@ export default class TemplateManager {
       `Displaying ${enabledTemplateCount} template${enabledTemplateCount == 1 ? '' : 's'}.\nPainted ${paintedStr} / ${requiredStr} • Wrong ${wrongStr}`
     );
 
-    cleanUpCanvas(canvas);
-
     if (typeof window.scheduleProgressUiRefresh === 'function') {
       window.scheduleProgressUiRefresh();
     } else {
       window.buildColorFilterList?.();
       window.buildTemplateFilterList?.();
     }
-
-    return tileBlob;
   }
 
     /** Add the template overlay layer to the map
@@ -897,6 +1217,9 @@ export default class TemplateManager {
       const pending = state.pendingSortID;
       const pendingOptions = state.pendingOptions;
       const followUpFull = !!(pendingOptions?.followUpFull && pendingOptions?.tilePrefixes);
+      // The follow-up full pass must inherit skipExisting, otherwise a toggle-on whose layers are
+      // already valid pays for a complete re-render one tick after we deliberately skipped it.
+      const followUpOptions = pendingOptions?.skipExisting ? { skipExisting: true } : null;
       state.pendingSortID = undefined;
       state.pendingOptions = null;
       try {
@@ -908,6 +1231,8 @@ export default class TemplateManager {
         }
         state.resolve?.();
       } catch (err) {
+        // A render that dies here leaves the map with no crosses and, without this, no trace of why.
+        noteOverlayIssue('overlay render threw', err?.stack || err?.message || String(err));
         state.reject?.(err);
       } finally {
         state.promise = null;
@@ -919,12 +1244,12 @@ export default class TemplateManager {
           if (followUpFull) {
             // Full rebuild supersedes any queued scoped render — don't drop the follow-up.
             state.pendingOptions = null;
-            this.createOverlayOnMap(pending ?? null);
+            this.createOverlayOnMap(pending ?? null, followUpOptions);
           } else {
             this.createOverlayOnMap(state.pendingSortID ?? null, state.pendingOptions ?? null);
           }
         } else if (followUpFull) {
-          this.createOverlayOnMap(pending ?? null);
+          this.createOverlayOnMap(pending ?? null, followUpOptions);
         }
       }
     }, delayMs);
@@ -944,11 +1269,14 @@ export default class TemplateManager {
    * @param {number?} sortID
    * @since 0.90.0
    */
-  async createOverlayOnMapVisibleOnly(sortID = null) {
+  async createOverlayOnMapVisibleOnly(sortID = null, options = null) {
+    // skipExisting defaults on (mounted tiles are assumed current); pass false when the render
+    // settings changed underneath them and the mounted canvases must be redrawn.
+    const skipExisting = options?.skipExisting !== false;
     const visiblePrefixes = this.getVisibleTilePrefixes();
     if (visiblePrefixes && visiblePrefixes.size) {
       this.pruneOverlayToVisiblePrefixes(sortID, visiblePrefixes);
-      return this.createOverlayOnMap(sortID, { tilePrefixes: visiblePrefixes, immediate: true, skipExisting: true });
+      return this.createOverlayOnMap(sortID, { tilePrefixes: visiblePrefixes, immediate: true, skipExisting });
     }
     if (!isMapTilerLoaded()) {
       doAfterMapFound(() => {
@@ -1004,6 +1332,31 @@ export default class TemplateManager {
         await template.getChunkSamples(tileKey, { memorySaving: false });
       } catch (_) {}
       await sleep(0);
+    }
+  }
+
+  /** Speculatively extract samples for a template's currently-visible tiles.
+   * Fire-and-forget: getChunkSamples deduplicates in-flight work, so calling this from a hover
+   * handler just gives the eventual render a head start on its slowest step (PNG decode +
+   * worker extraction). Safe to call on templates that are already warm — it no-ops.
+   * @since 0.87.71
+   */
+  prewarmTemplateVisibleTiles(template) {
+    if (!template) return;
+    const now = getNowMs();
+    if (!this._prewarmVisibleCooldown) this._prewarmVisibleCooldown = new Map();
+    const key = String(template.sortID);
+    if (now - (this._prewarmVisibleCooldown.get(key) ?? -Infinity) < 1000) return;
+    this._prewarmVisibleCooldown.set(key, now);
+
+    const visiblePrefixes = this.getVisibleTilePrefixes();
+    if (!visiblePrefixes || !visiblePrefixes.size) return;
+    const memorySaving = this.isMemorySavingModeOn();
+    for (const tileKey of this._getTemplateTileKeys(template, visiblePrefixes)) {
+      if (template.getRawChunkBuffer(tileKey) || template.chunkedSamples?.[tileKey]) continue;
+      try {
+        Promise.resolve(template.getChunkSamples(tileKey, { memorySaving })).catch(() => {});
+      } catch (_) {}
     }
   }
 
@@ -1097,10 +1450,16 @@ export default class TemplateManager {
     profiler.start('overlay:phase1');
     const phase12Results = await Promise.all(templates.map(async (template) => {
       if (!template.enabled) return null;
-      // If scoped render (tilePrefixes) with skipExisting and full-canvas already mounted, skip.
-      if (skipExisting && tilePrefixSet && mountedOverlaySourceIDs?.has(`BM-overlay-full-${template.sortID}`)) return null;
+      // If skipExisting and the merged full-canvas is already mounted, there is nothing to add —
+      // this holds for scoped and unscoped renders alike, since one canvas covers every tile.
+      if (skipExisting && mountedOverlaySourceIDs?.has(`BM-overlay-full-${template.sortID}`)) return null;
       const tileKeys = this._getTemplateTileKeys(template, tilePrefixSet);
       if (!tileKeys.length) return null;
+      // The merged path composites into one canvas spanning the WHOLE template and mounts it as the
+      // single source for it. That is only correct when this render covers every tile — a scoped
+      // (visible-only) render would bake a canvas that is blank everywhere off-screen, and
+      // skipExisting then treats it as complete forever, so those areas never get crosses.
+      const coversAllTiles = tileKeys.length === template.getChunkKeys().length;
 
       const drawMultTemplate = template.shreadSize;
       const drawMultCenterTemplate = (template.shreadSize - 1) >> 1;
@@ -1117,9 +1476,13 @@ export default class TemplateManager {
       // Tiles with a raw binary sample buffer are resolved without any async work.
       // Tiles needing bitmap extraction are collected and fired in parallel below.
       const slowTiles = []; // { tileKey, sourceID }
+      // Tiles skipped because they are already mounted per-tile. The merged path can't be used when
+      // any were skipped: it would composite only the collected tiles into a whole-template canvas
+      // and then prune the mounted per-tile ones, blanking exactly the area that was already right.
+      let skippedMountedTiles = false;
       for (const tileKey of tileKeys) {
         const sourceID = `BM-overlay-${tileKey}-${template.sortID}`;
-        if (skipExisting && mountedOverlaySourceIDs?.has(sourceID)) continue;
+        if (skipExisting && mountedOverlaySourceIDs?.has(sourceID)) { skippedMountedTiles = true; continue; }
 
         const rawBuffer = !backgroundMode ? template.getRawChunkBuffer(tileKey) : null;
         if (rawBuffer) {
@@ -1245,7 +1608,7 @@ export default class TemplateManager {
       const imageW = template.imageWidth;
       const imageH = template.imageHeight;
       const MAX_MERGED_PX = 4096; // max dimension for merged canvas
-      const canMerge = imageW > 0 && imageH > 0 && bitmapTiles.length === 0
+      const canMerge = coversAllTiles && !skippedMountedTiles && imageW > 0 && imageH > 0 && bitmapTiles.length === 0
         && imageW * drawMultResult <= MAX_MERGED_PX && imageH * drawMultResult <= MAX_MERGED_PX;
 
       let workerPixelMap = new Map();
@@ -1279,9 +1642,12 @@ export default class TemplateManager {
           };
         });
         const serializedMaskRowSpans = cloneMaskRowSpans(maskRowSpans);
+        // Deliberately NOT transferring cachedChunks pixels. Phase 3 falls back to per-tile
+        // registration whenever the merge yields no bitmap (worker failure, cancelled
+        // generation), and it reads these same arrays — transferring them detaches the
+        // originals, so the fallback would throw and take every template's crosses down with it.
         const mergeTransferList = [
           ...sampleChunks.map(c => c.sampleData.buffer),
-          ...cachedChunks.map(c => c.pixels.buffer),
           ...getMaskRowSpansTransferList(serializedMaskRowSpans),
         ];
         const mergeResult = await templateWorkerManager.runTask('renderAndMergeOverlayChunks', {
@@ -1295,6 +1661,7 @@ export default class TemplateManager {
           displayedColors: useCheckerboardRender ? null : displayedColors,
           includeDefaceCheckerboard: useCheckerboardRender,
           enforceTransparentAsDeface: template.enforceTransparentAsDeface === true,
+          transparentEraseColor: this.getTransparentEraseColor(),
         }, { generation: overlayGenerationId, transferList: mergeTransferList });
 
         if (this._activeOverlayGenerationId !== overlayGenerationId) return null;
@@ -1322,6 +1689,7 @@ export default class TemplateManager {
           displayedColors: useCheckerboardRender ? null : displayedColors,
           includeDefaceCheckerboard: useCheckerboardRender,
           enforceTransparentAsDeface: template.enforceTransparentAsDeface === true,
+          transparentEraseColor: this.getTransparentEraseColor(),
         }, { generation: overlayGenerationId, transferList: batchTransferList });
 
         if (this._activeOverlayGenerationId !== overlayGenerationId) return null;
@@ -1355,25 +1723,41 @@ export default class TemplateManager {
         addTemplateFullCanvas(template.sortID, template.coords,
           [template.imageWidth, template.imageHeight], mergedBitmap, "overlay");
         mergedBitmap.close?.();
+        this._pruneConflictingOverlayMounts(template.sortID, 'full');
         if (this.isErrorMapShown()) setUsageLayersOpacity("overlay", 0);
         continue;
       }
+      if (canMerge) {
+        // Merge was attempted but produced nothing; the per-tile fallback below has to cover it.
+        noteOverlayIssue('merged render returned no bitmap', `sortID=${template?.sortID} name=${template?.displayName}`);
+      }
 
-      // Fallback: per-tile registration (bitmap templates or very large templates)
+      // Fallback: per-tile registration (bitmap templates, very large templates, scoped renders)
+      if (cachedTiles.length || sampleTiles.length || bitmapTiles.length) {
+        this._pruneConflictingOverlayMounts(template.sortID, 'tiles');
+      }
       for (const t of cachedTiles) {
         await yieldUi();
         if (this._activeOverlayGenerationId !== overlayGenerationId) return;
-        const canvas = paintPixelsToCanvas(t.pixels, t.resultWidth, t.resultHeight)
-          ?? new OffscreenCanvas(t.resultWidth, t.resultHeight);
-        addTemplateCanvas(template.sortID, t.tileKey, [t.safeW, t.safeH], canvas, "overlay");
+        // Hand the pixels over as ImageData. addTemplateCanvas putImageData's them straight into
+        // the source canvas, so staging them through an OffscreenCanvas first would just be an
+        // extra full-size allocation and blit per tile.
+        try {
+          addTemplateCanvas(template.sortID, t.tileKey, [t.safeW, t.safeH],
+            new ImageData(t.pixels, t.resultWidth, t.resultHeight), "overlay");
+        } catch (exception) {
+          noteOverlayIssue('cached tile canvas failed', `tile=${t.tileKey} ${exception?.message ?? exception}`);
+          continue;
+        }
         if (this.isErrorMapShown()) setUsageLayersOpacity("overlay", 0);
-        cleanUpCanvas(canvas);
       }
 
       for (const t of sampleTiles) {
         await yieldUi();
         if (this._activeOverlayGenerationId !== overlayGenerationId) return;
-        let resultCanvas = null;
+        // Produce ImageData rather than a staging canvas — addTemplateCanvas writes it into the
+        // source canvas directly, so an intermediate OffscreenCanvas is a wasted alloc + blit.
+        let resultImage = null;
         const workerResult = workerPixelMap.get(t.tileKey);
         if (workerResult?.pixels instanceof Uint8ClampedArray) {
           this.setOverlayRasterCacheEntry(t.overlayCacheKey, {
@@ -1381,27 +1765,21 @@ export default class TemplateManager {
             height: t.resultHeight,
             pixels: workerResult.pixels.slice(),
           });
-          resultCanvas = paintPixelsToCanvas(workerResult.pixels, t.resultWidth, t.resultHeight);
+          resultImage = new ImageData(workerResult.pixels, t.resultWidth, t.resultHeight);
         }
-        if (!resultCanvas) {
-          resultCanvas = new OffscreenCanvas(t.resultWidth, t.resultHeight);
-          const ctx = resultCanvas.getContext('2d');
-          ctx.imageSmoothingEnabled = false;
-          ctx.beginPath(); ctx.rect(0, 0, t.resultWidth, t.resultHeight); ctx.clip();
-          ctx.clearRect(0, 0, t.resultWidth, t.resultHeight);
-          const image = ctx.createImageData(t.resultWidth, t.resultHeight);
+        if (!resultImage) {
+          const image = new ImageData(t.resultWidth, t.resultHeight);
           const sampleDataForFallback = t.sampleData ??
             (t.rawBuffer instanceof Uint8Array ? decodeChunkSampleBuffer(t.rawBuffer) : null);
           if (useCheckerboardRender) {
-            renderSampleDataToImage({ sampleData: sampleDataForFallback, imageData: image, resultWidth: t.resultWidth, drawSize: drawMultResult, maskPoints, maskRowSpans, includeDefaceCheckerboard: true, enforceTransparentAsDeface: template.enforceTransparentAsDeface === true });
+            renderSampleDataToImage({ sampleData: sampleDataForFallback, imageData: image, resultWidth: t.resultWidth, drawSize: drawMultResult, maskPoints, maskRowSpans, includeDefaceCheckerboard: true, enforceTransparentAsDeface: template.enforceTransparentAsDeface === true, transparentEraseColor: this.getTransparentEraseColor() });
           } else if (!allColorsDisabled) {
-            renderSampleDataToImage({ sampleData: sampleDataForFallback, imageData: image, resultWidth: t.resultWidth, drawSize: drawMultResult, maskPoints, maskRowSpans, displayedColorSet, includeDefaceCheckerboard: false, enforceTransparentAsDeface: template.enforceTransparentAsDeface === true });
+            renderSampleDataToImage({ sampleData: sampleDataForFallback, imageData: image, resultWidth: t.resultWidth, drawSize: drawMultResult, maskPoints, maskRowSpans, displayedColorSet, includeDefaceCheckerboard: false, enforceTransparentAsDeface: template.enforceTransparentAsDeface === true, transparentEraseColor: this.getTransparentEraseColor() });
           }
-          ctx.putImageData(image, 0, 0);
+          resultImage = image;
         }
-        addTemplateCanvas(template.sortID, t.tileKey, [t.safeW, t.safeH], resultCanvas, "overlay");
+        addTemplateCanvas(template.sortID, t.tileKey, [t.safeW, t.safeH], resultImage, "overlay");
         if (this.isErrorMapShown()) setUsageLayersOpacity("overlay", 0);
-        cleanUpCanvas(resultCanvas);
       }
 
       for (const t of bitmapTiles) {
@@ -1457,6 +1835,16 @@ export default class TemplateManager {
         if (currentMemorySavingMode && t.bitmap) t.bitmap.close();
       }
     }
+    // Record what these layers were rendered with, so a later toggle-on can skip redoing them.
+    if (!this._overlayRenderSignatures) this._overlayRenderSignatures = new Map();
+    const globalSignature = [drawMultResult, displayMode, displayedColorsHash, (this.isBackgroundModeEnabled() && !!this._livePixelsFetcher) ? 1 : 0].join('||');
+    for (const result of phase12Results) {
+      if (!result?.template) continue;
+      this._overlayRenderSignatures.set(
+        String(result.template.sortID),
+        `${globalSignature}||${this._getTemplateRenderSignaturePart(result.template)}`
+      );
+    }
     profiler.end('overlay:phase3');
   }
 
@@ -1493,12 +1881,13 @@ export default class TemplateManager {
         const sortID = Number(templateKeyArray?.[0]);
         const authorID = templateKeyArray?.[1] || '0';
         const displayName = templateValue.name || `Template ${sortID || ''}`;
-        const tilesbase64 = (templateValue.tiles && typeof templateValue.tiles === 'object')
-          ? templateValue.tiles
-          : {};
-        const samplesBase64 = (templateValue.samples && typeof templateValue.samples === 'object')
-          ? templateValue.samples
-          : {};
+        // Buffers normally live in their own storage key. Templates saved by an older version
+        // still carry them inline, so fall back to that and let the next save migrate them out.
+        const separateBuffers = await this._loadTemplateBuffers(templateKey);
+        const tilesbase64 = (separateBuffers?.tiles)
+          ?? ((templateValue.tiles && typeof templateValue.tiles === 'object') ? templateValue.tiles : {});
+        const samplesBase64 = (separateBuffers?.samples)
+          ?? ((templateValue.samples && typeof templateValue.samples === 'object') ? templateValue.samples : {});
         if (!Object.keys(tilesbase64).length && !Object.keys(samplesBase64).length) {
           continue;
         }
@@ -1662,6 +2051,16 @@ export default class TemplateManager {
 
         templateInstance.storageKey = templateKey;
         this.templatesArray.push(templateInstance);
+        if (separateBuffers) {
+          // Came from its own key and is byte-identical to what is stored, so record the
+          // fingerprint now and the next save will skip rewriting it. Templates loaded from the
+          // old inline format are deliberately left unrecorded so they migrate on first save.
+          if (!this._persistedBufferFingerprints) this._persistedBufferFingerprints = new Map();
+          this._persistedBufferFingerprints.set(
+            templateKey,
+            this._getTemplateBufferFingerprint(templateInstance)
+          );
+        }
         this._schedulePrewarm(templateInstance);
       }
 
@@ -1868,6 +2267,22 @@ export default class TemplateManager {
     return map;
   }
 
+  /** Drop whichever overlay mounting style a template is NOT currently using.
+   * A template is drawn either as one merged full canvas or as a set of per-tile canvases; leaving
+   * both mounted double-draws every pixel they share.
+   * @param {number} sortID
+   * @param {'full'|'tiles'} keep - the style being mounted now
+   */
+  _pruneConflictingOverlayMounts(sortID, keep) {
+    if (sortID === null || sortID === undefined) return;
+    const fullSourceID = `BM-overlay-full-${sortID}`;
+    const toRemove = Object.keys(bmCanvas.overlay ?? {}).filter((sourceID) => {
+      if (!sourceID.startsWith('BM-overlay-') || !sourceID.endsWith(`-${sortID}`)) return false;
+      return keep === 'full' ? sourceID !== fullSourceID : sourceID === fullSourceID;
+    });
+    if (toRemove.length) removeTemplateCanvasSources(toRemove, 'overlay');
+  }
+
   pruneOverlayToVisiblePrefixes(sortID, visiblePrefixes) {
     if (!(visiblePrefixes instanceof Set) || visiblePrefixes.size === 0) {
       return;
@@ -1912,7 +2327,74 @@ export default class TemplateManager {
     return Array.isArray(displayedColors) ? displayedColors.join(';') : '';
   }
 
+  /** A fingerprint of every global input that affects how overlay canvases are rasterized.
+   * If it is unchanged since a sortID's layers were mounted, those layers are still correct and
+   * re-rendering them is pure waste.
+   * @since 0.87.71
+   */
+  getOverlayRenderSignature() {
+    const displayMode = this.getTemplateDisplayMode();
+    const drawMult = this.getTemplateDrawSize(displayMode);
+    const displayedColors = this.getDisplayedColorsSorted(this.getPaletteToggledStatus());
+    const backgroundMode = this.isBackgroundModeEnabled() && !!this._livePixelsFetcher;
+    return [drawMult, displayMode, this.getOverlayDisplayedColorsHash(displayedColors), backgroundMode ? 1 : 0].join('||');
+  }
+
+  /** The per-template half of the render signature: anything about the template itself that
+   * changes what its canvases should look like.
+   */
+  _getTemplateRenderSignaturePart(template) {
+    if (!template) return '';
+    return [
+      template.storageTimeString ?? '',
+      Array.isArray(template.coords) ? template.coords.join(',') : '',
+      template.shreadSize ?? '',
+      template.enforceTransparentAsDeface === true ? 1 : 0,
+    ].join('|');
+  }
+
+  /** The colour used to mark transparent template pixels when a template enforces them as erase.
+   * @returns {string} a "#rrggbb" string
+   */
+  getTransparentEraseColor() {
+    const value = String(this.userSettings?.transparentEraseColor ?? '').trim();
+    return /^#[0-9a-fA-F]{6}$/.test(value) ? value : DEFAULT_TRANSPARENT_ERASE_COLOR;
+  }
+
+  async setTransparentEraseColor(value) {
+    const normalized = String(value ?? '').trim();
+    if (!/^#[0-9a-fA-F]{6}$/.test(normalized)) return false;
+    this.userSettings.transparentEraseColor = normalized.toLowerCase();
+    await this.storeUserSettings();
+    // Every template that enforces transparent-as-erase now rasterizes differently, so drop the
+    // cached rasters and the freshness signatures that would otherwise skip the re-render.
+    this._overlayRasterCache?.clear();
+    this._overlayRenderSignatures?.clear?.();
+    return true;
+  }
+
+  /** Whether a sortID's mounted overlay layers were rendered with the current settings. */
+  isOverlaySortIDFresh(sortID) {
+    if (sortID === null || sortID === undefined) return false;
+    const recorded = this._overlayRenderSignatures?.get(String(sortID));
+    if (!recorded) return false;
+    const template = (this.templatesArray ?? []).find((t) => t?.sortID == sortID);
+    if (!template) return false;
+    return recorded === `${this.getOverlayRenderSignature()}||${this._getTemplateRenderSignaturePart(template)}`;
+  }
+
+  /** Marks a sortID's mounted overlay layers as stale, forcing a full re-render next time. */
+  invalidateOverlaySortIDSignature(sortID) {
+    if (!this._overlayRenderSignatures) return;
+    if (sortID === null || sortID === undefined) {
+      this._overlayRenderSignatures.clear();
+      return;
+    }
+    this._overlayRenderSignatures.delete(String(sortID));
+  }
+
   invalidateOverlayRasterCacheForTemplate(sortID) {
+    this.invalidateOverlaySortIDSignature(sortID);
     const sortIDStr = String(sortID);
     for (const key of this._overlayRasterCache.keys()) {
       if (key.includes(`||${sortIDStr}||`)) {
@@ -1983,14 +2465,26 @@ export default class TemplateManager {
     // examples: incremental via _runningExamples; only dirty colors (removed tiles) need a full tile scan.
     if (this._examplesColorDirty.size > 0) {
       const exampleMax = this.getTemplateExampleLimit();
+      // Rebuild every dirty color in a single pass over tileProgress. Scanning the whole map once
+      // per dirty color is O(colors x tiles), and a template toggle dirties nearly every color at
+      // once via clearTileProgress — that combination was the expensive part of this function.
+      const rebuilding = new Map();
       for (const colorKey of this._examplesColorDirty) {
-        const rebuilt = { examplesEnabled: [], _exampleSeenCount: 0 };
-        for (const stats of this.tileProgress.values()) {
-          const content = stats.palette[colorKey];
+        rebuilding.set(colorKey, { examplesEnabled: [], _exampleSeenCount: 0 });
+      }
+      for (const stats of this.tileProgress.values()) {
+        const palette = stats.palette;
+        if (!palette) continue;
+        for (const colorKey in palette) {
+          const target = rebuilding.get(colorKey);
+          if (!target) continue;
+          const content = palette[colorKey];
           if (content?.examplesEnabled?.length) {
-            mergeTemplateExampleReservoir(rebuilt, content.examplesEnabled, exampleMax);
+            mergeTemplateExampleReservoir(target, content.examplesEnabled, exampleMax);
           }
         }
+      }
+      for (const [colorKey, rebuilt] of rebuilding) {
         this._runningExamples[colorKey] = rebuilt;
       }
       this._examplesColorDirty.clear();
@@ -2226,39 +2720,6 @@ export default class TemplateManager {
     setGlobalDebugLoggingEnabled(enabled);
     syncInjectedDebugLogging(enabled);
     await this.storeUserSettings();
-  }
-
-  /** A utility to get the current anchor.
-   * @since 0.85.34
-   * @returns {string}
-   */
-  getAnchor() {
-    const temp = this.userSettings?.anchor ?? 'lt'; // top left
-    if (this.isValidAnchor(temp)) return temp.toLowerCase();
-    return 'lt';
-  }
-
-
-  /** A utility to check if the anchor is valid.
-   * @param {string} value - The anchor
-   * @returns {boolean}
-   * @since 0.85.34
-   */
-  isValidAnchor(value) {
-    if (value.length !== 2) return false;
-    value = value.toLowerCase();
-    return "lmr".includes(value[0]) && "tmb".includes(value[1]);
-  }
-
-  /** Sets the anchor to a value.
-   * @param {string} value - The anchor
-   * @since 0.85.34
-   */
-  async setAnchor(value) {
-    if (!this.isValidAnchor(value)) return false;
-    this.userSettings.anchor = value.toLowerCase();
-    await this.storeUserSettings();
-    return true;
   }
 
   /** A utility to check if events are enabled.

@@ -124,9 +124,20 @@ const workerBundle = await esbuild.build({
   format: 'iife',
   target: 'es2020',
   platform: 'browser',
-  minify: false,
+  // The worker is inlined into the userscript as a string, so its size lands directly in the
+  // shipped file — 122K unminified vs 48K minified. Safe to minify: handlers are dispatched by
+  // string key (handlers[type]) and esbuild does not rename property names.
+  minify: isProduction,
 }).catch(() => process.exit(1));
-const workerBundleJS = workerBundle.outputFiles.find(file => file.path.endsWith('.js'));
+// With write:false and no outfile, esbuild names the output "<stdout>" — matching on a .js
+// suffix silently found nothing, so the worker source was inlined as an empty string and the
+// whole worker pool disabled itself at runtime. Fall back to the single output file.
+const workerBundleJS = workerBundle.outputFiles.find(file => file.path.endsWith('.js'))
+  ?? workerBundle.outputFiles[0];
+if (!workerBundleJS?.text?.trim()) {
+  console.error('\x1b[31mWorker bundle is empty — template workers would be disabled at runtime.\x1b[0m');
+  process.exit(1);
+}
 
 const resultEsbuild = await esbuild.build({
   entryPoints: ['src/main.js'], // "Infect" the files from this point (it spreads from this "patient 0")

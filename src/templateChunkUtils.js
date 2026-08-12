@@ -231,6 +231,18 @@ export const buildMaskRowSpans = (maskPoints, size) => {
   });
 };
 
+/** Packs the user-configured transparent-erase colour. Accepts "#rrggbb" (what the settings colour
+ * input produces) or an already-packed value; falls back to opaque red. */
+export const packTransparentEraseColor = (value) => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const hex = String(value ?? '').trim().replace(/^#/, '');
+  if (/^[0-9a-fA-F]{6}$/.test(hex)) {
+    const numeric = Number.parseInt(hex, 16);
+    return packRgbaUint32((numeric >> 16) & 255, (numeric >> 8) & 255, numeric & 255, 255);
+  }
+  return packRgbaUint32(255, 0, 0, 255);
+};
+
 export const renderSampleDataToImage = ({
   sampleData,
   imageData,
@@ -241,6 +253,7 @@ export const renderSampleDataToImage = ({
   displayedColorSet = null,
   includeDefaceCheckerboard = false,
   enforceTransparentAsDeface = false,
+  transparentEraseColor = null,
 }) => {
   if (!sampleData || !imageData?.data || !Number.isFinite(resultWidth) || !Number.isFinite(drawSize)) {
     return imageData;
@@ -259,9 +272,20 @@ export const renderSampleDataToImage = ({
   const checkerDark = packRgbaUint32(0, 0, 0, 32);
   const checkerLight = packRgbaUint32(255, 255, 255, 32);
 
+  // Which logical positions the template actually covers. Inferring this from "the output block is
+  // still blank" cannot tell a transparent template pixel from one whose colour is filtered out,
+  // which is why the transparent-as-erase pass used to be skipped entirely whenever a colour filter
+  // was active. Recording coverage as we go makes it exact, so the flag works with filters on.
+  const logicalWidth = sampleData.width | 0;
+  const logicalHeight = sampleData.height | 0;
+  const covered = enforceTransparentAsDeface
+    ? new Uint8Array(Math.max(0, logicalWidth * logicalHeight))
+    : null;
+
   for (let index = 0; index < sampleData.count; index++) {
     const alpha = sampleData.a[index];
     if (alpha < 1) continue;
+    if (covered) covered[sampleData.y[index] * logicalWidth + sampleData.x[index]] = 1;
     const baseX = sampleData.x[index] * safeDrawSize;
     const baseY = sampleData.y[index] * safeDrawSize;
     const red = sampleData.r[index];
@@ -308,23 +332,29 @@ export const renderSampleDataToImage = ({
     }
   }
 
-  // Post-pass: fill transparent grid positions with checkerboard when mode is active.
-  // Any output pixel block that is still fully transparent after the sample render pass
-  // corresponds to a transparent template pixel.
-  if (enforceTransparentAsDeface && (includeDefaceCheckerboard || !displayedColorSet)) {
-    const logicalWidth = sampleData.width | 0;
-    const logicalHeight = sampleData.height | 0;
+  // Post-pass: mark every logical position the template does not cover — its transparent pixels —
+  // with a cross in the configured colour, drawn with the same mask as ordinary template pixels so
+  // it reads as part of the overlay rather than as a separate kind of mark.
+  if (covered) {
+    const erasePacked = packTransparentEraseColor(transparentEraseColor);
     for (let ly = 0; ly < logicalHeight; ly++) {
       const baseY = ly * safeDrawSize;
       for (let lx = 0; lx < logicalWidth; lx++) {
+        if (covered[ly * logicalWidth + lx]) continue;
         const baseX = lx * safeDrawSize;
-        const centerOffset = (baseY + (safeDrawSize >> 1)) * safeResultWidth + baseX + (safeDrawSize >> 1);
-        if ((pixelData32[centerOffset] >>> 24) !== 0) continue;
-        for (let offsetY = 0; offsetY < safeDrawSize; offsetY++) {
-          const rowOffset = (baseY + offsetY) * safeResultWidth + baseX;
-          const parity = offsetY & 1;
-          for (let offsetX = 0; offsetX < safeDrawSize; offsetX++) {
-            pixelData32[rowOffset + offsetX] = ((offsetX + parity) & 1) === 0 ? checkerDark : checkerLight;
+        if (usePointMode) {
+          const baseOffset = baseY * safeResultWidth + baseX;
+          for (let pointIndex = 0; pointIndex < pointOffsets.length; pointIndex++) {
+            pixelData32[baseOffset + pointOffsets[pointIndex]] = erasePacked;
+          }
+          continue;
+        }
+        for (let row = 0; row < maskRowSpans.length; row++) {
+          const spans = maskRowSpans[row];
+          if (!spans || spans.length === 0) continue;
+          const rowOffset = (baseY + row) * safeResultWidth + baseX;
+          for (let spanIndex = 0; spanIndex < spans.length; spanIndex += 2) {
+            pixelData32.fill(erasePacked, rowOffset + spans[spanIndex], rowOffset + spans[spanIndex + 1]);
           }
         }
       }

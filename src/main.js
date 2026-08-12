@@ -18,7 +18,7 @@ import { createArchiveTemplateUi } from './archiveTemplateUi.js';
 import { layoutLanguageOptions, normalizeLayoutLanguage, translateLayout, getLayoutThemeLabel as getLocalizedLayoutThemeLabel, getTemplateDisplayLabel as getLocalizedTemplateDisplayLabel, getTemplateCreateModeLabel, getChatBanTypeLabel, getColorSortLabel } from './layoutI18n.js';
 import { encodeChunkSampleBytes } from './templateChunkUtils.js';
 import { consoleLog, consoleWarn, consoleError, isDebugLoggingEnabled, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels } from './utils.js';
-import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getCurrentTileSize, setForcedTileRefreshSuppressed, applyArchiveBgLayerToMap, loadArchiveTile, setTemplateSortIDLayersOpacity, registerBmCanvasRestoreOnStyleChange} from './utilsMaptiler.js';
+import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getZoom, getCurrentTileSize, getMountedTemplateCanvasSourceIDs, setForcedTileRefreshSuppressed, applyArchiveBgLayerToMap, getArchiveBgDiag, loadArchiveTile, setTemplateSortIDLayersOpacity, registerBmCanvasRestoreOnStyleChange, projectGeoToScreen, unprojectScreenToGeo, getMapCanvasElement} from './utilsMaptiler.js';
 // import { getCenterGeoCoords, addTemplate } from './utilsMaptiler.js';
 
 const name = GM_info.script.name.toString(); // Name of userscript
@@ -4185,14 +4185,6 @@ function resolveTemplateOverlayMapInstance() {
   return null;
 }
 
-setInterval(() => {
-  const map = resolveTemplateOverlayMapInstance();
-  if (!map) { consoleError('[archive zoom] map not found'); return; }
-  const zoom = map['getZoom']?.();
-  const center = map['getCenter']?.();
-  consoleError('[archive zoom] zoom=', zoom, 'center=', center);
-}, 5000);
-
 function bindTemplateViewportOverlayRefresh() {
   if (templateViewportOverlayRefreshBound || isSafeModeActive()) return;
   doAfterMapFound(() => {
@@ -4480,7 +4472,7 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
       'progressBarEnabled': true,
       'hideCompletedColors': false,
       'sortBy': 'total-desc',
-      'anchor': 'lt', // Top left
+      'transparentEraseColor': '#ff0000',
       'memorySavingMode': false,
       'eventEnabled': false,
       'eventProvider': '',
@@ -5346,6 +5338,31 @@ function getTemplateJumpOriginCoords(originMode = 'center') {
     return normalizeTilePixelCoords([coordsTile[0], coordsTile[1], coordsPixel[0], coordsPixel[1]]);
   } catch (_) {
     return normalizeTilePixelCoords(apiManager?.coordsTilePixel ?? null);
+  }
+}
+
+const ARCHIVE_BASE_URL = 'https://wplace.zaebal.me/korobka_archive/';
+
+/** Builds an archive URL pointing at whatever the map is currently showing.
+ * Falls back to the bare archive page if the map position cannot be read, so the button always
+ * does something useful.
+ * @returns {string}
+ * @since 0.87.71
+ */
+function buildArchiveUrl() {
+  try {
+    const geoCoords = getCenterGeoCoords();
+    const lat = Number(geoCoords?.[0]);
+    const lng = Number(geoCoords?.[1]);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return ARCHIVE_BASE_URL;
+    const url = new URL(ARCHIVE_BASE_URL);
+    url.searchParams.set('lat', lat.toFixed(6));
+    url.searchParams.set('lng', lng.toFixed(6));
+    const zoom = getZoom();
+    if (Number.isFinite(zoom)) url.searchParams.set('zoom', zoom.toFixed(2));
+    return url.toString();
+  } catch (_) {
+    return ARCHIVE_BASE_URL;
   }
 }
 
@@ -6368,15 +6385,19 @@ const syncTemplatePositionJoystickLanguage = () => {
   const panel = document.getElementById('bm-template-position-joystick');
   if (!panel) return;
   const hint = panel.querySelector('.bm-template-position-joystick-hint');
-  if (hint) hint.textContent = t('joystick.hint');
-  const up = panel.querySelector('.bm-template-position-joystick-up');
-  if (up) up.title = t('joystick.moveUp');
-  const left = panel.querySelector('.bm-template-position-joystick-left');
-  if (left) left.title = t('joystick.moveLeft');
-  const right = panel.querySelector('.bm-template-position-joystick-right');
-  if (right) right.title = t('joystick.moveRight');
-  const down = panel.querySelector('.bm-template-position-joystick-down');
-  if (down) down.title = t('joystick.moveDown');
+  if (hint) hint.textContent = t('position.panel.hint');
+  const applyBtn = panel.querySelector('[data-role="position-apply-btn"]');
+  if (applyBtn) {
+    applyBtn.textContent = t('position.panel.apply');
+    applyBtn.title = t('position.panel.applyTitle');
+  }
+  const cancelBtn = panel.querySelector('[data-role="position-cancel-btn"]');
+  if (cancelBtn) {
+    cancelBtn.textContent = t('position.panel.cancel');
+    cancelBtn.title = t('position.panel.cancelTitle');
+  }
+  const dropCard = document.querySelector('#bm-template-drop-overlay [data-role="drop-card"]');
+  if (dropCard) dropCard.textContent = t('drop.hint');
   const archiveBtn = panel.querySelector('[data-role="archive-edit-btn"]');
   if (archiveBtn) {
     archiveBtn.textContent = t('joystick.archiveDate');
@@ -6455,6 +6476,10 @@ const applyLayoutLanguage = (value = null) => {
   setCheckboxLabelText('bm-checkbox-colors-completed', t('settings.hideCompletedColors'));
   setCheckboxLabelText('bm-show-error-map', t('settings.showErrorMap'));
   setCheckboxLabelText('bm-show-only-enabled-colors-on-error-map', t('settings.onlyEnabledColorsOnErrorMap'));
+  const transparentEraseLabel = document.getElementById('bm-transparent-erase-color-label');
+  if (transparentEraseLabel) transparentEraseLabel.textContent = t('settings.transparentEraseColor.label');
+  const transparentEraseInput = document.getElementById('bm-transparent-erase-color');
+  if (transparentEraseInput) transparentEraseInput.title = t('settings.transparentEraseColor.title');
   setCheckboxLabelText('bm-event-enabled', t('settings.enableEvent'));
   setCheckboxLabelText('bm-event-hide-claimed', t('settings.hideClaimedEventItems'));
   setCheckboxLabelText('bm-event-hide-unavailable', t('settings.hideUnavailableEventItems'));
@@ -6565,6 +6590,7 @@ window.getBlueMarbleNextPixelPlural = (count) => getNextPixelPluralSuffix(count)
  */
 async function buildOverlayMain() {
   let isMinimized = false; // Overlay state tracker (false = maximized, true = minimized)
+  let runTemplateCreationFlowRef = null; // Set while building the create-template control; used by drag & drop
   // Load last saved coordinates (if any)
   let savedCoords = {};
   const savedCoordsValue = await GM.getValue('bmCoords', '{}');
@@ -7068,7 +7094,7 @@ async function buildOverlayMain() {
           .addSelect({'id': 'bm-template-create-mode', 'style': 'margin: 0 0.5ch; min-width: 15ch;'}, (instance, select) => {
             const getTemplateFileInput = () => document.querySelector('#bm-input-file-template');
             let createFlowBusy = false;
-            const runTemplateCreationFlow = async ({ mode, imageFile = null } = {}) => {
+            const runTemplateCreationFlow = runTemplateCreationFlowRef = async ({ mode, imageFile = null } = {}) => {
               const createMode = normalizeTemplateCreateMode(mode);
               if (createMode === TEMPLATE_CREATE_MODE_TIME_ARCHIVE) {
                 startArchiveTemplatePointCapture(instance);
@@ -7226,12 +7252,10 @@ async function buildOverlayMain() {
                   Number(coordPxX.value),
                   Number(coordPxY.value),
                 ];
-                const createAnchor = templateManager.getAnchor();
                 const createdTemplate = await templateManager.createTemplate(
                   sourceFile,
                   templateName,
                   createCoords,
-                  createAnchor,
                   {
                     convertToPalette: createWithPaletteConversion,
                     convertOptions: paletteConversionOptions,
@@ -7252,18 +7276,17 @@ async function buildOverlayMain() {
                       try {
                         instance.handleDisplayStatus('Recreating template with nearest palette conversion...');
                         await templateManager.deleteTemplate(createdTemplate?.storageKey);
-                        await templateManager.createTemplate(
+                        const recreatedTemplate = await templateManager.createTemplate(
                           originalUploadedFile || sourceFile,
                           templateName,
                           createCoords,
-                          createAnchor,
                           {
                             convertToPalette: true,
                             convertOptions: conversionChoice.options || normalizeTemplatePaletteConversionOptions(templatePaletteConversionDefaults),
                           }
                         );
                         instance.handleDisplayStatus('Converted non-palette colors and recreated the template.');
-                        return;
+                        return recreatedTemplate;
                       } catch (error) {
                         consoleWarn('Failed to convert and recreate template after creation.', error);
                         instance.handleDisplayStatus('Could not convert and recreate template. Kept current template.');
@@ -7278,6 +7301,7 @@ async function buildOverlayMain() {
                 } else {
                   instance.handleDisplayStatus('Template created. Rendering visible crosses...');
                 }
+                return createdTemplate;
               } finally {
                 createFlowBusy = false;
                 const input = getTemplateFileInput();
@@ -7352,41 +7376,6 @@ async function buildOverlayMain() {
               }
               };
             }).buildElement()
-            .addSelect({'id': 'bm-template-anchor'}, (instance, select) => {
-            const anchors = {
-              "lt": "⟔",
-              "mt": "⨪",
-              "rt": "ᒬ",
-              "lm": "꜏",
-              "mm": "⊡",
-              "rm": "꜊",
-              "lb": "Ŀ",
-              "mb": "∸",
-              "rb": "⟓",
-            };
-            const anchorTextX = {
-              "l": "Left",
-              "m": "Center",
-              "r": "Right",
-            };
-            const anchorTextY = {
-              "t": "Top",
-              "m": "Middle",
-              "b": "Bottom",
-            };
-            const currentAnchor = templateManager.getAnchor();
-            Object.entries(anchors).forEach(([anchor, displayText]) => {
-              const option = document.createElement('option');
-              option.value = anchor;
-              option.textContent = displayText;
-              if (anchor === currentAnchor) { option.selected = true; }
-              select.appendChild(option);
-            });
-            select.addEventListener('change', () => {
-              templateManager.setAnchor(select.value);
-              instance.handleDisplayStatus(`Changed the default template anchor to "${anchorTextY[select.value[1]]} ${anchorTextX[select.value[0]]}".`);
-            })
-          }).buildElement()
         .buildElement()
         .addDiv({'id': 'bm-templatefilter-list', 'style': 'max-height: 125px; overflow: auto; touch-action: pan-x pan-y; display: flex; flex-direction: column; gap: 4px;'}).buildElement()
         .buildElement()
@@ -7483,7 +7472,13 @@ async function buildOverlayMain() {
             });
             syncDistanceToolUi();
           }).buildElement()
-          .addButton({'id': 'bm-button-website', 'className': 'bm-help', 'innerHTML': '<span class="bm-action-icon" aria-hidden="true">🌐</span>', 'title': t('action.website')}, 
+          .addButton({'id': 'bm-button-archive', 'className': 'bm-help', 'innerHTML': '<span class="bm-action-icon" aria-hidden="true">🕰️</span>', 'title': t('action.archive')},
+            (instance, button) => {
+            button.addEventListener('click', () => {
+              window.open(buildArchiveUrl(), '_blank', 'noopener noreferrer');
+            });
+          }).buildElement()
+          .addButton({'id': 'bm-button-website', 'className': 'bm-help', 'innerHTML': '<span class="bm-action-icon" aria-hidden="true">🌐</span>', 'title': t('action.website')},
             (instance, button) => {
             button.addEventListener('click', () => {
               window.open('https://t.me/ruswplace', '_blank', 'noopener noreferrer');
@@ -7497,13 +7492,85 @@ async function buildOverlayMain() {
     .buildElement()
   .buildOverlay(document.body);
   initProfiler();
+
+  // Console-reachable diagnostics. Must hang off document.head: @grant sandboxes the userscript
+  // in its own window, so anything assigned to `window` here is invisible to the page's devtools
+  // console. Run `document.head.__bmDiag()` to see whether templates failed to LOAD (storage) or
+  // failed to RENDER (overlay) — the two produce the identical "no crosses" symptom.
+  try {
+    document.head['__bmDiag'] = () => {
+      const templates = templateManager.templatesArray ?? [];
+      // bmCanvas entries are recorded before addSource/addLayer is attempted, so they only prove
+      // a render was tried. Ask the map itself what actually exists and whether it is visible.
+      const attempted = Object.keys(document.head['__bmCanvas']?.overlay ?? {});
+      const live = getMountedTemplateCanvasSourceIDs('overlay');
+      const map = document.head['__bmmap'];
+      const layerOrder = map?.['getLayersOrder']?.() ?? [];
+      const artIndex = layerOrder.indexOf('pixel-art-layer');
+      const layers = live.map((sourceID) => {
+        let opacity = null;
+        try { opacity = map?.['getPaintProperty']?.(sourceID, 'raster-opacity'); } catch (_) {}
+        const index = layerOrder.indexOf(sourceID);
+        return { sourceID, opacity, index, belowPixelArt: artIndex >= 0 && index >= 0 && index < artIndex };
+      });
+      const displayedColors = templateManager.getDisplayedColorsSorted();
+      // Per-template breakdown. "No crosses" for ONE template while others draw fine is a different
+      // failure from a global one, and the aggregate counts above cannot tell them apart.
+      const visiblePrefixes = templateManager.getVisibleTilePrefixes?.() ?? null;
+      const liveSet = new Set(live);
+      const perTemplate = templates.map((template) => {
+        const sortID = template?.sortID;
+        let allTileKeys = [];
+        try { allTileKeys = template?.getChunkKeys?.() ?? []; } catch (_) {}
+        const visibleTileKeys = visiblePrefixes
+          ? allTileKeys.filter((key) => visiblePrefixes.has(String(key).split(',').slice(0, 2).join(',')))
+          : allTileKeys;
+        const mounted = live.filter((sourceID) => sourceID.endsWith(`-${sortID}`));
+        return {
+          sortID,
+          name: template?.displayName,
+          enabled: template?.enabled === true,
+          coords: template?.coords,
+          size: [template?.imageWidth, template?.imageHeight],
+          tileKeys: allTileKeys.length,
+          visibleTileKeys: visibleTileKeys.length,
+          fullCanvasMounted: liveSet.has(`BM-overlay-full-${sortID}`),
+          // Visible tiles with neither a per-tile source nor the full canvas = the blank areas.
+          visibleTilesUnmounted: liveSet.has(`BM-overlay-full-${sortID}`)
+            ? 0
+            : visibleTileKeys.filter((key) => !liveSet.has(`BM-overlay-${key}-${sortID}`)).length,
+          mountedSources: mounted.length,
+        };
+      });
+      return {
+        scriptVersion: templateManager.version,
+        templatesLoaded: templates.length,
+        templatesEnabled: templates.filter((template) => template?.enabled).length,
+        storedTemplateKeys: Object.keys(templateManager.templatesJSON?.templates ?? {}).length,
+        overlayRenderAttempted: attempted.length,
+        overlayLayersLive: live.length,
+        overlayLayersHidden: layers.filter((layer) => layer.opacity === 0).length,
+        overlayLayersBelowPixelArt: layers.filter((layer) => layer.belowPixelArt).length,
+        errorMapShown: templateManager.isErrorMapShown(),
+        displayedColors: displayedColors.length,
+        workersAvailable: templateWorkerManager.canUseWorkers(),
+        archiveBackground: templateManager.isArchiveBackgroundEnabled?.() ?? null,
+        archiveBackgroundLayer: getArchiveBgDiag(),
+        visiblePrefixes: visiblePrefixes ? [...visiblePrefixes] : null,
+        perTemplate,
+        layers,
+        renderIssues: document.head['__bmOverlayIssues'] ?? [],
+      };
+    };
+  } catch (_) {}
   syncDistanceToolUi();
 
   applyLayoutTheme(templateManager.getLayoutTheme());
   applyLayoutLanguage(currentLayoutLanguage);
 
   // ------- Helper: Build the color filter list -------
-  const syncToggleList = () => {
+  const syncToggleList = (options = null) => {
+    const deferPersist = options?.deferPersist === true;
     try {
       (templateManager.templatesArray ?? []).forEach(t => {
         const key = t.storageKey;
@@ -7513,8 +7580,13 @@ async function buildOverlayMain() {
           templateJSON.palette = t.colorPalette;
         }
       })
-      // persist immediately
-      templateManager.storeTemplates();
+      // Persist. Callers on a UI hot path (checkbox toggles) defer it: the write re-serializes
+      // every template's tile buffers, which is far too heavy to run inside a click handler.
+      if (deferPersist) {
+        templateManager.storeTemplatesDebounced();
+      } else {
+        templateManager.storeTemplates();
+      }
     } catch (_) {};
   };
   window.syncToggleList = syncToggleList;
@@ -7614,11 +7686,6 @@ async function buildOverlayMain() {
     return { ok: true, moved: true, message: 'Template position updated.' };
   };
   let templatePositionJoystickWindow = null;
-  let templatePositionJoystickPendingDeltaX = 0;
-  let templatePositionJoystickPendingDeltaY = 0;
-  let templatePositionJoystickIsProcessing = false;
-  let templatePositionJoystickTrailingTimer = null;
-  const TEMPLATE_POSITION_JOYSTICK_TRAILING_MS = 90;
   function isTemplateRemote(template) {
     if (!template) return false;
     const templateStore = templateManager.templatesJSON?.templates?.[template.storageKey] ?? {};
@@ -7629,74 +7696,6 @@ async function buildOverlayMain() {
     const templateStore = templateManager.templatesJSON?.templates?.[template.storageKey] ?? {};
     return normalizeTemplateRemoteStream(template.remoteStream ?? templateStore.remoteStream);
   }
-  const clearTemplatePositionJoystickPending = () => {
-    templatePositionJoystickPendingDeltaX = 0;
-    templatePositionJoystickPendingDeltaY = 0;
-    if (templatePositionJoystickTrailingTimer) {
-      clearTimeout(templatePositionJoystickTrailingTimer);
-      templatePositionJoystickTrailingTimer = null;
-    }
-  };
-  const scheduleTemplatePositionJoystickTrailingMove = () => {
-    if (templatePositionJoystickTrailingTimer) {
-      clearTimeout(templatePositionJoystickTrailingTimer);
-    }
-    templatePositionJoystickTrailingTimer = setTimeout(() => {
-      templatePositionJoystickTrailingTimer = null;
-      void runTemplatePositionJoystickMove();
-    }, TEMPLATE_POSITION_JOYSTICK_TRAILING_MS);
-  };
-  const runTemplatePositionJoystickMove = async () => {
-    if (templatePositionJoystickIsProcessing) return;
-    if (!templatePositionEditStorageKey) return;
-    if (templatePositionJoystickPendingDeltaX === 0 && templatePositionJoystickPendingDeltaY === 0) return;
-    templatePositionJoystickIsProcessing = true;
-    const aggregateDeltaX = templatePositionJoystickPendingDeltaX;
-    const aggregateDeltaY = templatePositionJoystickPendingDeltaY;
-    templatePositionJoystickPendingDeltaX = 0;
-    templatePositionJoystickPendingDeltaY = 0;
-    try {
-      const activeTemplate = (templateManager.templatesArray ?? [])
-        .find((template) => template.storageKey === templatePositionEditStorageKey);
-      if (!activeTemplate) return;
-      if (isTemplateRemote(activeTemplate)) {
-        templatePositionEditStorageKey = null;
-        clearTemplatePositionJoystickPending();
-        syncTemplatePositionJoystickWindow();
-        buildTemplateFilterList();
-        overlayMain.handleDisplayStatus('Remote templates cannot be repositioned.');
-        return;
-      }
-      const current = getOverlayCoordsFromInputsNormalized()
-        || normalizeTilePixelCoords(activeTemplate.coords);
-      if (!current) {
-        overlayMain.handleDisplayError('Coordinates are malformed.');
-        return;
-      }
-      const next = shiftTilePixelCoordsByPixels(current, aggregateDeltaX, aggregateDeltaY);
-      if (!next) {
-        overlayMain.handleDisplayError('Failed to update position from joystick.');
-        return;
-      }
-      const moveResult = await moveTemplateToCoords(activeTemplate, next, {
-        refreshLists: false,
-        overlayMode: 'single',
-      });
-      if (!moveResult.ok) {
-        overlayMain.handleDisplayError(moveResult.message || 'Failed to reposition template.');
-        return;
-      }
-      setOverlayCoordsInputs(activeTemplate.coords);
-    } finally {
-      templatePositionJoystickIsProcessing = false;
-      if (
-        templatePositionEditStorageKey &&
-        (templatePositionJoystickPendingDeltaX !== 0 || templatePositionJoystickPendingDeltaY !== 0)
-      ) {
-        scheduleTemplatePositionJoystickTrailingMove();
-      }
-    }
-  };
   const positionTemplateJoystickWindow = () => {
     const panel = templatePositionJoystickWindow;
     if (!panel) return;
@@ -7712,18 +7711,6 @@ async function buildOverlayMain() {
     panel.style.left = `${left}px`;
     panel.style.top = `${top}px`;
   };
-  const shiftCoordsFromJoystick = (event, dx, dy) => {
-    event.preventDefault();
-    const isCtrl = event.ctrlKey;
-    const step = isCtrl ? 10 : 1;
-    templatePositionJoystickPendingDeltaX += dx * step;
-    templatePositionJoystickPendingDeltaY += dy * step;
-    if (!templatePositionJoystickIsProcessing && !templatePositionJoystickTrailingTimer) {
-      void runTemplatePositionJoystickMove();
-      return;
-    }
-    scheduleTemplatePositionJoystickTrailingMove();
-  };
   const ensureTemplatePositionJoystickWindow = () => {
     if (templatePositionJoystickWindow) return templatePositionJoystickWindow;
     const panel = document.createElement('section');
@@ -7731,53 +7718,42 @@ async function buildOverlayMain() {
     panel.className = 'bm-template-position-joystick';
     applyOverlayVarsToFloatingElement(panel);
 
+    const title = document.createElement('div');
+    title.className = 'bm-template-position-title';
+    title.dataset.role = 'position-title';
+    title.textContent = t('position.panel.title');
+    panel.appendChild(title);
+
     const hint = document.createElement('div');
     hint.className = 'bm-template-position-joystick-hint';
-    hint.textContent = 'Ctrl+Click = 10px';
+    hint.textContent = t('position.panel.hint');
     panel.appendChild(hint);
 
-    const center = document.createElement('div');
-    center.className = 'bm-template-position-joystick-center';
-    center.textContent = '•';
-    panel.appendChild(center);
+    const actionRow = document.createElement('div');
+    actionRow.className = 'bm-template-position-actions';
 
-    const up = document.createElement('button');
-    up.type = 'button';
-    up.className = 'bm-template-position-joystick-btn bm-template-position-joystick-up';
-    up.textContent = '▲';
-    up.title = 'Move up by 1px (Ctrl+Click = 10px)';
-    up.addEventListener('click', (event) => shiftCoordsFromJoystick(event, 0, -1));
-    panel.appendChild(up);
+    const applyButton = document.createElement('button');
+    applyButton.type = 'button';
+    applyButton.dataset.role = 'position-apply-btn';
+    applyButton.textContent = t('position.panel.apply');
+    applyButton.title = t('position.panel.applyTitle');
+    applyButton.addEventListener('click', () => { void applyTemplatePositionEdit(); });
+    actionRow.appendChild(applyButton);
 
-    const left = document.createElement('button');
-    left.type = 'button';
-    left.className = 'bm-template-position-joystick-btn bm-template-position-joystick-left';
-    left.textContent = '▲';
-    left.title = 'Move left by 1px (Ctrl+Click = 10px)';
-    left.addEventListener('click', (event) => shiftCoordsFromJoystick(event, -1, 0));
-    panel.appendChild(left);
+    const cancelButton = document.createElement('button');
+    cancelButton.type = 'button';
+    cancelButton.dataset.role = 'position-cancel-btn';
+    cancelButton.textContent = t('position.panel.cancel');
+    cancelButton.title = t('position.panel.cancelTitle');
+    cancelButton.addEventListener('click', () => { void cancelTemplatePositionEdit(); });
+    actionRow.appendChild(cancelButton);
 
-    const right = document.createElement('button');
-    right.type = 'button';
-    right.className = 'bm-template-position-joystick-btn bm-template-position-joystick-right';
-    right.textContent = '▲';
-    right.title = 'Move right by 1px (Ctrl+Click = 10px)';
-    right.addEventListener('click', (event) => shiftCoordsFromJoystick(event, 1, 0));
-    panel.appendChild(right);
-
-    const down = document.createElement('button');
-    down.type = 'button';
-    down.className = 'bm-template-position-joystick-btn bm-template-position-joystick-down';
-    down.textContent = '▲';
-    down.title = 'Move down by 1px (Ctrl+Click = 10px)';
-    down.addEventListener('click', (event) => shiftCoordsFromJoystick(event, 0, 1));
-    panel.appendChild(down);
+    panel.appendChild(actionRow);
 
     const downloadButton = document.createElement('button');
     downloadButton.type = 'button';
     downloadButton.textContent = 'Download Image';
     downloadButton.title = 'Download this template as an image.';
-    downloadButton.style.gridColumn = '1 / 4';
     downloadButton.style.border = '1px solid var(--bm-border-strong)';
     downloadButton.style.borderRadius = '6px';
     downloadButton.style.background = 'var(--bm-subtle-bg)';
@@ -7790,7 +7766,6 @@ async function buildOverlayMain() {
     panel.appendChild(downloadButton);
 
     const archiveTools = document.createElement('div');
-    archiveTools.style.gridColumn = '1 / 4';
     archiveTools.style.display = 'none';
     archiveTools.style.flexDirection = 'column';
     archiveTools.style.gap = '3px';
@@ -7844,15 +7819,14 @@ async function buildOverlayMain() {
         targetTemplate: activeTemplate,
       });
       if (result?.updated && result?.storageKey) {
-        templatePositionEditStorageKey = String(result.storageKey);
-        clearTemplatePositionJoystickPending();
         const nextTemplate = (templateManager.templatesArray ?? [])
-          .find((template) => template.storageKey === templatePositionEditStorageKey);
+          .find((template) => template.storageKey === String(result.storageKey));
+        exitTemplatePositionEdit();
         if (nextTemplate) {
-          setOverlayCoordsInputs(nextTemplate.coords);
+          await startTemplatePositionEdit(nextTemplate, { focusMap: false });
+        } else {
+          buildTemplateFilterList();
         }
-        syncTemplatePositionJoystickWindow();
-        buildTemplateFilterList();
       }
     });
     downloadButton.addEventListener('click', async () => {
@@ -7878,6 +7852,308 @@ async function buildOverlayMain() {
     templatePositionJoystickWindow = panel;
     return panel;
   };
+  // ------- Drag-to-position -------
+  // The template is previewed as a full-colour, pixel-perfect ghost element floating over the
+  // map. Dragging only moves that element, so no chunk rekeying, persistence or overlay
+  // re-render happens until the user applies the position.
+  const TEMPLATE_MAP_DRAG_MIN_HIT_PX = 14;
+  let templatePositionPreviewCoords = null;
+  let templatePositionGhostElement = null;
+  let templatePositionGhostUrl = null;
+  let templatePositionGhostSize = null;
+  let templatePositionGhostFrame = null;
+  let templatePositionGhostToken = 0;
+  const templateMapDragState = {
+    active: false,
+    pointerId: null,
+    startClientX: 0,
+    startClientY: 0,
+    startCoords: null,
+    pixelPerWplacePixel: 1,
+  };
+  const getActivePositionTemplate = () => {
+    if (!templatePositionEditStorageKey) return null;
+    return (templateManager.templatesArray ?? [])
+      .find((template) => template.storageKey === templatePositionEditStorageKey) ?? null;
+  };
+  const getTemplateSizePixels = (template) => {
+    const templateStore = templateManager.templatesJSON?.templates?.[template?.storageKey] ?? {};
+    const width = Number(template?.imageWidth) || Number(templateStore.width) || 0;
+    const height = Number(template?.imageHeight) || Number(templateStore.height) || 0;
+    return (width > 0 && height > 0) ? { width, height } : null;
+  };
+  /** Screen rectangle (client coordinates) the preview currently covers.
+   * @returns {{left: number, top: number, width: number, height: number} | null}
+   * @since 0.90.1
+   */
+  const getTemplatePreviewScreenRect = () => {
+    const coords = templatePositionPreviewCoords;
+    const size = templatePositionGhostSize;
+    if (!coords || !size) return null;
+    const pixelPerWplacePixel = Number(getPixelPerWplacePixel());
+    if (!Number.isFinite(pixelPerWplacePixel) || pixelPerWplacePixel <= 0) return null;
+    const geo = coordsTileCoordsToGeoCoords(coords.slice(0, 2), coords.slice(2, 4), false);
+    const projected = projectGeoToScreen(geo[0], geo[1]);
+    if (!projected) return null;
+    const canvasRect = getMapCanvasElement()?.getBoundingClientRect();
+    return {
+      left: projected.x + (canvasRect?.left ?? 0),
+      top: projected.y + (canvasRect?.top ?? 0),
+      width: size.width * pixelPerWplacePixel,
+      height: size.height * pixelPerWplacePixel,
+    };
+  };
+  const isPointOnTemplatePreview = (clientX, clientY) => {
+    const rect = getTemplatePreviewScreenRect();
+    if (!rect) return false;
+    // Tiny templates at low zoom would be impossible to grab without a minimum hit area.
+    const padX = Math.max(0, (TEMPLATE_MAP_DRAG_MIN_HIT_PX - rect.width) / 2);
+    const padY = Math.max(0, (TEMPLATE_MAP_DRAG_MIN_HIT_PX - rect.height) / 2);
+    return clientX >= rect.left - padX
+      && clientX <= rect.left + rect.width + padX
+      && clientY >= rect.top - padY
+      && clientY <= rect.top + rect.height + padY;
+  };
+  const isMapSurfaceElement = (target) => {
+    if (!(target instanceof Element)) return false;
+    if (target.closest('#bm-overlay, #bm-template-position-joystick, .bm-overlay, dialog, .bm-modal')) return false;
+    return Boolean(target.closest('.maplibregl-canvas-container, canvas.maplibregl-canvas, .maplibregl-map'));
+  };
+  const updateTemplateMapDragCursor = () => {
+    const canvas = getMapCanvasElement();
+    if (!canvas) return;
+    if (templateMapDragState.active) {
+      canvas.style.cursor = 'grabbing';
+    } else if (templatePositionEditStorageKey) {
+      canvas.style.cursor = 'grab';
+    } else if (canvas.style.cursor === 'grab' || canvas.style.cursor === 'grabbing') {
+      canvas.style.cursor = '';
+    }
+  };
+  /** Reposition the ghost to match the preview coordinates and the current camera.
+   * @since 0.90.1
+   */
+  const syncTemplatePositionGhost = () => {
+    const ghost = templatePositionGhostElement;
+    if (!ghost) return;
+    const rect = getTemplatePreviewScreenRect();
+    if (!rect) {
+      ghost.style.display = 'none';
+      return;
+    }
+    ghost.style.display = '';
+    ghost.style.transform = `translate3d(${rect.left}px, ${rect.top}px, 0)`;
+    ghost.style.width = `${Math.max(1, rect.width)}px`;
+    ghost.style.height = `${Math.max(1, rect.height)}px`;
+  };
+  /** Keep the ghost glued to the map while the camera pans or zooms.
+   * @since 0.90.1
+   */
+  const startTemplatePositionGhostLoop = () => {
+    if (templatePositionGhostFrame !== null) return;
+    const tick = () => {
+      if (!templatePositionGhostElement) {
+        templatePositionGhostFrame = null;
+        return;
+      }
+      syncTemplatePositionGhost();
+      templatePositionGhostFrame = requestAnimationFrame(tick);
+    };
+    templatePositionGhostFrame = requestAnimationFrame(tick);
+  };
+  const destroyTemplatePositionGhost = () => {
+    templatePositionGhostToken++;
+    if (templatePositionGhostFrame !== null) {
+      cancelAnimationFrame(templatePositionGhostFrame);
+      templatePositionGhostFrame = null;
+    }
+    templatePositionGhostElement?.remove();
+    templatePositionGhostElement = null;
+    templatePositionGhostSize = null;
+    if (templatePositionGhostUrl) {
+      URL.revokeObjectURL(templatePositionGhostUrl);
+      templatePositionGhostUrl = null;
+    }
+  };
+  /** Build the full-colour preview element for the template being positioned.
+   * The real overlay (crosses/dots) is hidden while it is up.
+   * @since 0.90.1
+   */
+  const createTemplatePositionGhost = async (template) => {
+    destroyTemplatePositionGhost();
+    const token = templatePositionGhostToken;
+    const size = getTemplateSizePixels(template);
+    if (!size) return false;
+    // Set the size up front: hit-testing needs it even if the preview image cannot be built,
+    // in which case dragging still works against the normal overlay.
+    templatePositionGhostSize = size;
+    let blob = null;
+    try {
+      ({ blob } = await createTemplateImageBlob(template));
+    } catch (error) {
+      consoleWarn('Could not build the full-colour position preview.', error);
+      return false;
+    }
+    if (!blob || token !== templatePositionGhostToken) return false;
+    const image = document.createElement('img');
+    image.className = 'bm-template-position-ghost';
+    image.draggable = false;
+    image.alt = '';
+    templatePositionGhostUrl = URL.createObjectURL(blob);
+    image.src = templatePositionGhostUrl;
+    document.body.appendChild(image);
+    templatePositionGhostElement = image;
+    templatePositionGhostSize = size;
+    // Hide the cross/dot overlay so only the true colours are visible while positioning.
+    setTemplateSortIDLayersOpacity(template.sortID, 0);
+    syncTemplatePositionGhost();
+    startTemplatePositionGhostLoop();
+    return true;
+  };
+  const setTemplatePositionPreviewCoords = (coords, { syncInputs = true } = {}) => {
+    const normalized = normalizeTilePixelCoords(coords);
+    if (!normalized) return false;
+    templatePositionPreviewCoords = normalized;
+    if (syncInputs) setOverlayCoordsInputs(normalized);
+    syncTemplatePositionGhost();
+    return true;
+  };
+  function endTemplateMapDrag() {
+    if (!templateMapDragState.active) return;
+    templateMapDragState.active = false;
+    templateMapDragState.pointerId = null;
+    templateMapDragState.startCoords = null;
+    updateTemplateMapDragCursor();
+  }
+  const handleTemplateMapDragPointerDown = (event) => {
+    if (!templatePositionEditStorageKey || !templatePositionPreviewCoords) return;
+    if (event.button !== 0 || event.isPrimary === false) return;
+    if (!isMapSurfaceElement(event.target)) return;
+    if (!isPointOnTemplatePreview(event.clientX, event.clientY)) return;
+    const pixelPerWplacePixel = Number(getPixelPerWplacePixel());
+    if (!Number.isFinite(pixelPerWplacePixel) || pixelPerWplacePixel <= 0) return;
+    templateMapDragState.active = true;
+    templateMapDragState.pointerId = event.pointerId;
+    templateMapDragState.startClientX = event.clientX;
+    templateMapDragState.startClientY = event.clientY;
+    templateMapDragState.startCoords = templatePositionPreviewCoords;
+    templateMapDragState.pixelPerWplacePixel = pixelPerWplacePixel;
+    // Keep the drag away from the map so it moves the template instead of the camera.
+    event.preventDefault();
+    event.stopPropagation();
+    updateTemplateMapDragCursor();
+  };
+  const handleTemplateMapDragPointerMove = (event) => {
+    if (!templateMapDragState.active) return;
+    if (templateMapDragState.pointerId !== null && event.pointerId !== templateMapDragState.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const scale = templateMapDragState.pixelPerWplacePixel;
+    const deltaX = Math.round((event.clientX - templateMapDragState.startClientX) / scale);
+    const deltaY = Math.round((event.clientY - templateMapDragState.startClientY) / scale);
+    const nextCoords = shiftTilePixelCoordsByPixels(templateMapDragState.startCoords, deltaX, deltaY);
+    if (!nextCoords) return;
+    setTemplatePositionPreviewCoords(nextCoords);
+  };
+  const handleTemplateMapDragPointerUp = (event) => {
+    if (!templateMapDragState.active) return;
+    if (templateMapDragState.pointerId !== null && event.pointerId !== templateMapDragState.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    endTemplateMapDrag();
+  };
+  window.addEventListener('pointerdown', handleTemplateMapDragPointerDown, true);
+  window.addEventListener('pointermove', handleTemplateMapDragPointerMove, true);
+  window.addEventListener('pointerup', handleTemplateMapDragPointerUp, true);
+  window.addEventListener('pointercancel', handleTemplateMapDragPointerUp, true);
+  // Typing coordinates by hand should move the preview too.
+  Object.values(getOverlayCoordinateInputs()).forEach((input) => {
+    input?.addEventListener('input', () => {
+      if (!templatePositionEditStorageKey || templateMapDragState.active) return;
+      const typedCoords = getOverlayCoordsFromInputsNormalized();
+      if (typedCoords) setTemplatePositionPreviewCoords(typedCoords, { syncInputs: false });
+    });
+  });
+
+  /** Enter position-edit mode for a template and focus the map on it.
+   * @since 0.90.1
+   */
+  const startTemplatePositionEdit = async (template, { focusMap = true, initialCoords = null } = {}) => {
+    if (!template) return false;
+    if (isTemplateRemote(template)) {
+      overlayMain.handleDisplayStatus('Remote templates cannot be repositioned.');
+      return false;
+    }
+    const startCoords = normalizeTilePixelCoords(initialCoords ?? template.coords);
+    if (!startCoords || !setOverlayCoordsInputs(startCoords)) {
+      overlayMain.handleDisplayError('Unable to load template coordinates into inputs.');
+      return false;
+    }
+    templatePositionEditStorageKey = template.storageKey;
+    templatePositionPreviewCoords = startCoords;
+    syncTemplatePositionJoystickWindow();
+    const size = getTemplateSizePixels(template);
+    if (focusMap) {
+      const focusCoords = resolveTemplateFocusCoords(startCoords, size?.width, size?.height) || startCoords;
+      await teleportToTileCoords(focusCoords.slice(0, 2), focusCoords.slice(2, 4));
+      applyTemplateFocusZoom(size?.width, size?.height);
+    }
+    const hasGhost = await createTemplatePositionGhost(template);
+    buildTemplateFilterList();
+    overlayMain.handleDisplayStatus(hasGhost
+      ? `Positioning "${template.displayName}". Drag it on the map, then press ✅ to apply.`
+      : `Positioning "${template.displayName}". Drag it on the map (preview unavailable).`);
+    return true;
+  };
+  /** Tear down positioning mode without touching the template.
+   * @since 0.90.1
+   */
+  const exitTemplatePositionEdit = () => {
+    const template = getActivePositionTemplate();
+    endTemplateMapDrag();
+    destroyTemplatePositionGhost();
+    if (template) setTemplateSortIDLayersOpacity(template.sortID, 1);
+    templatePositionEditStorageKey = null;
+    templatePositionPreviewCoords = null;
+    syncTemplatePositionJoystickWindow();
+  };
+  /** Commit the previewed position. This is the only point where the (expensive)
+   * chunk rekey, persist and overlay re-render happen.
+   * @since 0.90.1
+   */
+  const applyTemplatePositionEdit = async () => {
+    const template = getActivePositionTemplate();
+    if (!template) return;
+    const templateName = template.displayName;
+    const targetCoords = templatePositionPreviewCoords;
+    exitTemplatePositionEdit();
+    if (!targetCoords) {
+      buildTemplateFilterList();
+      return;
+    }
+    const moveResult = await moveTemplateToCoords(template, targetCoords);
+    if (!moveResult.ok) {
+      overlayMain.handleDisplayError(moveResult.message || 'Failed to reposition template.');
+      buildTemplateFilterList();
+      return;
+    }
+    buildTemplateFilterList();
+    overlayMain.handleDisplayStatus(moveResult.moved
+      ? `Template "${templateName}" placed at ${targetCoords.join(', ')}.`
+      : `Template "${templateName}" position unchanged.`);
+  };
+  /** Discard the previewed position. Nothing was committed, so this is free.
+   * @since 0.90.1
+   */
+  const cancelTemplatePositionEdit = async () => {
+    const template = getActivePositionTemplate();
+    exitTemplatePositionEdit();
+    if (template) {
+      setOverlayCoordsInputs(template.coords);
+      buildTemplateFilterList();
+      overlayMain.handleDisplayStatus(`Canceled position edit for "${template.displayName}".`);
+    }
+  };
   const syncTemplatePositionJoystickWindow = () => {
     const panel = ensureTemplatePositionJoystickWindow();
     const archiveButton = panel.querySelector('[data-role="archive-edit-btn"]');
@@ -7889,14 +8165,27 @@ async function buildOverlayMain() {
       activeTemplate = (templateManager.templatesArray ?? [])
         .find((template) => template.storageKey === templatePositionEditStorageKey);
       if (!activeTemplate || isTemplateRemote(activeTemplate)) {
+        // Inline teardown: exitTemplatePositionEdit() would recurse back into this function.
         templatePositionEditStorageKey = null;
-        clearTemplatePositionJoystickPending();
+        templatePositionPreviewCoords = null;
+        endTemplateMapDrag();
+        destroyTemplatePositionGhost();
         isActive = false;
         activeTemplate = null;
       }
     }
-    panel.style.display = isActive ? 'grid' : 'none';
+    panel.style.display = isActive ? 'flex' : 'none';
     panel.classList.toggle('bm-template-position-joystick-active', isActive);
+    const titleLabel = panel.querySelector('[data-role="position-title"]');
+    if (titleLabel) {
+      titleLabel.textContent = activeTemplate?.displayName
+        ? `${t('position.panel.title')}: ${activeTemplate.displayName}`
+        : t('position.panel.title');
+    }
+    if (!isActive) {
+      endTemplateMapDrag();
+    }
+    updateTemplateMapDragCursor();
     if (archiveTools && archiveButton && archiveMetaLabel) {
       if (!isActive || !activeTemplate) {
         archiveTools.style.display = 'none';
@@ -7921,16 +8210,155 @@ async function buildOverlayMain() {
   };
   syncTemplatePositionJoystickWindow();
 
-  let progressUiRefreshQueued = false;
+  // ------- Drag & drop an image anywhere on the page to create + position a template -------
+  let templateDropOverlay = null;
+  let templateDropDepth = 0;
+  let templateDropBusy = false;
+  const dragEventHasImageFile = (event) => {
+    const items = event.dataTransfer?.items;
+    if (items?.length) {
+      return Array.from(items).some((item) => item.kind === 'file'
+        && (!item.type || item.type.startsWith('image/')));
+    }
+    return Array.from(event.dataTransfer?.types ?? []).includes('Files');
+  };
+  const ensureTemplateDropOverlay = () => {
+    if (templateDropOverlay) return templateDropOverlay;
+    const overlay = document.createElement('div');
+    overlay.id = 'bm-template-drop-overlay';
+    overlay.className = 'bm-template-drop-overlay';
+    applyOverlayVarsToFloatingElement(overlay);
+    const card = document.createElement('div');
+    card.className = 'bm-template-drop-card';
+    card.dataset.role = 'drop-card';
+    card.textContent = t('drop.hint');
+    overlay.appendChild(card);
+    overlay.style.display = 'none';
+    document.body.appendChild(overlay);
+    templateDropOverlay = overlay;
+    return overlay;
+  };
+  const setTemplateDropOverlayVisible = (visible) => {
+    const overlay = ensureTemplateDropOverlay();
+    if (visible) {
+      applyOverlayVarsToFloatingElement(overlay);
+      const card = overlay.querySelector('[data-role="drop-card"]');
+      if (card) card.textContent = t('drop.hint');
+    }
+    overlay.style.display = visible ? 'flex' : 'none';
+  };
+  /** Tile/pixel coordinates under a screen point, falling back to the map centre.
+   * @since 0.90.1
+   */
+  const resolveDropTargetCoords = (clientX, clientY) => {
+    const canvasRect = getMapCanvasElement()?.getBoundingClientRect();
+    let geo = null;
+    if (canvasRect && Number.isFinite(clientX) && Number.isFinite(clientY)) {
+      geo = unprojectScreenToGeo(clientX - canvasRect.left, clientY - canvasRect.top);
+    }
+    if (!geo) {
+      try { geo = getCenterGeoCoords(); } catch (_) { geo = null; }
+    }
+    if (!geo) return null;
+    const [coordsTile, coordsPixel] = coordsGeoCoordsToTileCoords(geo[0], geo[1]);
+    return normalizeTilePixelCoords([coordsTile[0], coordsTile[1], coordsPixel[0], coordsPixel[1]]);
+  };
+  const handleTemplateImageDrop = async (file, clientX, clientY) => {
+    if (templateDropBusy) {
+      overlayMain.handleDisplayStatus('Template creation is already in progress.');
+      return;
+    }
+    if (typeof runTemplateCreationFlowRef !== 'function') {
+      overlayMain.handleDisplayError('Template creation is not ready yet.');
+      return;
+    }
+    const dropCoords = resolveDropTargetCoords(clientX, clientY);
+    if (!dropCoords) {
+      overlayMain.handleDisplayError('Could not resolve map coordinates for the dropped image.');
+      return;
+    }
+    if (!setOverlayCoordsInputs(dropCoords)) {
+      overlayMain.handleDisplayError('Could not apply the drop coordinates.');
+      return;
+    }
+    templateDropBusy = true;
+    try {
+      overlayMain.handleDisplayStatus(`Creating template from "${file.name}" at ${dropCoords.join(', ')}...`);
+      const createdTemplate = await runTemplateCreationFlowRef({
+        mode: TEMPLATE_CREATE_MODE_IMAGE,
+        imageFile: file,
+      });
+      if (!createdTemplate) return;
+      // Drag & drop reads as "put the image here", so centre the preview on the drop point
+      // regardless of the configured anchor. Nothing is committed until the user applies.
+      const size = getTemplateSizePixels(createdTemplate);
+      const centeredCoords = size
+        ? shiftTilePixelCoordsByPixels(
+          dropCoords,
+          -Math.floor(size.width / 2),
+          -Math.floor(size.height / 2)
+        )
+        : null;
+      // The template already sits where it was dropped, so keep the camera as-is.
+      await startTemplatePositionEdit(createdTemplate, {
+        focusMap: false,
+        initialCoords: centeredCoords ?? dropCoords,
+      });
+    } catch (error) {
+      consoleWarn('Failed to create template from a dropped image.', error);
+      overlayMain.handleDisplayError(`Could not create template from the dropped image: ${error?.message || error}`);
+    } finally {
+      templateDropBusy = false;
+    }
+  };
+  window.addEventListener('dragenter', (event) => {
+    if (!dragEventHasImageFile(event)) return;
+    event.preventDefault();
+    templateDropDepth++;
+    setTemplateDropOverlayVisible(true);
+  }, true);
+  window.addEventListener('dragover', (event) => {
+    if (!dragEventHasImageFile(event)) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+  }, true);
+  window.addEventListener('dragleave', (event) => {
+    if (templateDropDepth === 0) return;
+    templateDropDepth = Math.max(0, templateDropDepth - 1);
+    if (templateDropDepth === 0) setTemplateDropOverlayVisible(false);
+  }, true);
+  window.addEventListener('drop', (event) => {
+    const files = Array.from(event.dataTransfer?.files ?? []);
+    const imageFile = files.find((file) => file.type.startsWith('image/'));
+    templateDropDepth = 0;
+    setTemplateDropOverlayVisible(false);
+    if (!imageFile) return;
+    event.preventDefault();
+    event.stopPropagation();
+    void handleTemplateImageDrop(imageFile, event.clientX, event.clientY);
+  }, true);
+
+  // countTemplateStatus calls this once per tile it finishes counting. Coalescing on rAF alone
+  // still allows a full teardown/rebuild of both filter lists on every single frame during a
+  // tile-refresh burst (e.g. right after a template toggle), which is far more often than anyone
+  // can read. Throttle to a readable rate, with a guaranteed trailing run so the numbers always
+  // settle on the true final values.
+  const PROGRESS_UI_REFRESH_MIN_INTERVAL_MS = 250;
+  let progressUiRefreshTimer = null;
+  let progressUiRefreshLastAt = 0;
   const scheduleProgressUiRefresh = () => {
-    if (progressUiRefreshQueued) return;
-    progressUiRefreshQueued = true;
-    requestAnimationFrame(() => {
-      progressUiRefreshQueued = false;
-      const progressSnapshot = profiler.measure('getOverallPerColorProgress', () => templateManager.getOverallPerColorProgress());
-      profiler.measure('buildColorFilterList', () => buildColorFilterList(progressSnapshot));
-      profiler.measure('buildTemplateFilterList', () => buildTemplateFilterList(progressSnapshot));
-    });
+    if (progressUiRefreshTimer) return;
+    const sinceLast = performance.now() - progressUiRefreshLastAt;
+    const wait = Math.max(0, PROGRESS_UI_REFRESH_MIN_INTERVAL_MS - sinceLast);
+    progressUiRefreshTimer = setTimeout(() => {
+      progressUiRefreshTimer = null;
+      requestAnimationFrame(() => {
+        progressUiRefreshLastAt = performance.now();
+        const progressSnapshot = profiler.measure('getOverallPerColorProgress', () => templateManager.getOverallPerColorProgress());
+        profiler.measure('buildColorFilterList', () => buildColorFilterList(progressSnapshot));
+        profiler.measure('buildTemplateFilterList', () => buildTemplateFilterList(progressSnapshot));
+      });
+    }, wait);
   };
   window.scheduleProgressUiRefresh = scheduleProgressUiRefresh;
 
@@ -8087,13 +8515,17 @@ async function buildOverlayMain() {
   };
   window.buildColorFilterList = buildColorFilterList;
 
+  // Disarms whichever template row currently shows its inline delete confirmation. At most one row
+  // is ever armed, and it must be cleared when the list is rebuilt — otherwise the row's document
+  // level keydown/pointerdown listeners outlive the DOM node they belong to.
+  let armedDeleteDisarm = null;
+
   const buildTemplateFilterList = (progressSnapshot = null) => {
+    armedDeleteDisarm?.();
     const listContainer = document.querySelector('#bm-templatefilter-list');
     consoleLog(templateManager);
     if (templateManager.templatesArray?.length === 0) {
-      templatePositionEditStorageKey = null;
-      clearTemplatePositionJoystickPending();
-      syncTemplatePositionJoystickWindow();
+      exitTemplatePositionEdit();
       if (listContainer) { listContainer.innerHTML = `<small>${t('templates.empty')}</small>`; }
       return;
     }
@@ -8101,9 +8533,7 @@ async function buildOverlayMain() {
       ? (templateManager.templatesArray ?? []).find((template) => template.storageKey === templatePositionEditStorageKey)
       : null;
     if (templatePositionEditStorageKey && (!activePositionTemplate || isTemplateRemote(activePositionTemplate))) {
-      templatePositionEditStorageKey = null;
-      clearTemplatePositionJoystickPending();
-      syncTemplatePositionJoystickWindow();
+      exitTemplatePositionEdit();
     }
 
     listContainer.innerHTML = '';
@@ -8244,11 +8674,61 @@ async function buildOverlayMain() {
       removeButton.title = t('templates.removeTitle');
       removeButton.textContent = "🗑️";
       removeButton.style.fontSize = '12px';
+
+      // Inline two-step confirm, in place of a native confirm(). The confirmation appears where the
+      // cursor already is instead of at the top of the browser window, it is localized like the rest
+      // of the UI, and it cannot be suppressed — Chrome's "prevent additional dialogs" checkbox makes
+      // confirm() return false forever, which would silently break deletion entirely.
+      // Anchor so the confirmation can be positioned directly beneath the trash icon. Absolute, not
+      // fixed: the overlay sets will-change:transform, making it a containing block, so a fixed
+      // popover would anchor to the overlay rather than the viewport.
+      const deleteAnchor = document.createElement('span');
+      deleteAnchor.className = 'bm-delete-anchor';
+
+      const confirmWrap = document.createElement('span');
+      confirmWrap.className = 'bm-delete-confirm';
+      const confirmYes = document.createElement('a');
+      confirmYes.className = 'bm-icon-link bm-delete-confirm-yes';
+      confirmYes.textContent = '✓';
+      confirmYes.title = t('templates.removeConfirmYes');
+      const confirmNo = document.createElement('a');
+      confirmNo.className = 'bm-icon-link bm-delete-confirm-no';
+      confirmNo.textContent = '✕';
+      confirmNo.title = t('templates.removeConfirmNo');
+      confirmWrap.append(confirmYes, confirmNo);
+
+      const disarmDelete = () => {
+        confirmWrap.classList.remove('bm-delete-confirm-armed');
+        removeButton.style.display = '';
+        row.classList.remove('bm-template-row-danger');
+        if (armedDeleteDisarm === disarmDelete) armedDeleteDisarm = null;
+        clearTimeout(disarmTimer);
+        document.removeEventListener('keydown', onDeleteKeydown, true);
+        document.removeEventListener('pointerdown', onOutsidePointerDown, true);
+      };
+      let disarmTimer = null;
+      const onDeleteKeydown = (event) => { if (event.key === 'Escape') disarmDelete(); };
+      const onOutsidePointerDown = (event) => {
+        if (!deleteAnchor.contains(event.target)) disarmDelete();
+      };
+
       removeButton.onclick = () => {
-        if (confirm(`Remove template ${template?.displayName}?`)) {
-          templateManager.deleteTemplate(template?.storageKey);
-        }
-      }
+        // Only one row armed at a time, so a stray click can never hit a confirm the user forgot about.
+        armedDeleteDisarm?.();
+        removeButton.style.display = 'none';
+        confirmWrap.classList.add('bm-delete-confirm-armed');
+        row.classList.add('bm-template-row-danger');
+        armedDeleteDisarm = disarmDelete;
+        // Auto-disarm so the list never sits in a destructive-looking state indefinitely.
+        disarmTimer = setTimeout(disarmDelete, 5000);
+        document.addEventListener('keydown', onDeleteKeydown, true);
+        document.addEventListener('pointerdown', onOutsidePointerDown, true);
+      };
+      confirmNo.onclick = disarmDelete;
+      confirmYes.onclick = () => {
+        disarmDelete();
+        templateManager.deleteTemplate(template?.storageKey);
+      };
 
       let teleportButton = document.createElement('a');
       teleportButton.className = 'bm-icon-link';
@@ -8274,59 +8754,15 @@ async function buildOverlayMain() {
           return;
         }
         if (templatePositionEditStorageKey !== template.storageKey) {
-          templatePositionEditStorageKey = template.storageKey;
-          clearTemplatePositionJoystickPending();
-          if (!setOverlayCoordsInputs(template.coords)) {
-            templatePositionEditStorageKey = null;
-            syncTemplatePositionJoystickWindow();
-            overlayMain.handleDisplayError('Unable to load template coordinates into inputs.');
-            return;
-          }
-          syncTemplatePositionJoystickWindow();
-          const focusCoords = resolveTemplateFocusCoords(
-            template.coords,
-            imageWidth,
-            imageHeight
-          );
-          const targetCoords = focusCoords || normalizeTilePixelCoords(template.coords) || template.coords;
-          await teleportToTileCoords(targetCoords.slice(0, 2), targetCoords.slice(2, 4));
-          applyTemplateFocusZoom(imageWidth, imageHeight);
-          buildTemplateFilterList();
-          overlayMain.handleDisplayStatus(`Adjusting "${templateName}". Update coords on the map, then click ⚙️ again to apply.`);
+          await startTemplatePositionEdit(template);
           return;
         }
-        const nextCoords = getOverlayCoordsFromInputsNormalized();
-        if (!nextCoords) {
-          overlayMain.handleDisplayError('Coordinates are malformed.');
-          return;
-        }
-        templatePositionEditStorageKey = null;
-        clearTemplatePositionJoystickPending();
-        syncTemplatePositionJoystickWindow();
-        const moveResult = await moveTemplateToCoords(template, nextCoords);
-        if (!moveResult.ok) {
-          overlayMain.handleDisplayError(moveResult.message || 'Failed to reposition template.');
-          buildTemplateFilterList();
-          return;
-        }
-        if (moveResult.moved) {
-          overlayMain.handleDisplayStatus(`Template "${templateName}" moved to ${nextCoords.join(', ')}.`);
-          const targetCoords = resolveTemplateFocusCoords(nextCoords, imageWidth, imageHeight) || nextCoords;
-          await teleportToTileCoords(targetCoords.slice(0, 2), targetCoords.slice(2, 4));
-          applyTemplateFocusZoom(imageWidth, imageHeight);
-        } else {
-          overlayMain.handleDisplayStatus(moveResult.message || 'Template position unchanged.');
-          buildTemplateFilterList();
-        }
+        await applyTemplatePositionEdit();
       };
       positionButton.addEventListener('contextmenu', (event) => {
         if (templatePositionEditStorageKey !== template.storageKey) return;
         event.preventDefault();
-        templatePositionEditStorageKey = null;
-        clearTemplatePositionJoystickPending();
-        syncTemplatePositionJoystickWindow();
-        buildTemplateFilterList();
-        overlayMain.handleDisplayStatus(`Canceled position edit for "${templateName}".`);
+        void cancelTemplatePositionEdit();
       });
 
 	        let label = document.createElement('span');
@@ -8458,6 +8894,12 @@ async function buildOverlayMain() {
       const toggle = document.createElement('input');
       toggle.type = 'checkbox';
       toggle.checked = template.enabled;
+      // Hovering the checkbox is a strong hint the user is about to enable it. Start extracting
+      // samples for the visible tiles now so the render has less to do once the click lands.
+      toggle.addEventListener('pointerenter', () => {
+        if (template.enabled) return;
+        try { templateManager.prewarmTemplateVisibleTiles(template); } catch (_) {}
+      });
       toggle.addEventListener('change', async () => {
         template.enabled = toggle.checked;
         row.classList.toggle('bm-template-inactive', !toggle.checked);
@@ -8467,23 +8909,35 @@ async function buildOverlayMain() {
             : `Disabled ${templateName}`
         );
         templateManager.clearTileProgress(template);
-        syncToggleList();
-        buildTemplateFilterList();
-        // The total count has changed from clearTileProgress, and that may be a template outside the current view, so we need to refresh
-        buildColorFilterList();
-        forceRefreshTiles();
+        syncToggleList({ deferPersist: true });
+
+        // Crosses first. They are their own map layers, so nothing below is needed to show them.
         if (toggle.checked) {
-          // Show existing layers instantly, then refresh to catch any newly-visible tiles
+          // Show existing layers instantly, then refresh to catch any newly-visible tiles.
+          // If the mounted layers were rendered with the settings still in effect, they are
+          // already correct — skipExisting then limits the render to tiles that aren't mounted
+          // yet (e.g. the user panned somewhere new while this template was off).
           setTemplateSortIDLayersOpacity(template.sortID, 1);
-          await templateManager.queueOverlayRefreshAfterUi(template.sortID, {
-            visibleFirst: true,
-            followUpFull: true,
-            immediate: true,
+          const layersStillValid = templateManager.isOverlaySortIDFresh(template.sortID);
+          // Visible tiles only. A full mount would create a map source + raster layer for every
+          // tile of the template, including off-screen ones, and MapLibre pays for each of those
+          // on every rendered frame — that is what makes panning stutter after enabling. The
+          // moveend/zoomend handler prunes back to visible anyway, so the off-screen layers get
+          // thrown away at the first pan regardless; rendering them is cost with no payoff.
+          await templateManager.createOverlayOnMapVisibleOnly(template.sortID, {
+            skipExisting: layersStillValid,
           });
         } else {
           // Hide layers without removing them — re-enable is then instant (no re-registration)
           setTemplateSortIDLayersOpacity(template.sortID, 0);
         }
+
+        // Counters and the error map only. countTemplateStatus decodes and scans every visible
+        // wplace tile on the main thread, so it runs after the crosses are up rather than
+        // competing with them. The total count also changed from clearTileProgress, and that may
+        // involve a template outside the current view, so both lists need a refresh.
+        forceRefreshTiles();
+        scheduleProgressUiRefresh();
       });
 
       const enforceTranspButton = document.createElement('a');
@@ -8510,6 +8964,10 @@ async function buildOverlayMain() {
         await templateManager.storeTemplates();
         templateManager.clearTileProgress(template);
         buildTemplateFilterList();
+        // The flag changes how the overlay itself is rasterized, so the mounted canvases have to be
+        // redrawn — skipExisting:false, since they are already mounted and would otherwise be left
+        // exactly as they are. forceRefreshTiles only refreshes wplace's tiles, not our crosses.
+        await templateManager.createOverlayOnMapVisibleOnly(template.sortID, { skipExisting: false });
         forceRefreshTiles();
         overlayMain.handleDisplayStatus(
           next
@@ -8519,7 +8977,9 @@ async function buildOverlayMain() {
       };
 
       row.appendChild(toggle);
-      row.appendChild(removeButton);
+      deleteAnchor.appendChild(removeButton);
+      deleteAnchor.appendChild(confirmWrap);
+      row.appendChild(deleteAnchor);
       row.appendChild(teleportButton);
       if (!isRemote) {
         row.appendChild(positionButton);

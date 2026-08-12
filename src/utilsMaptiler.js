@@ -116,11 +116,14 @@ function controlMapTiler(func, ...args) {
     doAfterMapFound(() => controlMapTiler(func, ...args));
     return;
   };
-  const myLocationButton = document.querySelector(".right-3>button");
+  // Check the cached map handle before touching the DOM. This function runs once per tile on
+  // the render path, and the querySelector below is pure overhead once __bmmap is populated.
   if (document.head["__bmmap"]) {
     const map = document.head["__bmmap"];
     return func(map, ...args);
-  } else if ( myLocationButton !== null ) {
+  }
+  const myLocationButton = document.querySelector(".right-3>button");
+  if ( myLocationButton !== null ) {
     if (myLocationButton["__click"]) {
       const map = myLocationButton["__click"][3]["v"];
       return func(map, ...args);
@@ -197,6 +200,52 @@ export function getMapBounds() {
     return { sw: [sw.lat, sw.lng], ne: [ne.lat, ne.lng] };
   });
 }
+/** Project geographic coordinates to screen (CSS) pixels of the map canvas.
+ * @param {number} latitude
+ * @param {number} longitude
+ * @returns {{x: number, y: number} | null}
+ * @since 0.90.1
+ */
+export function projectGeoToScreen(latitude, longitude) {
+  try {
+    return controlMapTiler((map, lat, lng) => {
+      const point = map["project"]?.([lng, lat]);
+      if (!point) return null;
+      return { x: point.x, y: point.y };
+    }, latitude, longitude);
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Unproject a point given in map-canvas (CSS) pixels back to geographic coordinates.
+ * @param {number} x
+ * @param {number} y
+ * @returns {number[] | null} [latitude, longitude]
+ * @since 0.90.1
+ */
+export function unprojectScreenToGeo(x, y) {
+  try {
+    return controlMapTiler((map, px, py) => {
+      const lngLat = map["unproject"]?.([px, py]);
+      if (!lngLat) return null;
+      return [lngLat.lat, lngLat.lng];
+    }, x, y);
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Get the map canvas element, when the map is available.
+ * @returns {HTMLCanvasElement | null}
+ * @since 0.90.1
+ */
+export function getMapCanvasElement() {
+  return document.querySelector('canvas.maplibregl-canvas')
+    ?? document.querySelector('.maplibregl-canvas')
+    ?? null;
+}
+
 export var bmCanvas = {
 
 }; // sourceID => coords
@@ -234,15 +283,20 @@ function syncTemplateCanvasSource(targetCanvas, source) {
   }
   const [width, height] = size;
   const canvas = ensureTemplateCanvasElement(targetCanvas.id, width, height);
-  const context = canvas.getContext("2d", { willReadFrequently: true });
+  // No willReadFrequently: this canvas is only ever written to, then read by MapLibre as a
+  // texture. Asking for a CPU-backed surface here forces a readback + re-upload on every map
+  // repaint, which is exactly the wrong trade for a canvas source.
+  const context = canvas.getContext("2d");
   if (!context) {
     throw new Error("Could not initialize template source canvas context.");
   }
   context.imageSmoothingEnabled = false;
-  context.clearRect(0, 0, width, height);
   if (typeof ImageData !== 'undefined' && source instanceof ImageData) {
+    // putImageData replaces rather than blends, and the source covers the whole canvas, so a
+    // clearRect first would just be a redundant full-surface write.
     context.putImageData(source, 0, 0);
   } else {
+    context.clearRect(0, 0, width, height);
     context.drawImage(source, 0, 0);
   }
   return canvas;
@@ -450,7 +504,16 @@ export function registerBmCanvasRestoreOnStyleChange() {
         ));
         const layerOrder = map["getLayersOrder"]?.() ?? [];
         const artLayerIdx = layerOrder.indexOf("pixel-art-layer");
+        // Disabled templates keep their layers mounted at opacity 0; restoring them at 1 would make
+        // a disabled template's crosses reappear on every style change.
+        const hiddenSortIDs = document.head["__bmHiddenSortIDs"];
+        const isHidden = (sourceID) => {
+          if (!hiddenSortIDs || usage !== "overlay") return false;
+          const sortID = sourceID.slice(sourceID.lastIndexOf("-") + 1);
+          return hiddenSortIDs.has(sortID);
+        };
         Object.entries(canvas[usage]).forEach(([sourceID, [geoCoords1, geoCoords2]]) => {
+          const restoredOpacity = isHidden(sourceID) ? 0 : 1;
           if (!map["getSource"](sourceID)) {
             map["addSource"](sourceID, {
               "type": "canvas",
@@ -468,7 +531,7 @@ export function registerBmCanvasRestoreOnStyleChange() {
               "id": sourceID,
               "type": "raster",
               "source": sourceID,
-              "paint": { "raster-resampling": "nearest", "raster-opacity": 1 },
+              "paint": { "raster-resampling": "nearest", "raster-opacity": restoredOpacity },
             }, nextLayer);
           } else if (artLayerIdx >= 0) {
             // Layer exists but may be below pixel-art-layer — fix ordering
@@ -542,6 +605,17 @@ export function setUsageLayersOpacity(usage, opacity) {
  */
 export function setTemplateSortIDLayersOpacity(sortID, opacity) {
   const suffix = `-${sortID}`;
+  // Record which templates are hidden so the styledata restore can re-create their layers at the
+  // right opacity. Disabling never removes layers, so without this a style change re-adds a
+  // disabled template's layers at the hardcoded opacity 1 and its crosses reappear.
+  // On document.head because the restore callback is serialized into the page context.
+  try {
+    const hidden = document.head['__bmHiddenSortIDs'] instanceof Set
+      ? document.head['__bmHiddenSortIDs']
+      : new Set();
+    if (opacity === 0) hidden.add(String(sortID)); else hidden.delete(String(sortID));
+    document.head['__bmHiddenSortIDs'] = hidden;
+  } catch (_) {}
   // matches both per-tile IDs (BM-overlay-tileKey-sortID) and full-canvas IDs (BM-overlay-full-sortID)
   const sourceIDs = Object.keys(bmCanvas['overlay'] ?? {}).filter(id => id.endsWith(suffix));
   if (!sourceIDs.length) return;
@@ -950,6 +1024,19 @@ export function setZoom(zoom) {
   }, zoom);
 }
 
+/** Reads the map's current zoom level.
+ * @returns {number|null} the zoom level, or null if the map is unavailable
+ * @since 0.87.71
+ */
+export function getZoom() {
+  try {
+    const zoom = controlMapTiler(map => map["getZoom"]());
+    return Number.isFinite(zoom) ? zoom : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 var isMapFound = false;
 var mapFoundHandlers = [];
 
@@ -1195,6 +1282,42 @@ export function applyArchiveBgLayerToMap(map, tileUrl) {
     addArchiveBgLayer(map, sourceTileUrl);
   } catch (err) {
     consoleError('[archive bg] ERROR:', err?.message || err);
+  }
+}
+
+/** Reports the live state of the archive background layer for console diagnostics.
+ * Answers the question the code alone cannot: was the layer actually created, is it visible,
+ * and is the current zoom inside the range where MapLibre will draw it.
+ * @since 0.87.71
+ */
+export function getArchiveBgDiag() {
+  const id = ARCHIVE_BACKGROUND_LAYER_ID;
+  try {
+    return controlMapTiler((map) => {
+      const layer = map['getLayer'](id);
+      const source = map['getSource'](id);
+      const zoom = map['getZoom']?.();
+      const order = map['getLayersOrder']?.() ?? [];
+      let visibility = null;
+      try { visibility = map['getLayoutProperty']?.(id, 'visibility'); } catch (_) {}
+      return {
+        activeTileUrl: archiveBgActiveTileUrl,
+        protocolRegistered: archiveProtocolRegistered,
+        sourceExists: !!source,
+        sourceTiles: source?.['tiles']?.[0] ?? null,
+        layerExists: !!layer,
+        visibility,
+        layerMinZoom: layer?.['minzoom'] ?? null,
+        layerMaxZoom: layer?.['maxzoom'] ?? null,
+        currentZoom: zoom,
+        drawnAtCurrentZoom: !!layer && Number.isFinite(zoom)
+          && zoom >= (layer['minzoom'] ?? 0) && zoom < (layer['maxzoom'] ?? Infinity),
+        layerIndex: order.indexOf(id),
+        pixelArtIndex: order.indexOf('pixel-art-layer'),
+      };
+    }) ?? null;
+  } catch (err) {
+    return { error: err?.message || String(err) };
   }
 }
 

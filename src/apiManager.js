@@ -837,7 +837,6 @@ export default class ApiManager {
             imageData,
             `${currentColorInfo?.name ?? 'Unknown Color'} Line`,
             [tx1, ty1, px1, py1],
-            "lt",
           )
         });
       }
@@ -905,7 +904,6 @@ export default class ApiManager {
             imageData,
             `${currentColorInfo?.name ?? 'Unknown Color'} Circle`,
             [tx1, ty1, px1, py1],
-            "lt",
           )
         });
       }

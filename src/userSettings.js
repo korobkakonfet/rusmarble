@@ -457,6 +457,25 @@ export function buildUserSettingsSection({
             forceRefreshTiles();
           });
         }).buildElement()
+        .addDiv({'className': 'bm-setting-row'})
+          .addSpan({'id': 'bm-transparent-erase-color-label', 'textContent': t('settings.transparentEraseColor.label')}).buildElement()
+          .addInput({'id': 'bm-transparent-erase-color', 'type': 'color', 'value': templateManager.getTransparentEraseColor(), 'title': t('settings.transparentEraseColor.title')}, (instance, input) => {
+            input.style.width = '2.2em';
+            input.style.padding = '0';
+            input.style.cursor = 'pointer';
+            // 'change' rather than 'input': the colour picker fires continuously while dragging, and
+            // each change drops every cached raster and re-renders the overlay.
+            input.addEventListener('change', async () => {
+              const applied = await templateManager.setTransparentEraseColor(input.value);
+              if (!applied) {
+                input.value = templateManager.getTransparentEraseColor();
+                return;
+              }
+              await templateManager.createOverlayOnMapVisibleOnly(null, { skipExisting: false });
+              instance.handleDisplayStatus(`Transparent pixels are now marked in ${input.value}.`);
+            });
+          }).buildElement()
+        .buildElement()
         .addCheckbox({'id': 'bm-event-enabled', 'textContent': t('settings.enableEvent'), 'checked': templateManager.isEventEnabled()}, (instance, label, checkbox) => {
           checkbox.addEventListener('change', () => {
             templateManager.setEventEnabled(checkbox.checked);
