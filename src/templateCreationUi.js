@@ -16,6 +16,7 @@
  * }}
  */
 import { templateWorkerManager } from './templateWorkerManager.js';
+import { makePanelDraggable, makePointerPannable, registerFloatingPanel } from './utils.js';
 
 export const createTemplateCreationUi = (deps = {}) => {
   const {
@@ -750,20 +751,11 @@ export const createTemplateCreationUi = (deps = {}) => {
       panel.appendChild(body);
 
       let closed = false;
-      let dragState = null;
-      let moveHandler = null;
-      let upHandler = null;
+      let detachDrag = null;
 
       const cleanupDragHandlers = () => {
-        if (moveHandler) {
-          window.removeEventListener('mousemove', moveHandler);
-          moveHandler = null;
-        }
-        if (upHandler) {
-          window.removeEventListener('mouseup', upHandler);
-          upHandler = null;
-        }
-        dragState = null;
+        detachDrag?.();
+        detachDrag = null;
       };
 
       const applyTheme = () => {
@@ -822,35 +814,10 @@ export const createTemplateCreationUi = (deps = {}) => {
       cancelBtn.addEventListener('click', () => close(null));
       importBtn.addEventListener('click', () => submit());
 
-      head.addEventListener('mousedown', (event) => {
-        if (event.button !== 0) return;
-        if (event.target instanceof Element && event.target.closest('button')) return;
-        const rect = panel.getBoundingClientRect();
-        dragState = {
-          offsetX: event.clientX - rect.left,
-          offsetY: event.clientY - rect.top
-        };
-        moveHandler = (moveEvent) => {
-          if (!dragState) return;
-          const currentRect = panel.getBoundingClientRect();
-          const maxLeft = Math.max(8, window.innerWidth - currentRect.width - 8);
-          const maxTop = Math.max(8, window.innerHeight - currentRect.height - 8);
-          const left = Math.min(maxLeft, Math.max(8, moveEvent.clientX - dragState.offsetX));
-          const top = Math.min(maxTop, Math.max(8, moveEvent.clientY - dragState.offsetY));
-          panel.style.left = `${left}px`;
-          panel.style.top = `${top}px`;
-          panel.style.right = 'auto';
-          panel.style.bottom = 'auto';
-        };
-        upHandler = () => {
-          cleanupDragHandlers();
-        };
-        window.addEventListener('mousemove', moveHandler);
-        window.addEventListener('mouseup', upHandler);
-        event.preventDefault();
-      });
+      detachDrag = makePanelDraggable(head, panel);
 
       document.body.appendChild(panel);
+      registerFloatingPanel(panel);
       remoteTemplateBuilderSession = { panel, close };
       applyTheme();
       document.addEventListener('bm-layout-theme-changed', handleThemeChanged);
@@ -876,7 +843,9 @@ export const createTemplateCreationUi = (deps = {}) => {
           const li = document.createElement('li');
           li.className = 'bm-remote-autocomplete-item';
           li.textContent = name;
-          li.addEventListener('mousedown', (e) => {
+          // pointerdown (not click) so the pick lands before the input blurs and
+          // closes the dropdown - and unlike mousedown it fires on touch too.
+          li.addEventListener('pointerdown', (e) => {
             e.preventDefault();
             nameInput.value = name;
             errorOutput.textContent = '';
@@ -1363,9 +1332,9 @@ export const createTemplateCreationUi = (deps = {}) => {
       panel.appendChild(body);
 
       let closed = false;
-      let dragState = null;
-      let moveHandler = null;
-      let upHandler = null;
+      let detachDrag = null;
+      let detachPreviewPan = null;
+      let previewPanActive = false; // True while the preview is being panned (drives the cursor)
       let resizeObserver = null;
       let previewRenderTimer = null;
       let previewRenderToken = 0;
@@ -1666,7 +1635,7 @@ export const createTemplateCreationUi = (deps = {}) => {
         previewZoomIn.disabled = !previewHasImage || safeZoom >= TEMPLATE_FLAG_PREVIEW_ZOOM_MAX - 0.001;
         previewZoomReset.disabled = !previewHasImage || isReset;
         previewWrap.style.cursor = previewHasImage
-          ? (dragState ? 'grabbing' : canPan ? 'grab' : 'zoom-in')
+          ? (previewPanActive ? 'grabbing' : canPan ? 'grab' : 'zoom-in')
           : 'default';
       };
       const drawPreviewPlaceholder = (message = tt('dialog.common.preview', 'Preview')) => {
@@ -1988,15 +1957,11 @@ export const createTemplateCreationUi = (deps = {}) => {
         }, 120);
       };
       const cleanupDragHandlers = () => {
-        if (moveHandler) {
-          window.removeEventListener('mousemove', moveHandler);
-          moveHandler = null;
-        }
-        if (upHandler) {
-          window.removeEventListener('mouseup', upHandler);
-          upHandler = null;
-        }
-        dragState = null;
+        detachDrag?.();
+        detachDrag = null;
+        detachPreviewPan?.();
+        detachPreviewPan = null;
+        previewPanActive = false;
         syncPreviewControls(lastRenderResult ? computePreviewLayout(
           getPreviewViewportSize().width,
           getPreviewViewportSize().height,
@@ -2116,30 +2081,32 @@ export const createTemplateCreationUi = (deps = {}) => {
         );
         queuePreviewViewportDraw();
       }, { passive: false });
-      previewWrap.addEventListener('mousedown', (event) => {
-        if (event.button !== 0 || !previewHasImage || !lastRenderResult?.imageData) return;
-        const { width, height } = getPreviewViewportSize();
-        const layout = computePreviewLayout(width, height, lastRenderResult.imageData, previewZoomValue, previewPanX, previewPanY);
-        if (!layout || (layout.maxPanX <= 0.5 && layout.maxPanY <= 0.5)) return;
-        event.preventDefault();
-        dragState = {
-          startX: event.clientX,
-          startY: event.clientY,
-          panX: previewPanX,
-          panY: previewPanY,
-        };
-        moveHandler = (moveEvent) => {
-          if (!dragState) return;
-          previewPanX = dragState.panX + (moveEvent.clientX - dragState.startX);
-          previewPanY = dragState.panY + (moveEvent.clientY - dragState.startY);
+      detachPreviewPan = makePointerPannable(previewWrap, {
+        onStart: () => {
+          if (!previewHasImage || !lastRenderResult?.imageData) return null;
+          const { width, height } = getPreviewViewportSize();
+          const layout = computePreviewLayout(width, height, lastRenderResult.imageData, previewZoomValue, previewPanX, previewPanY);
+          if (!layout || (layout.maxPanX <= 0.5 && layout.maxPanY <= 0.5)) return null;
+          previewPanActive = true;
+          syncPreviewControls(layout);
+          return { panX: previewPanX, panY: previewPanY };
+        },
+        onMove: (dx, dy, origin) => {
+          previewPanX = origin.panX + dx;
+          previewPanY = origin.panY + dy;
           queuePreviewViewportDraw();
-        };
-        upHandler = () => {
-          cleanupDragHandlers();
-        };
-        window.addEventListener('mousemove', moveHandler);
-        window.addEventListener('mouseup', upHandler);
-        syncPreviewControls(layout);
+        },
+        onEnd: () => {
+          previewPanActive = false;
+          syncPreviewControls(lastRenderResult ? computePreviewLayout(
+            getPreviewViewportSize().width,
+            getPreviewViewportSize().height,
+            lastRenderResult.imageData,
+            previewZoomValue,
+            previewPanX,
+            previewPanY
+          ) : null);
+        }
       });
       stripeColorInputs.forEach((entry, index) => {
         entry.select.addEventListener('change', () => {
@@ -2265,33 +2232,7 @@ export const createTemplateCreationUi = (deps = {}) => {
         }
       });
 
-      head.addEventListener('mousedown', (event) => {
-        if (event.button !== 0) return;
-        if (event.target instanceof Element && event.target.closest('button')) return;
-        const rect = panel.getBoundingClientRect();
-        dragState = {
-          offsetX: event.clientX - rect.left,
-          offsetY: event.clientY - rect.top,
-        };
-        moveHandler = (moveEvent) => {
-          if (!dragState) return;
-          const currentRect = panel.getBoundingClientRect();
-          const maxLeft = Math.max(8, window.innerWidth - currentRect.width - 8);
-          const maxTop = Math.max(8, window.innerHeight - currentRect.height - 8);
-          const left = Math.min(maxLeft, Math.max(8, moveEvent.clientX - dragState.offsetX));
-          const top = Math.min(maxTop, Math.max(8, moveEvent.clientY - dragState.offsetY));
-          panel.style.left = `${left}px`;
-          panel.style.top = `${top}px`;
-          panel.style.right = 'auto';
-          panel.style.bottom = 'auto';
-        };
-        upHandler = () => {
-          cleanupDragHandlers();
-        };
-        window.addEventListener('mousemove', moveHandler);
-        window.addEventListener('mouseup', upHandler);
-        event.preventDefault();
-      });
+      detachDrag = makePanelDraggable(head, panel);
 
       document.body.appendChild(panel);
       // Center on screen using the rendered size, so the max-width/max-height
@@ -2302,6 +2243,7 @@ export const createTemplateCreationUi = (deps = {}) => {
       panel.style.left = `${centeredLeft}px`;
       panel.style.top = `${centeredTop}px`;
       panel.style.visibility = '';
+      registerFloatingPanel(panel);
       russianFlagTemplateBuilderSession = { panel, close };
       applyTheme();
       document.addEventListener('bm-layout-theme-changed', handleThemeChanged);
@@ -2550,9 +2492,7 @@ export const createTemplateCreationUi = (deps = {}) => {
       panel.appendChild(body);
 
       let closed = false;
-      let dragState = null;
-      let moveHandler = null;
-      let upHandler = null;
+      let detachDrag = null;
       let resizeObserver = null;
       let renderToken = 0;
       let renderQueued = false;
@@ -2909,15 +2849,8 @@ export const createTemplateCreationUi = (deps = {}) => {
       };
 
       const cleanupDragHandlers = () => {
-        if (moveHandler) {
-          window.removeEventListener('mousemove', moveHandler);
-          moveHandler = null;
-        }
-        if (upHandler) {
-          window.removeEventListener('mouseup', upHandler);
-          upHandler = null;
-        }
-        dragState = null;
+        detachDrag?.();
+        detachDrag = null;
       };
 
       const close = (result = null) => {
@@ -3031,35 +2964,10 @@ export const createTemplateCreationUi = (deps = {}) => {
         queuePreviewRender();
       });
 
-      head.addEventListener('mousedown', (event) => {
-        if (event.button !== 0) return;
-        if (event.target instanceof Element && event.target.closest('button')) return;
-        const rect = panel.getBoundingClientRect();
-        dragState = {
-          offsetX: event.clientX - rect.left,
-          offsetY: event.clientY - rect.top
-        };
-        moveHandler = (moveEvent) => {
-          if (!dragState) return;
-          const currentRect = panel.getBoundingClientRect();
-          const maxLeft = Math.max(8, window.innerWidth - currentRect.width - 8);
-          const maxTop = Math.max(8, window.innerHeight - currentRect.height - 8);
-          const left = Math.min(maxLeft, Math.max(8, moveEvent.clientX - dragState.offsetX));
-          const top = Math.min(maxTop, Math.max(8, moveEvent.clientY - dragState.offsetY));
-          panel.style.left = `${left}px`;
-          panel.style.top = `${top}px`;
-          panel.style.right = 'auto';
-          panel.style.bottom = 'auto';
-        };
-        upHandler = () => {
-          cleanupDragHandlers();
-        };
-        window.addEventListener('mousemove', moveHandler);
-        window.addEventListener('mouseup', upHandler);
-        event.preventDefault();
-      });
+      detachDrag = makePanelDraggable(head, panel);
 
       document.body.appendChild(panel);
+      registerFloatingPanel(panel);
       textTemplateBuilderSession = { panel, close };
       applyTheme();
       document.addEventListener('bm-layout-theme-changed', handleThemeChanged);
