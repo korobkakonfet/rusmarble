@@ -863,3 +863,322 @@ export function circleBitmap([x0, y0], [x1, y1], [r, g, b]) {
     offsetY: minY
   };
 }
+
+/* ------------------------------------------------------------------------- *
+ * Mobile layout detection
+ *
+ * The script has to work on phones as well as desktops. Rather than sprinkling
+ * `window.innerWidth` checks around, everything keys off a single flag that is
+ * mirrored onto `<html data-bm-mobile="1">` so CSS and JS always agree.
+ * ------------------------------------------------------------------------- */
+
+/** Media query that decides whether the mobile layout is active.
+ * Mirrors the `@media` condition used in overlay.css - keep the two in sync.
+ * @since 0.87.70
+ */
+export const MOBILE_LAYOUT_MEDIA = '(max-width: 640px), (pointer: coarse)';
+
+let mobileLayoutQuery = null;
+let mobileLayoutActive = false;
+const mobileLayoutListeners = new Set();
+
+function getMobileLayoutQuery() {
+  if (mobileLayoutQuery === null && typeof window?.matchMedia === 'function') {
+    mobileLayoutQuery = window.matchMedia(MOBILE_LAYOUT_MEDIA);
+  }
+  return mobileLayoutQuery;
+}
+
+/** Whether the UI should use the touch/small-screen layout.
+ * @returns {boolean} True when the mobile layout is active
+ * @since 0.87.70
+ */
+export function isMobileLayout() {
+  const query = getMobileLayoutQuery();
+  return query ? query.matches : mobileLayoutActive;
+}
+
+/** Whether the primary pointer is coarse (finger) rather than fine (mouse).
+ * Used for interaction decisions (tap targets, hover fallbacks) that should not
+ * follow a merely narrow desktop window.
+ * @returns {boolean} True on touch-primary devices
+ * @since 0.87.70
+ */
+export function isCoarsePointer() {
+  return typeof window?.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+}
+
+/** Subscribes to mobile-layout changes (rotation, resize, devtools emulation).
+ * @param {(isMobile: boolean) => void} callback - Called whenever the mode flips
+ * @returns {() => void} Unsubscribe function
+ * @since 0.87.70
+ */
+export function onMobileLayoutChange(callback) {
+  if (typeof callback !== 'function') {return () => {};}
+  mobileLayoutListeners.add(callback);
+  return () => {mobileLayoutListeners.delete(callback);};
+}
+
+/** Starts mirroring the mobile-layout flag onto the document element.
+ * Safe to call more than once; only the first call installs listeners.
+ * @since 0.87.70
+ */
+export function initMobileLayout() {
+  const query = getMobileLayoutQuery();
+  const apply = () => {
+    const next = query ? query.matches : false;
+    const changed = next !== mobileLayoutActive;
+    mobileLayoutActive = next;
+    const root = document.documentElement;
+    if (root) {
+      if (next) {
+        root.setAttribute('data-bm-mobile', '1');
+      } else {
+        root.removeAttribute('data-bm-mobile');
+      }
+    }
+    if (changed) {
+      for (const listener of mobileLayoutListeners) {
+        try {
+          listener(next);
+        } catch (error) {
+          consoleWarn('Mobile layout listener failed', error);
+        }
+      }
+    }
+  };
+
+  apply();
+
+  if (!query || initMobileLayout.installed) {return;}
+  initMobileLayout.installed = true;
+  if (typeof query.addEventListener === 'function') {
+    query.addEventListener('change', apply);
+  } else if (typeof query.addListener === 'function') {
+    query.addListener(apply); // Safari < 14
+  }
+}
+
+/* ------------------------------------------------------------------------- *
+ * Pointer-based dragging
+ *
+ * Pointer Events cover mouse, touch and pen in a single code path, so every
+ * floating panel uses these helpers instead of hand-rolled mousedown/mousemove
+ * pairs (which silently did nothing on phones).
+ * ------------------------------------------------------------------------- */
+
+/** Default gap kept between a floating panel and the viewport edge. */
+const PANEL_VIEWPORT_MARGIN = 8;
+
+const floatingPanels = new Set();
+let floatingPanelWatchInstalled = false;
+
+/** Pulls a floating panel back inside the viewport.
+ * Panels are positioned with inline `left`/`top`, so a panel dragged to the
+ * right edge in landscape ends up off-screen after rotating to portrait.
+ * @param {HTMLElement} panel - The panel to clamp
+ * @param {number} [margin] - Minimum gap from the viewport edge
+ * @since 0.87.70
+ */
+export function clampPanelIntoViewport(panel, margin = PANEL_VIEWPORT_MARGIN) {
+  if (!panel || !panel.isConnected) {return;}
+  // Panels laid out entirely by CSS (the mobile sheets) have no inline position to fix.
+  if (!panel.style.left && !panel.style.top) {return;}
+  const rect = panel.getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0) {return;} // Hidden
+  const maxLeft = Math.max(margin, window.innerWidth - rect.width - margin);
+  const maxTop = Math.max(margin, window.innerHeight - rect.height - margin);
+  const left = Math.min(maxLeft, Math.max(margin, rect.left));
+  const top = Math.min(maxTop, Math.max(margin, rect.top));
+  if (Math.abs(left - rect.left) > 0.5) {panel.style.left = `${left}px`;}
+  if (Math.abs(top - rect.top) > 0.5) {panel.style.top = `${top}px`;}
+}
+
+/** Registers a floating panel so it is re-clamped on resize/rotation.
+ * @param {HTMLElement} panel - The panel to track
+ * @param {number} [margin] - Minimum gap from the viewport edge
+ * @returns {() => void} Unregister function
+ * @since 0.87.70
+ */
+export function registerFloatingPanel(panel, margin = PANEL_VIEWPORT_MARGIN) {
+  if (!panel) {return () => {};}
+  const entry = {panel, margin};
+  floatingPanels.add(entry);
+
+  if (!floatingPanelWatchInstalled) {
+    floatingPanelWatchInstalled = true;
+    const reclamp = () => {
+      for (const item of Array.from(floatingPanels)) {
+        if (!item.panel.isConnected) {
+          floatingPanels.delete(item); // Panel was closed; stop tracking it
+          continue;
+        }
+        clampPanelIntoViewport(item.panel, item.margin);
+      }
+    };
+    window.addEventListener('resize', reclamp);
+    window.addEventListener('orientationchange', () => {
+      // Mobile browsers report stale dimensions immediately after rotation.
+      window.setTimeout(reclamp, 150);
+    });
+  }
+
+  return () => {floatingPanels.delete(entry);};
+}
+
+/** Whether a pointerdown landed on a control and so must not start a drag.
+ * @param {PointerEvent} event - The pointer event
+ * @returns {boolean} True when the target is interactive
+ */
+function isInteractiveTarget(event) {
+  if (!(event.target instanceof Element)) {return false;}
+  return !!event.target.closest('button, input, select, textarea, a, [contenteditable="true"]');
+}
+
+/** Makes a floating panel draggable by a handle, using Pointer Events.
+ *
+ * Replaces the mousedown/mousemove/mouseup trio that used to be duplicated at
+ * every call site. Pointer capture keeps the drag alive when the finger leaves
+ * the handle, so no document-level listeners are needed.
+ *
+ * @param {HTMLElement} handle - The element the user grabs (usually the header)
+ * @param {HTMLElement} panel - The element that moves
+ * @param {Object} [options] - Options
+ * @param {number} [options.margin] - Minimum gap from the viewport edge
+ * @param {() => boolean} [options.enabled] - Return false to ignore a drag attempt
+ * @param {(moved: boolean) => void} [options.onEnd] - Called when the drag finishes
+ * @returns {() => void} Teardown function that removes all listeners
+ * @since 0.87.70
+ */
+export function makePanelDraggable(handle, panel, options = {}) {
+  if (!handle || !panel) {return () => {};}
+  const margin = options.margin ?? PANEL_VIEWPORT_MARGIN;
+  let dragState = null;
+
+  // Without this the browser claims the gesture for scrolling/zooming the map
+  // before the first pointermove ever reaches us.
+  handle.style.touchAction = 'none';
+
+  const onPointerDown = (event) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) {return;}
+    if (typeof options.enabled === 'function' && !options.enabled()) {return;}
+    if (isInteractiveTarget(event)) {return;}
+    const rect = panel.getBoundingClientRect();
+    dragState = {
+      pointerId: event.pointerId,
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+      startX: event.clientX,
+      startY: event.clientY,
+      moved: false
+    };
+    try {
+      handle.setPointerCapture(event.pointerId);
+    } catch (_) { /* Capture is best-effort */ }
+    event.preventDefault();
+  };
+
+  const onPointerMove = (event) => {
+    if (!dragState || event.pointerId !== dragState.pointerId) {return;}
+    if (!dragState.moved) {
+      const dx = Math.abs(event.clientX - dragState.startX);
+      const dy = Math.abs(event.clientY - dragState.startY);
+      if (dx > 3 || dy > 3) {dragState.moved = true;}
+    }
+    const rect = panel.getBoundingClientRect();
+    const maxLeft = Math.max(margin, window.innerWidth - rect.width - margin);
+    const maxTop = Math.max(margin, window.innerHeight - rect.height - margin);
+    const left = Math.min(maxLeft, Math.max(margin, event.clientX - dragState.offsetX));
+    const top = Math.min(maxTop, Math.max(margin, event.clientY - dragState.offsetY));
+    panel.style.left = `${left}px`;
+    panel.style.top = `${top}px`;
+    panel.style.right = 'auto';
+    panel.style.bottom = 'auto';
+    event.preventDefault();
+  };
+
+  const onPointerEnd = (event) => {
+    if (!dragState || event.pointerId !== dragState.pointerId) {return;}
+    const moved = dragState.moved;
+    try {
+      handle.releasePointerCapture(dragState.pointerId);
+    } catch (_) { /* Already released */ }
+    dragState = null;
+    options.onEnd?.(moved);
+  };
+
+  handle.addEventListener('pointerdown', onPointerDown);
+  handle.addEventListener('pointermove', onPointerMove);
+  handle.addEventListener('pointerup', onPointerEnd);
+  handle.addEventListener('pointercancel', onPointerEnd);
+
+  return () => {
+    handle.removeEventListener('pointerdown', onPointerDown);
+    handle.removeEventListener('pointermove', onPointerMove);
+    handle.removeEventListener('pointerup', onPointerEnd);
+    handle.removeEventListener('pointercancel', onPointerEnd);
+    dragState = null;
+  };
+}
+
+/** Makes an element pannable by dragging, using Pointer Events.
+ *
+ * Used for the zoomable template previews, where the caller owns the pan state
+ * and only needs the offset from the drag origin.
+ *
+ * @param {HTMLElement} element - The element to pan
+ * @param {Object} options - Options
+ * @param {(event: PointerEvent) => (Object|false|null)} options.onStart - Return falsy to reject the drag; the value is handed back to onMove/onEnd
+ * @param {(dx: number, dy: number, context: Object) => void} options.onMove - Called with the offset from the drag origin
+ * @param {(context: Object) => void} [options.onEnd] - Called when the drag finishes
+ * @param {string} [options.touchAction] - Override the `touch-action` applied to the element
+ * @returns {() => void} Teardown function that removes all listeners
+ * @since 0.87.70
+ */
+export function makePointerPannable(element, options) {
+  if (!element || typeof options?.onStart !== 'function') {return () => {};}
+  let dragState = null;
+
+  // Panning is this element's purpose, so take the gesture away from scrolling.
+  element.style.touchAction = options.touchAction ?? 'none';
+
+  const onPointerDown = (event) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) {return;}
+    const context = options.onStart(event);
+    if (!context) {return;}
+    dragState = {pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, context};
+    try {
+      element.setPointerCapture(event.pointerId);
+    } catch (_) { /* Capture is best-effort */ }
+    event.preventDefault();
+  };
+
+  const onPointerMove = (event) => {
+    if (!dragState || event.pointerId !== dragState.pointerId) {return;}
+    options.onMove(event.clientX - dragState.startX, event.clientY - dragState.startY, dragState.context);
+    event.preventDefault();
+  };
+
+  const onPointerEnd = (event) => {
+    if (!dragState || event.pointerId !== dragState.pointerId) {return;}
+    const context = dragState.context;
+    try {
+      element.releasePointerCapture(dragState.pointerId);
+    } catch (_) { /* Already released */ }
+    dragState = null;
+    options.onEnd?.(context);
+  };
+
+  element.addEventListener('pointerdown', onPointerDown);
+  element.addEventListener('pointermove', onPointerMove);
+  element.addEventListener('pointerup', onPointerEnd);
+  element.addEventListener('pointercancel', onPointerEnd);
+
+  return () => {
+    element.removeEventListener('pointerdown', onPointerDown);
+    element.removeEventListener('pointermove', onPointerMove);
+    element.removeEventListener('pointerup', onPointerEnd);
+    element.removeEventListener('pointercancel', onPointerEnd);
+    dragState = null;
+  };
+}

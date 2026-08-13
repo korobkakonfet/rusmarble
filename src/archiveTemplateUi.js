@@ -292,6 +292,7 @@ export const createArchiveTemplateUi = (deps = {}) => {
 
     return new Promise((resolve) => {
       const backdrop = document.createElement('div');
+      backdrop.className = 'bm-archive-backdrop'; // Hook for the mobile stylesheet
       backdrop.style.position = 'fixed';
       backdrop.style.left = '0';
       backdrop.style.top = '0';
@@ -307,6 +308,7 @@ export const createArchiveTemplateUi = (deps = {}) => {
       backdrop.style.zIndex = '10055';
 
       const panel = document.createElement('section');
+      panel.className = 'bm-archive-window'; // Hook for the mobile stylesheet
       panel.style.width = 'min(760px, calc(100vw - 24px))';
       panel.style.maxHeight = 'calc(100vh - 24px)';
       panel.style.overflow = 'auto';
@@ -376,6 +378,7 @@ export const createArchiveTemplateUi = (deps = {}) => {
       panel.appendChild(rangeInfo);
 
       const controls = document.createElement('div');
+      controls.className = 'bm-archive-controls'; // Collapsed to one column on mobile
       controls.style.display = 'grid';
       controls.style.gridTemplateColumns = 'auto minmax(220px, 1fr) auto auto';
       controls.style.gap = '8px';
@@ -515,9 +518,8 @@ export const createArchiveTemplateUi = (deps = {}) => {
       let loadingVersions = false;
       let previewResizeObserver = null;
       let previewRedrawQueued = false;
-      let previewDragState = null;
-      let previewDragMoveHandler = null;
-      let previewDragUpHandler = null;
+      let previewDragState = null; // Truthy while a pan is in progress (drives the cursor)
+      let detachPreviewPan = null;
       let archiveVersions = [];
       let selectedVersionValue = String(targetTemplateMeta?.archiveVersion || '').trim();
       let selectedVersionDate = '';
@@ -745,14 +747,8 @@ export const createArchiveTemplateUi = (deps = {}) => {
         queuePreviewViewportDraw();
       };
       const cleanupPreviewDragHandlers = () => {
-        if (previewDragMoveHandler) {
-          window.removeEventListener('mousemove', previewDragMoveHandler);
-          previewDragMoveHandler = null;
-        }
-        if (previewDragUpHandler) {
-          window.removeEventListener('mouseup', previewDragUpHandler);
-          previewDragUpHandler = null;
-        }
+        detachPreviewPan?.();
+        detachPreviewPan = null;
         previewDragState = null;
         syncPreviewControls();
       };
@@ -1456,30 +1452,25 @@ export const createArchiveTemplateUi = (deps = {}) => {
         const bounds = previewWrap.getBoundingClientRect();
         setPreviewZoom(nextZoom, event.clientX - bounds.left, event.clientY - bounds.top);
       }, { passive: false });
-      previewWrap.addEventListener('mousedown', (event) => {
-        if (event.button !== 0 || !previewHasImage) return;
-        const { width, height } = getPreviewViewportSize();
-        const layout = computePreviewLayout(width, height);
-        if (!layout || (layout.maxPanX <= 0.5 && layout.maxPanY <= 0.5)) return;
-        event.preventDefault();
-        previewDragState = {
-          startX: event.clientX,
-          startY: event.clientY,
-          panX: previewPanX,
-          panY: previewPanY,
-        };
-        previewDragMoveHandler = (moveEvent) => {
-          if (!previewDragState) return;
-          previewPanX = previewDragState.panX + (moveEvent.clientX - previewDragState.startX);
-          previewPanY = previewDragState.panY + (moveEvent.clientY - previewDragState.startY);
+      detachPreviewPan = makePointerPannable(previewWrap, {
+        onStart: () => {
+          if (!previewHasImage) return null;
+          const { width, height } = getPreviewViewportSize();
+          const layout = computePreviewLayout(width, height);
+          if (!layout || (layout.maxPanX <= 0.5 && layout.maxPanY <= 0.5)) return null;
+          previewDragState = { panX: previewPanX, panY: previewPanY };
+          syncPreviewControls(layout);
+          return previewDragState;
+        },
+        onMove: (dx, dy, origin) => {
+          previewPanX = origin.panX + dx;
+          previewPanY = origin.panY + dy;
           queuePreviewViewportDraw();
-        };
-        previewDragUpHandler = () => {
-          cleanupPreviewDragHandlers();
-        };
-        window.addEventListener('mousemove', previewDragMoveHandler);
-        window.addEventListener('mouseup', previewDragUpHandler);
-        syncPreviewControls(layout);
+        },
+        onEnd: () => {
+          previewDragState = null;
+          syncPreviewControls();
+        }
       });
 
       document.body.appendChild(backdrop);

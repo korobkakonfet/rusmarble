@@ -23,6 +23,20 @@
  *   </div>
  * </body>
 */
+
+import { isMobileLayout } from './utils.js';
+
+/** Pixels of the overlay that must remain inside the viewport while dragging,
+ * so it can always be grabbed again.
+ * @since 0.87.70
+ */
+const MIN_VISIBLE_DRAG_EDGE = 48;
+
+/** Vertical distance that separates a sheet swipe from a tap on mobile.
+ * @since 0.87.70
+ */
+const SHEET_SWIPE_THRESHOLD = 40;
+
 export default class Overlay {
 
   /** Constructor for the Overlay class.
@@ -737,43 +751,84 @@ export default class Overlay {
       iMoveThings.classList.remove('dragging');
     };
 
-    // Mouse down - start dragging
-    iMoveThings.addEventListener('mousedown', function(event) {
+    // Keeps the overlay reachable: at least a sliver of it must stay on screen,
+    // which matters most on phones where a stray drag can fling it out of view.
+    const clampTarget = () => {
+      if (!initialRect) {return;}
+      const margin = 8;
+      const minX = margin - initialRect.width + MIN_VISIBLE_DRAG_EDGE;
+      const maxX = window.innerWidth - MIN_VISIBLE_DRAG_EDGE - margin;
+      const maxY = window.innerHeight - MIN_VISIBLE_DRAG_EDGE - margin;
+      targetX = Math.min(maxX, Math.max(minX, targetX));
+      targetY = Math.min(maxY, Math.max(margin, targetY));
+    };
+
+    /** Collapses/expands the overlay by reusing the logo's toggle handler,
+     * which owns all of the show/hide bookkeeping.
+     * @param {boolean} wantMinimized - Desired state
+     */
+    const setMinimized = (wantMinimized) => {
+      if (moveMe.classList.contains('bm-overlay-minimized') === wantMinimized) {return;}
+      document.querySelector('#bm-overlay-logo')?.click();
+    };
+
+    // Pointer Events cover mouse, touch and pen in one path. Pointer capture
+    // keeps the drag alive once the finger slides off the small handle.
+    let activePointerId = null;
+    // On mobile the overlay is a docked bottom sheet, so the bar is a swipe
+    // target that collapses/expands it rather than a free-positioning handle.
+    let sheetSwipeStartY = null;
+
+    iMoveThings.addEventListener('pointerdown', function(event) {
+      if (event.pointerType === 'mouse' && event.button !== 0) {return;}
+      activePointerId = event.pointerId;
+      try {
+        iMoveThings.setPointerCapture(event.pointerId);
+      } catch (_) { /* Capture is best-effort */ }
       event.preventDefault();
+      if (isMobileLayout()) {
+        sheetSwipeStartY = event.clientY;
+        return;
+      }
+      sheetSwipeStartY = null;
       startDrag(event.clientX, event.clientY);
     });
 
-    // Touch start - start dragging
-    iMoveThings.addEventListener('touchstart', function(event) {
-      const touch = event?.touches?.[0];
-      if (!touch) {return;}
-      startDrag(touch.clientX, touch.clientY);
+    iMoveThings.addEventListener('pointermove', function(event) {
+      if (event.pointerId !== activePointerId) {return;}
+      if (sheetSwipeStartY !== null) {
+        event.preventDefault(); // Swallow the gesture so the map does not pan
+        return;
+      }
+      if (!isDragging || !initialRect) {return;}
+      targetX = event.clientX - offsetX;
+      targetY = event.clientY - offsetY;
+      clampTarget();
       event.preventDefault();
-    }, { passive: false });
+    });
 
-    // Mouse move - update target position
-    document.addEventListener('mousemove', function(event) {
-      if (isDragging && initialRect) {
-        targetX = event.clientX - offsetX;
-        targetY = event.clientY - offsetY;
+    const onPointerEnd = (event) => {
+      if (event.pointerId !== activePointerId) {return;}
+      try {
+        iMoveThings.releasePointerCapture(activePointerId);
+      } catch (_) { /* Already released */ }
+      activePointerId = null;
+      if (sheetSwipeStartY !== null) {
+        const dy = event.clientY - sheetSwipeStartY;
+        sheetSwipeStartY = null;
+        if (dy > SHEET_SWIPE_THRESHOLD) {
+          setMinimized(true);
+        } else if (dy < -SHEET_SWIPE_THRESHOLD) {
+          setMinimized(false);
+        } else {
+          setMinimized(!moveMe.classList.contains('bm-overlay-minimized')); // Tap toggles
+        }
+        return;
       }
-    }, { passive: true });
-
-    // Touch move - update target position
-    document.addEventListener('touchmove', function(event) {
-      if (isDragging && initialRect) {
-        const touch = event?.touches?.[0];
-        if (!touch) {return;}
-        targetX = touch.clientX - offsetX;
-        targetY = touch.clientY - offsetY;
-        event.preventDefault();
-      }
-    }, { passive: false });
-
-    // End drag events
-    document.addEventListener('mouseup', endDrag);
-    document.addEventListener('touchend', endDrag);
-    document.addEventListener('touchcancel', endDrag);
+      endDrag();
+    };
+    iMoveThings.addEventListener('pointerup', onPointerEnd);
+    iMoveThings.addEventListener('pointercancel', onPointerEnd);
   }
 
   /** Handles status display.

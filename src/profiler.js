@@ -5,6 +5,8 @@
  *      profiler.start(label), profiler.end(label), profiler.record(label, ms)
  */
 
+import { makePointerPannable } from './utils.js';
+
 const stats = new Map(); // label → { count, totalMs, maxMs, lastMs }
 let hudEl = null;
 let rafId = null;
@@ -255,27 +257,18 @@ function createHud() {
   hudEl.appendChild(header);
   hudEl.appendChild(body);
 
-  // Drag support
-  let dragStartX, dragStartY, startRight, startTop;
-  header.addEventListener('mousedown', (e) => {
-    if (e.target.tagName === 'BUTTON') return;
-    const rect = hudEl.getBoundingClientRect();
-    dragStartX = e.clientX;
-    dragStartY = e.clientY;
-    startRight = window.innerWidth - rect.right;
-    startTop = rect.top;
-    e.preventDefault();
-
-    const onMove = (ev) => {
-      hudEl.style.right = `${startRight - (ev.clientX - dragStartX)}px`;
-      hudEl.style.top = `${startTop + (ev.clientY - dragStartY)}px`;
-    };
-    const onUp = () => {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    };
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+  // Drag support. The HUD is anchored by `right`, not `left`, so it does not use
+  // the shared makePanelDraggable helper.
+  makePointerPannable(header, {
+    onStart: (e) => {
+      if (e.target.tagName === 'BUTTON') return null;
+      const rect = hudEl.getBoundingClientRect();
+      return { right: window.innerWidth - rect.right, top: rect.top };
+    },
+    onMove: (dx, dy, origin) => {
+      hudEl.style.right = `${origin.right - dx}px`;
+      hudEl.style.top = `${origin.top + dy}px`;
+    },
   });
 
   document.body.appendChild(hudEl);

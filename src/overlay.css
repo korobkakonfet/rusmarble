@@ -2116,3 +2116,236 @@ span.bm-templatename:hover, a.bm-templatename:focus {
 .bm-hq-file {
   display: none;
 }
+
+/* ========================================================================= *
+ * Mobile layout
+ *
+ * Active on narrow screens and on any touch-primary device. The condition is
+ * mirrored in JS as MOBILE_LAYOUT_MEDIA (utils.js) - keep the two in sync.
+ *
+ * The desktop UI is a set of small free-floating panels driven by a mouse.
+ * None of that survives a phone, so on mobile the main overlay becomes a
+ * bottom sheet, dialogs become full-width sheets, and every control grows to
+ * a finger-sized tap target.
+ * ========================================================================= */
+
+@media (max-width: 640px), (pointer: coarse) {
+
+  /* ---- Main overlay: bottom sheet ------------------------------------- */
+
+  /* `!important` throughout: the drag handler and the minimize toggle both
+     write inline styles that would otherwise win. */
+  #bm-overlay:not(.bm-overlay-minimized) {
+    left: 0 !important;
+    right: 0 !important;
+    top: auto !important;
+    bottom: 0 !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    height: auto !important;
+    /* dvh, not vh: mobile browser chrome would otherwise clip the sheet. */
+    max-height: 70dvh;
+    transform: none !important;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border-radius: 14px 14px 0 0;
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom)) !important;
+    font-size: 13px;
+  }
+
+  /* Minimized: a small floating puck, still anchored to the bottom corner. */
+  #bm-overlay.bm-overlay-minimized {
+    left: auto !important;
+    right: 12px !important;
+    top: auto !important;
+    bottom: calc(12px + env(safe-area-inset-bottom)) !important;
+    transform: none !important;
+    border-radius: 14px;
+  }
+
+  /* ---- Drag bar becomes a sheet grabber -------------------------------- */
+
+  /* Free positioning is meaningless for a docked sheet; the bar is now a
+     swipe target that collapses/expands the sheet (see Overlay.handleDrag). */
+  #bm-bar-drag {
+    height: 22px;
+    background: none;
+    border: none;
+    box-shadow: none;
+    cursor: default;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* Claim the gesture so the swipe does not scroll the map or the sheet. */
+    touch-action: none;
+  }
+
+  #bm-bar-drag::after {
+    content: '';
+    width: 40px;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--bm-border-strong);
+  }
+
+  /* ---- Tap targets ----------------------------------------------------- */
+
+  #bm-overlay button,
+  #bm-overlay summary,
+  .bm-text-template-window button,
+  .bm-archive-window button,
+  #bm-chat-bans-window button {
+    min-height: 44px;
+    min-width: 44px;
+    font-size: 13px;
+  }
+
+  /* Icon-only buttons stay square rather than stretching their row. */
+  #bm-overlay button:has(> svg:only-child) {
+    width: 44px;
+    padding: 0;
+  }
+
+  #bm-overlay input,
+  #bm-overlay select,
+  .bm-text-template-window-input,
+  .bm-text-template-window-select,
+  .bm-text-template-window-number {
+    min-height: 40px;
+    /* 16px keeps iOS Safari from zooming the page on focus. */
+    font-size: 16px;
+  }
+
+  #bm-overlay,
+  #bm-overlay summary,
+  #bm-overlay label,
+  #bm-overlay small {
+    font-size: 13px;
+  }
+
+  /* The chat delete button is sized from JS through this variable. It cannot
+     reach 44px without covering the message it belongs to. */
+  #bm-overlay {
+    --bm-chat-delete-size: 28px;
+  }
+
+  #bm-overlay .bm-chat-delete {
+    width: var(--bm-chat-delete-size);
+    height: var(--bm-chat-delete-size);
+    min-width: var(--bm-chat-delete-size);
+    min-height: var(--bm-chat-delete-size);
+    font-size: 13px;
+  }
+
+  /* Hover-only affordances never appear on touch, so pin them open. */
+  #bm-chat-messages .bm-chat-message[data-mod-message-id]::after {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* ---- Chat: full-screen sheet ----------------------------------------- */
+
+  #bm-contain-chat.bm-chat-floating {
+    left: 0 !important;
+    right: 0 !important;
+    top: 0 !important;
+    bottom: 0 !important;
+    width: auto !important;
+    height: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    max-height: none !important;
+    border-radius: 0;
+    /* Touch cannot use a CSS resize grip. */
+    resize: none;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  #bm-contain-chat.bm-chat-floating > summary {
+    cursor: default;
+  }
+
+  /* ---- Floating windows ------------------------------------------------ */
+
+  /* The three template builders already had a 640px rule; extend the same
+     bottom-sheet treatment to the bans window. */
+  #bm-chat-bans-window {
+    left: 8px !important;
+    right: 8px !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    bottom: calc(8px + env(safe-area-inset-bottom)) !important;
+    top: auto !important;
+    max-height: 70dvh;
+  }
+
+  #bm-text-template-window,
+  #bm-flag-template-window,
+  #bm-remote-template-window {
+    max-height: 86dvh;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  /* ---- Position joystick ----------------------------------------------- */
+
+  /* Docked to the right edge and vertically centred, clear of both the bottom
+     sheet and the notification strip at the top. */
+  .bm-template-position-joystick {
+    left: auto !important;
+    right: 12px !important;
+    top: 50% !important;
+    bottom: auto !important;
+    transform: translateY(-50%) !important;
+    min-width: 180px;
+    max-width: 220px;
+    padding: 10px;
+  }
+
+  .bm-template-position-joystick button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  /* ---- Archive / HQ dialogs: stack instead of shrinking ---------------- */
+
+  .bm-archive-backdrop {
+    padding: 0 !important;
+    align-items: stretch !important;
+  }
+
+  .bm-archive-window {
+    width: 100% !important;
+    max-height: 100dvh !important;
+    border-radius: 0 !important;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom)) !important;
+  }
+
+  .bm-archive-controls {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .bm-hq-row,
+  .bm-hq-inline {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  /* ---- Dense desktop-only tooling -------------------------------------- */
+
+  /* The profiler HUD is a monospace debugging table; it is unreadable and
+     unusable at phone width. */
+  #bm-profiler-hud {
+    display: none !important;
+  }
+
+  /* ---- Notifications --------------------------------------------------- */
+
+  #bm-notification-container {
+    left: 8px;
+    right: 8px;
+    transform: none;
+    top: calc(8px + env(safe-area-inset-top));
+  }
+}

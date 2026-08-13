@@ -17,7 +17,7 @@ import { createTemplateCreationUi } from './templateCreationUi.js';
 import { createArchiveTemplateUi } from './archiveTemplateUi.js';
 import { layoutLanguageOptions, normalizeLayoutLanguage, translateLayout, getLayoutThemeLabel as getLocalizedLayoutThemeLabel, getTemplateDisplayLabel as getLocalizedTemplateDisplayLabel, getTemplateCreateModeLabel, getChatBanTypeLabel, getColorSortLabel } from './layoutI18n.js';
 import { encodeChunkSampleBytes } from './templateChunkUtils.js';
-import { consoleLog, consoleWarn, consoleError, isDebugLoggingEnabled, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels } from './utils.js';
+import { consoleLog, consoleWarn, consoleError, isDebugLoggingEnabled, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels, initMobileLayout, isMobileLayout, makePanelDraggable, registerFloatingPanel } from './utils.js';
 import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getZoom, getCurrentTileSize, getMountedTemplateCanvasSourceIDs, setForcedTileRefreshSuppressed, applyArchiveBgLayerToMap, getArchiveBgDiag, loadArchiveTile, setTemplateSortIDLayersOpacity, registerBmCanvasRestoreOnStyleChange, projectGeoToScreen, unprojectScreenToGeo, getMapCanvasElement} from './utilsMaptiler.js';
 // import { getCenterGeoCoords, addTemplate } from './utilsMaptiler.js';
 
@@ -2312,7 +2312,6 @@ function initChat() {
   const chatSummary = chatDetails?.querySelector('summary');
   let chatFloatToggleBtn = null;
   let isChatFloating = false;
-  let dragState = null;
   let floatingResizeObserver = null;
   let floatingExpandedWidth = '360px';
   let floatingExpandedHeight = '420px';
@@ -2325,9 +2324,6 @@ function initChat() {
   let bansWindow = null;
   let bansWindowCount = null;
   let bansWindowList = null;
-  let bansWindowDragState = null;
-  let bansWindowMoveHandler = null;
-  let bansWindowUpHandler = null;
   const BANS_WINDOW_MIN_W = 280;
   const BANS_WINDOW_MIN_H = 220;
   const BANS_WINDOW_DEFAULT_W = 380;
@@ -2419,43 +2415,10 @@ function initChat() {
     bansWindowList.className = 'bm-chat-bans-window-list';
     panel.appendChild(bansWindowList);
 
-    head.addEventListener('mousedown', (event) => {
-      if (event.button !== 0) return;
-      if (event.target instanceof Element && event.target.closest('button')) return;
-      const rect = panel.getBoundingClientRect();
-      bansWindowDragState = {
-        offsetX: event.clientX - rect.left,
-        offsetY: event.clientY - rect.top
-      };
-      bansWindowMoveHandler = (moveEvent) => {
-        if (!bansWindowDragState) return;
-        const currentRect = panel.getBoundingClientRect();
-        const maxLeft = Math.max(8, window.innerWidth - currentRect.width - 8);
-        const maxTop = Math.max(8, window.innerHeight - currentRect.height - 8);
-        const left = Math.min(maxLeft, Math.max(8, moveEvent.clientX - bansWindowDragState.offsetX));
-        const top = Math.min(maxTop, Math.max(8, moveEvent.clientY - bansWindowDragState.offsetY));
-        panel.style.left = `${left}px`;
-        panel.style.top = `${top}px`;
-        panel.style.right = 'auto';
-        panel.style.bottom = 'auto';
-      };
-      bansWindowUpHandler = () => {
-        bansWindowDragState = null;
-        if (bansWindowMoveHandler) {
-          window.removeEventListener('mousemove', bansWindowMoveHandler);
-          bansWindowMoveHandler = null;
-        }
-        if (bansWindowUpHandler) {
-          window.removeEventListener('mouseup', bansWindowUpHandler);
-          bansWindowUpHandler = null;
-        }
-      };
-      window.addEventListener('mousemove', bansWindowMoveHandler);
-      window.addEventListener('mouseup', bansWindowUpHandler);
-      event.preventDefault();
-    });
+    makePanelDraggable(head, panel);
 
     document.body.appendChild(panel);
+    registerFloatingPanel(panel);
     bansWindow = panel;
     applyOverlayVarsToElement(bansWindow);
     return panel;
@@ -2806,40 +2769,13 @@ function initChat() {
   }
 
   if (chatSummary) {
-    chatSummary.addEventListener('mousedown', (event) => {
-      if (!isChatFloating) return;
-      if (event.button !== 0) return;
-      if (chatFloatToggleBtn && chatFloatToggleBtn.contains(event.target)) return;
-      const rect = chatDetails.getBoundingClientRect();
-      dragState = {
-        startX: event.clientX,
-        startY: event.clientY,
-        offsetX: event.clientX - rect.left,
-        offsetY: event.clientY - rect.top,
-        moved: false
-      };
-      event.preventDefault();
-    });
-    window.addEventListener('mousemove', (event) => {
-      if (!dragState || !isChatFloating) return;
-      const dx = Math.abs(event.clientX - dragState.startX);
-      const dy = Math.abs(event.clientY - dragState.startY);
-      if (!dragState.moved && (dx > 3 || dy > 3)) {
-        dragState.moved = true;
-      }
-      const rect = chatDetails.getBoundingClientRect();
-      const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
-      const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
-      const left = Math.min(maxLeft, Math.max(8, event.clientX - dragState.offsetX));
-      const top = Math.min(maxTop, Math.max(8, event.clientY - dragState.offsetY));
-      chatDetails.style.left = `${left}px`;
-      chatDetails.style.top = `${top}px`;
-      chatDetails.style.right = 'auto';
-      chatDetails.style.bottom = 'auto';
-    });
-    window.addEventListener('mouseup', () => {
-      if (!dragState) return;
-      if (dragState.moved) {
+    makePanelDraggable(chatSummary, chatDetails, {
+      // Only floating chat is draggable; docked chat lives inside the overlay.
+      // On mobile the chat is a full-screen sheet, so dragging is pointless.
+      enabled: () => isChatFloating && !isMobileLayout(),
+      onEnd: (moved) => {
+        if (!moved) return;
+        // Swallow the click that ends the drag so it does not toggle the <details>.
         const blockClick = (clickEvent) => {
           clickEvent.preventDefault();
           clickEvent.stopPropagation();
@@ -2847,8 +2783,8 @@ function initChat() {
         };
         chatSummary.addEventListener('click', blockClick, true);
       }
-      dragState = null;
     });
+    registerFloatingPanel(chatDetails);
   }
 
   chatDetails?.addEventListener('toggle', () => {
@@ -3157,10 +3093,11 @@ function initChat() {
     btn.style.border = '1px solid var(--bm-border-strong)';
     btn.style.color = 'var(--bm-accent-strong)';
     btn.style.borderRadius = '50%';
-    btn.style.width = '14px';
-    btn.style.height = '14px';
-    btn.style.minWidth = '14px';
-    btn.style.minHeight = '14px';
+    // Sized through a variable so the mobile stylesheet can grow the tap target.
+    btn.style.width = 'var(--bm-chat-delete-size, 14px)';
+    btn.style.height = 'var(--bm-chat-delete-size, 14px)';
+    btn.style.minWidth = 'var(--bm-chat-delete-size, 14px)';
+    btn.style.minHeight = 'var(--bm-chat-delete-size, 14px)';
     btn.style.padding = '0';
     btn.style.display = 'inline-flex';
     btn.style.alignItems = 'center';
@@ -3169,7 +3106,7 @@ function initChat() {
     btn.style.lineHeight = '1';
     btn.style.zIndex = '2';
     btn.style.pointerEvents = 'auto';
-    btn.addEventListener('mousedown', (event) => {
+    btn.addEventListener('pointerdown', (event) => {
       event.stopPropagation();
     });
     btn.addEventListener('click', (event) => {
@@ -4527,6 +4464,7 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   registerBmCanvasRestoreOnStyleChange(); // Re-adds overlay layers after any map style reload
 
   await waitForBody();
+  initMobileLayout(); // Mirrors the mobile flag onto <html> before any UI is built
   observeStaleSelectionPins();
   observeWplaceTheme();
   await buildOverlayMain(); // Builds the main overlay

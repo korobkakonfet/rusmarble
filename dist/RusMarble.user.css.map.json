@@ -383,5 +383,12 @@
   "bm-icon-link-armed": "bm-9k",
   "bm-delete-anchor": "bm-9_",
   "bm-transparent-erase-color-label": "bm-6c",
-  "bm-transparent-erase-color": "bm-78"
+  "bm-transparent-erase-color": "bm-78",
+  "bm-hq-findwrong": "bm-aq",
+  "bm-chat-delete-size": "bm-91",
+  "bm-mobile": "bm-bi",
+  "bm-archive-backdrop": "bm-9d",
+  "bm-archive-controls": "bm-9e",
+  "bm-archive-window": "bm-9R",
+  "bm-icon-button": "bm-aJ"
 }
