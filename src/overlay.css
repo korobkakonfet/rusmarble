@@ -805,6 +805,23 @@ input[type="file"][id*="template"] {
   text-decoration: underline;
 }
 
+.bm-display-coords-link {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  opacity: 0.75;
+}
+
+.bm-display-coords-link:hover {
+  opacity: 1;
+  text-decoration: none;
+}
+
+.bm-display-coords-link svg {
+  width: 1em;
+  height: 1em;
+}
+
 .bm-display-coords-toast {
   position: absolute;
   z-index: 2;
@@ -1017,6 +1034,12 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   padding: 0 3px;
   margin-right: 3px;
   letter-spacing: 0.08em;
+}
+
+.bm-root-badge {
+  color: #4caf50;
+  border-color: #4caf50;
+  background: rgba(76, 175, 80, 0.12);
 }
 
 .bm-archive-badge {

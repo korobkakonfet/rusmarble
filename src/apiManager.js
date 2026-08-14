@@ -6,7 +6,7 @@
 
 import TemplateManager from "./templateManager.js";
 import { consoleError, escapeHTML, numberToEncoded, serverTPtoDisplayTP, cleanUpCanvas, copyToClipboard, getOverlayCoords, areOverlayCoordsFilledAndValid, calculateTopLeftAndSize, downloadTile, testCanvasSize, consoleLog, lineBitmap, getCurrentColor, colorpalette, midPointDistance, circleBitmap } from "./utils.js";
-import { coordsTileCoordsToGeoCoords, overrideRandom } from "./utilsMaptiler.js";
+import { coordsTileCoordsToGeoCoords, overrideRandom, getZoom } from "./utilsMaptiler.js";
 
 const EASTER_EGG_USER_ID = 11728406;
 const EASTER_EGG_WAVE_FIRST_DELAY_MS = 2000;
@@ -455,9 +455,7 @@ export default class ApiManager {
     // Find the additional pixel coords span
     const geoCoords = coordsTileCoordsToGeoCoords(coordsTile, coordsPixel);
     const text1 = `(Tl X: ${coordsTile[0]}, Tl Y: ${coordsTile[1]}, Px X: ${coordsPixel[0]}, Px Y: ${coordsPixel[1]})`;
-    const text2 = `(${geoCoords[0].toFixed(5)}, ${geoCoords[1].toFixed(5)})`;
     const text1Display = `Tl ${coordsTile[0]}, ${coordsTile[1]} | Px ${coordsPixel[0]}, ${coordsPixel[1]}`;
-    const text2Display = `${geoCoords[0].toFixed(5)}, ${geoCoords[1].toFixed(5)}`;
 
     const showCopiedToast = (anchor, message = 'Copied!') => {
       const parent = anchor.parentElement;
@@ -518,6 +516,10 @@ export default class ApiManager {
 
     displayCoordsContainer.textContent = '';
 
+    const displayCoordsRow = document.createElement('div');
+    displayCoordsRow.id = 'bm-display-coords-row';
+    displayCoordsRow.style = 'display: flex; align-items: center; gap: 4px; max-width: 100%;';
+
     const displayCoords1 = document.createElement('span');
     displayCoords1.id = 'bm-display-coords1';
     displayCoords1.style = 'display: block; max-width: 100%; white-space: nowrap;';
@@ -525,16 +527,30 @@ export default class ApiManager {
     displayCoords1.textContent = text1Display;
     displayCoords1.dataset.text = text1;
 
-    const displayCoords2 = document.createElement('span');
-    displayCoords2.id = 'bm-display-coords2';
-    displayCoords2.style = 'display: block; max-width: 100%; white-space: nowrap;';
-    displayCoords2.className = 'bm-display-coords-clickable text-base-content/70 text-xs';
-    displayCoords2.textContent = text2Display;
-    displayCoords2.dataset.text = text2;
+    // Same text classes as the coords themselves, so the icon inherits their size and color.
+    const displayCoordsLink = document.createElement('span');
+    displayCoordsLink.id = 'bm-display-coords-link';
+    displayCoordsLink.className = 'bm-display-coords-clickable bm-display-coords-link text-base-content/70 text-xs';
+    displayCoordsLink.title = 'Copy link to this place';
+    displayCoordsLink.setAttribute('role', 'button');
+    // Follow the map's current zoom so the link reopens the view the user is actually looking at.
+    const buildPlaceLink = () => {
+      const currentZoom = getZoom();
+      const zoom = Number.isFinite(currentZoom) ? Math.round(currentZoom * 100) / 100 : 16;
+      return `https://wplace.live/?lat=${geoCoords[0]}&lng=${geoCoords[1]}&zoom=${zoom}`;
+    };
+    displayCoordsLink.dataset.text = buildPlaceLink();
+    // Registered before the copy handler, so the zoom is re-read at click time rather than being
+    // frozen at whatever it was when the pixel info opened.
+    displayCoordsLink.addEventListener('click', () => {
+      displayCoordsLink.dataset.text = buildPlaceLink();
+    });
+    displayCoordsLink.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5"/></svg>';
 
-    displayCoordsContainer.append(displayCoords1, displayCoords2);
+    displayCoordsRow.append(displayCoords1, displayCoordsLink);
+    displayCoordsContainer.append(displayCoordsRow);
     attachCopyHandler(displayCoords1);
-    attachCopyHandler(displayCoords2);
+    attachCopyHandler(displayCoordsLink);
 
     this.updatePixelInfoAllianceBackground();
     this.#maybeTriggerEasterEgg();
