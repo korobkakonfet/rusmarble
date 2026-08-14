@@ -2,6 +2,8 @@
  * @since 0.87.39
  */
 
+import { makePointerPannable } from './utils.js';
+
 /**
  * Creates the time-archive template UI helpers while keeping their internal modal state
  * encapsulated outside of `main.js`.

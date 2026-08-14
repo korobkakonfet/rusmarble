@@ -17,7 +17,15 @@ import { execSync } from 'child_process';
 import { consoleStyle } from './utils.js';
 
 const PATCH_FILE = process.env.PATCH_FILE ?? 'experimental.local.patch';
-const PATCHED_FILES = ['src/main.js', 'src/templateManager.js', 'src/hqTemplate.js'];
+const PATCHED_FILES = [
+  'src/main.js',
+  'src/templateManager.js',
+  'src/hqTemplate.js',
+  'src/apiManager.js',
+  'src/templateSync.js',
+  'src/overlay.css',
+  'src/layoutI18n.js',
+];
 const SMART_OUT = 'dist/RusMarble.exp.user.js';
 const SMART_META_OUT = 'dist/RusMarble.exp.meta.js';
 // The exp build is gitignored, so it can't be served from GitHub raw like the
@@ -53,8 +61,13 @@ try {
 
 // build.js overwrites dist/RusMarble.user.js with the patched code, so keep a
 // copy of the clean (committed) regular artifact to restore afterwards.
+// The patch also carries CSS and the version badge, so those artifacts need the same treatment.
 const REGULAR_OUT = 'dist/RusMarble.user.js';
+const REGULAR_SIDE_ARTIFACTS = ['dist/RusMarble.user.css', 'dist/RusMarble.user.css.map.json', 'docs/README.md'];
 const regularBackup = fs.existsSync(REGULAR_OUT) ? fs.readFileSync(REGULAR_OUT) : null;
+const sideBackups = REGULAR_SIDE_ARTIFACTS
+  .filter((file) => fs.existsSync(file))
+  .map((file) => [file, fs.readFileSync(file)]);
 
 let applied = false;
 try {
@@ -88,6 +101,9 @@ try {
   // Restore the clean regular artifact (build.js clobbered it with smart code).
   if (regularBackup) {
     fs.writeFileSync(REGULAR_OUT, regularBackup);
+  }
+  for (const [file, contents] of sideBackups) {
+    fs.writeFileSync(file, contents);
   }
   if (applied) {
     console.log(`${consoleStyle.BLUE}Reverting patch...${consoleStyle.RESET}`);
