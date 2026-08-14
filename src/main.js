@@ -8555,9 +8555,15 @@ async function buildOverlayMain() {
       };
       for (const entry of entriesIndexed) {
         const template = entry.t;
+        const templateStore = template?.storageKey
+          ? (templateManager.templatesJSON?.templates?.[template.storageKey] ?? {})
+          : {};
         const isRemote = isTemplateRemote(template);
         const remoteStream = isRemote ? getTemplateRemoteStream(template) : DEFAULT_REMOTE_TEMPLATE_STREAM;
-        if (!isRemote || remoteStream === DEFAULT_REMOTE_TEMPLATE_STREAM) {
+        // Templates added by name aren't part of a stream's roster — the stream is just where the
+        // name happened to resolve — so they belong at root level, not inside a stream folder.
+        const isManualRemote = template?.remoteManual === true || templateStore.remoteManual === true;
+        if (!isRemote || isManualRemote || remoteStream === DEFAULT_REMOTE_TEMPLATE_STREAM) {
           rootLevelEntries.push(entry);
           continue;
         }
@@ -8942,7 +8948,9 @@ async function buildOverlayMain() {
       }
       row.appendChild(enforceTranspButton);
       row.appendChild(label);
-      const targetContainer = isRemote && remoteStream !== DEFAULT_REMOTE_TEMPLATE_STREAM
+      // Mirrors the grouping pass above: manual adds stay at root level.
+      const isManualRemoteRow = template?.remoteManual === true || templateStore.remoteManual === true;
+      const targetContainer = isRemote && !isManualRemoteRow && remoteStream !== DEFAULT_REMOTE_TEMPLATE_STREAM
         ? ensureStreamGroupContainer(remoteStream, streamEntryGroups.get(remoteStream)?.length ?? 0)
         : listContainer;
       targetContainer.appendChild(row);
