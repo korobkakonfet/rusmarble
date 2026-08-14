@@ -3252,6 +3252,9 @@ export default class TemplateManager {
       const store = this.templatesJSON?.templates?.[template.storageKey] ?? {};
       const isRemote = template.isRemote === true || store.remote === true;
       if (!isRemote) return false;
+      // Manually added templates are kept even when their stream is disabled — the user asked for
+      // them by name, they were never pulled in by the stream listing.
+      if (template.remoteManual === true || store.remoteManual === true) return false;
       const stream = normalizeTemplateSyncStreamValue(template.remoteStream ?? store.remoteStream);
       return !allowed.has(stream);
     });

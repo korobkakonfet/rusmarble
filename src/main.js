@@ -7053,6 +7053,7 @@ async function buildOverlayMain() {
                     return;
                   }
                   const trimmedRemoteTemplateName = String(remoteTemplateConfig.templateName ?? '').trim();
+                  let remoteTemplateExistedWarning = null;
                   const createdTemplate = await templateSync.importTemplateByName({
                     templateName: trimmedRemoteTemplateName,
                     onStatus: (message) => instance.handleDisplayStatus(message),
@@ -7061,9 +7062,17 @@ async function buildOverlayMain() {
                     buildTemplateFilterList: () => window.buildTemplateFilterList?.(),
                     buildColorFilterList: () => window.buildColorFilterList?.(),
                     defaultEnabled: true,
+                    // Track it remotely so updates the author publishes later are pulled in by the
+                    // update poll instead of leaving a frozen copy behind.
+                    syncExisting: true,
+                    remoteManual: true,
+                    onExisting: ({ warning }) => { remoteTemplateExistedWarning = warning; },
                   });
                   if (createdTemplate) {
-                    instance.handleDisplayStatus(`Template "${trimmedRemoteTemplateName}" imported as a local template.`);
+                    instance.handleDisplayStatus(
+                      remoteTemplateExistedWarning
+                        ?? `Template "${trimmedRemoteTemplateName}" added and tracked for remote updates.`
+                    );
                   }
                   return;
                 }
@@ -8486,8 +8495,12 @@ async function buildOverlayMain() {
         const bIsRemote = b.t.isRemote === true || bStoreRemote;
         const aTop = normalizeFlag(a.t.remoteToTop) || normalizeFlag(aStore.remoteToTop);
         const bTop = normalizeFlag(b.t.remoteToTop) || normalizeFlag(bStore.remoteToTop);
-        const aGroup = aTop ? 0 : (aIsRemote ? 2 : 1);
-        const bGroup = bTop ? 0 : (bIsRemote ? 2 : 1);
+        // Manually added remote templates are the user's own picks, so they keep the local
+        // insertion order instead of being sorted into the server-ordered remote block.
+        const aManual = a.t.remoteManual === true || aStore.remoteManual === true;
+        const bManual = b.t.remoteManual === true || bStore.remoteManual === true;
+        const aGroup = aTop ? 0 : ((aIsRemote && !aManual) ? 2 : 1);
+        const bGroup = bTop ? 0 : ((bIsRemote && !bManual) ? 2 : 1);
         if (aGroup !== bGroup) return aGroup - bGroup;
         if (aGroup === 1) return a.idx - b.idx;
         const aOrder = normalizeRemoteOrder(
@@ -8788,9 +8801,14 @@ async function buildOverlayMain() {
       });
         if (isRemote) {
           row.classList.add('bm-template-remote');
+          // The root group is its own thing: its rows carry just the ROOT tag, since it already
+          // implies remote. Manual adds are the user's own picks rather than part of the stream's
+          // roster, so they stay plain remote.
+          const isManualRemote = template.remoteManual === true || templateStore.remoteManual === true;
+          const isRootGroup = remoteStream === DEFAULT_REMOTE_TEMPLATE_STREAM && !isManualRemote;
           const badge = document.createElement('span');
-          badge.className = 'bm-remote-badge';
-          badge.textContent = t('templates.badgeRemote');
+          badge.className = isRootGroup ? 'bm-remote-badge bm-root-badge' : 'bm-remote-badge';
+          badge.textContent = isRootGroup ? t('templates.badgeRoot') : t('templates.badgeRemote');
           label.appendChild(badge);
         }
         if (timeArchiveMeta) {

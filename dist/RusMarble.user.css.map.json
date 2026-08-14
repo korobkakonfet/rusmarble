@@ -390,5 +390,15 @@
   "bm-archive-backdrop": "bm-9d",
   "bm-archive-controls": "bm-9e",
   "bm-archive-window": "bm-9R",
-  "bm-icon-button": "bm-aJ"
+  "bm-icon-button": "bm-aJ",
+  "bm-root-badge": "bm-aX",
+  "bm-display-coords-link": "bm-8d",
+  "bm-display-coords-row": "bm-8B",
+  "bm-nearby-templates-distance": "bm-6S",
+  "bm-nearby-templates-empty": "bm-7y",
+  "bm-nearby-templates-name": "bm-7N",
+  "bm-display-coords-nearby": "bm-7R",
+  "bm-nearby-templates-row": "bm-80",
+  "bm-nearby-templates": "bm-9q",
+  "bm-nearby-templates-up": "bm-8r"
 }

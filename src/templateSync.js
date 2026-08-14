@@ -184,6 +184,54 @@ export function createTemplateSync({
     };
   };
 
+  /** Templates added by name can resolve through /templates/<name> while being absent from the
+   * stream listing, so the listing-driven update check never sees them. Collect them so they can
+   * be polled by name instead.
+   * @param {Set<string>} listedKeys - `stream:name` keys already covered by a stream listing.
+   */
+  const collectUnlistedManualTemplates = (listedKeys) => (
+    (templateManager.templatesArray ?? []).reduce((accumulator, template) => {
+      if (!template) return accumulator;
+      const store = template.storageKey
+        ? templateManager.templatesJSON?.templates?.[template.storageKey]
+        : null;
+      const isRemote = template.isRemote === true || store?.remote === true;
+      if (!isRemote) return accumulator;
+      if (!(template.remoteManual === true || store?.remoteManual === true)) return accumulator;
+      const templateName = template.remoteName || template.displayName || store?.remoteName || store?.name;
+      if (!templateName) return accumulator;
+      const stream = getRemoteTemplateStream(template, store);
+      if (listedKeys.has(`${stream}:${templateName}`)) return accumulator;
+      accumulator.push({ template, store, templateName, stream });
+      return accumulator;
+    }, [])
+  );
+
+  /** Reads a manual template's meta and shapes it like a stream-listing entry, so the regular
+   * timestamp comparison and sync path can consume it unchanged. Returns null when unavailable.
+   */
+  const fetchManualTemplateEntry = async ({ templateName, stream }) => {
+    const label = `Template meta "${templateName}" (${stream})`;
+    try {
+      const response = await gmRequestWithTimeout(getTemplateMetaUrl(templateName, stream), 'json', label);
+      assertResponseOk(response, label);
+      const meta = getResponseData(response, label) ?? {};
+      if (meta?.['deleted'] === true) return null;
+      return {
+        'name': templateName,
+        'stream': stream,
+        'updated_at': meta?.['updated_at'] ?? null,
+        'image_updated_at': meta?.['image_updated_at'] ?? meta?.['updated_at'] ?? null,
+        'order': meta?.['order'] ?? null,
+        'to_top': meta?.['to_top'] ?? false,
+        'highlighted': meta?.['highlighted'] ?? false,
+      };
+    } catch (err) {
+      logSync(`Failed to read meta for manual template "${templateName}" (${stream}).`, { level: 'warn', err });
+      return null;
+    }
+  };
+
   const waitForImport = async () => {
     if (!templateManager?.importPromise) return;
     try {
@@ -191,6 +239,121 @@ export function createTemplateSync({
     } catch (_) {}
   };
   const dedupeRemoteTemplatesOnce = async () => {};
+
+  const parseCoordsValue = (value) => {
+    const parts = Array.isArray(value)
+      ? value
+      : String(value ?? '').split(',');
+    if (parts.length !== 4) return null;
+    const coords = parts.map((part) => Number(String(part).trim()));
+    return coords.some((n) => !Number.isFinite(n)) ? null : coords;
+  };
+
+  /** Names already examined for adoption, so a rejected candidate isn't re-fetched every poll. */
+  const legacyAdoptionChecked = new Set();
+
+  /** Older builds added templates by name as detached local copies, invisible to the update poll.
+   * When a server entry matches such a copy by name *and* coords, adopt it as a tracked remote
+   * template so the author's later edits reach it. The coords check keeps a user's own local
+   * artwork that happens to share a name from being hijacked.
+   */
+  const adoptLegacyLocalTemplates = async (templateItems, stream = DEFAULT_TEMPLATE_STREAM) => {
+    if (!Array.isArray(templateItems) || templateItems.length === 0) return 0;
+    const normalizedStream = normalizeRemoteStream(stream);
+    const localCandidates = (templateManager.templatesArray ?? []).filter((template) => {
+      if (!template) return false;
+      const store = template.storageKey
+        ? templateManager.templatesJSON?.templates?.[template.storageKey]
+        : null;
+      if (template.isRemote === true || store?.remote === true) return false;
+      if (store?.timeArchiveMeta) return false;
+      return true;
+    });
+    if (localCandidates.length === 0) return 0;
+
+    const serverEntries = new Map();
+    for (const entry of templateItems) {
+      const { entryMeta, templateName, remoteStream } = parseTemplateEntry(entry, normalizedStream);
+      if (!templateName) continue;
+      if (entryMeta?.['deleted'] === true) continue;
+      if (remoteStream !== normalizedStream) continue;
+      serverEntries.set(templateName, entryMeta);
+    }
+    if (serverEntries.size === 0) return 0;
+
+    let adopted = 0;
+    for (const template of localCandidates) {
+      const store = template.storageKey
+        ? templateManager.templatesJSON?.templates?.[template.storageKey]
+        : null;
+      const templateName = template.displayName ?? store?.name ?? null;
+      if (!templateName || !serverEntries.has(templateName)) continue;
+      const checkKey = `${normalizedStream}:${templateName}`;
+      if (legacyAdoptionChecked.has(checkKey)) continue;
+      legacyAdoptionChecked.add(checkKey);
+
+      let meta = null;
+      try {
+        const label = `Template meta "${templateName}" (${normalizedStream})`;
+        const response = await gmRequestWithTimeout(getTemplateMetaUrl(templateName, normalizedStream), 'json', label);
+        assertResponseOk(response, label);
+        meta = getResponseData(response, label) ?? {};
+      } catch (err) {
+        // Leave the copy alone and allow a retry on a later poll.
+        legacyAdoptionChecked.delete(checkKey);
+        logSync(`Could not check legacy template "${templateName}" for adoption.`, { level: 'warn', err });
+        continue;
+      }
+
+      const remoteCoords = parseCoordsValue(meta?.['coords']);
+      const localCoords = parseCoordsValue(template.coords ?? store?.coords);
+      if (!remoteCoords || !localCoords || remoteCoords.some((n, i) => n !== localCoords[i])) {
+        continue;
+      }
+
+      const entryMeta = serverEntries.get(templateName);
+      template.isRemote = true;
+      template.remoteName = templateName;
+      template.remoteManual = true;
+      template.remoteStream = normalizedStream;
+      template.remoteCoords = remoteCoords;
+      // Left null on purpose: the update check then sees the template as stale and pulls the
+      // current image on the next sync.
+      template.remoteUpdatedAt = null;
+      template.remoteImageUpdatedAt = null;
+      template.remoteFlagsCheckedAt = null;
+      template.remoteFlagsAppliedAt = null;
+      template.remoteToTop = normalizeFlag(meta?.['to_top'] ?? entryMeta?.['to_top']);
+      template.remoteToTopAt = meta?.['to_top_at'] ?? null;
+      template.remoteHighlighted = normalizeFlag(meta?.['highlighted'] ?? entryMeta?.['highlighted']);
+      template.remoteHighlightedAt = meta?.['highlighted_at'] ?? null;
+      template.remoteOrder = normalizeRemoteOrder(meta?.['order'] ?? entryMeta?.['order']);
+      if (store) {
+        store.remote = true;
+        store.remoteName = template.remoteName;
+        store.remoteManual = true;
+        store.remoteStream = template.remoteStream;
+        store.remoteCoords = template.remoteCoords;
+        store.remoteUpdatedAt = null;
+        store.remoteImageUpdatedAt = null;
+        store.remoteFlagsCheckedAt = null;
+        store.remoteFlagsAppliedAt = null;
+        store.remoteToTop = template.remoteToTop;
+        store.remoteToTopAt = template.remoteToTopAt;
+        store.remoteHighlighted = template.remoteHighlighted;
+        store.remoteHighlightedAt = template.remoteHighlightedAt;
+        store.remoteOrder = template.remoteOrder;
+      }
+      adopted += 1;
+      logSync(`Adopted local template "${templateName}" (${normalizedStream}) for remote updates.`);
+    }
+
+    if (adopted > 0) {
+      await templateManager.storeTemplates();
+      templateManager.requestListRebuild?.();
+    }
+    return adopted;
+  };
   let templateUpdatePollId = null;
   let templateUpdatePollInFlight = false;
   let templateUpdatePendingCount = 0;
@@ -495,11 +658,31 @@ export function createTemplateSync({
           templateItems: (await fetchTemplateListForStream(stream, 'Template list (poll)'))?.templateItems,
         }))
       );
+      const listedKeys = new Set();
+      const entriesToCheck = [];
       for (const { stream, templateItems } of polledListings) {
+        await adoptLegacyLocalTemplates(templateItems, stream);
         await syncRemoteTemplateFlags(templateItems, stream);
         await pruneMissingRemoteTemplates(templateItems, stream);
         for (const entry of templateItems) {
-          const { entryMeta, templateName, remoteStream } = parseTemplateEntry(entry, stream);
+          const parsed = parseTemplateEntry(entry, stream);
+          if (parsed.templateName) {
+            listedKeys.add(`${parsed.remoteStream}:${parsed.templateName}`);
+          }
+          entriesToCheck.push(parsed);
+        }
+      }
+      // Manually added templates may be missing from the listing while still resolving by name;
+      // poll those individually so their updates aren't invisible here.
+      for (const manual of collectUnlistedManualTemplates(listedKeys)) {
+        const entry = await fetchManualTemplateEntry(manual);
+        if (entry) {
+          entriesToCheck.push(parseTemplateEntry(entry, manual.stream));
+        }
+      }
+      {
+        for (const parsed of entriesToCheck) {
+          const { entryMeta, templateName, remoteStream } = parsed;
           const updatedAt = entryMeta?.['updated_at'] ?? null;
           const imageUpdatedAt = entryMeta?.['image_updated_at'] ?? null;
           const isDeleted = entryMeta?.['deleted'] === true;
@@ -881,6 +1064,22 @@ export function createTemplateSync({
     }
   };
 
+  /** Every local template whose name matches, regardless of stream or remote/local origin. */
+  const findLocalTemplatesByName = (trimmedName) => (
+    (templateManager.templatesArray ?? []).filter((template) => {
+      if (!template) return false;
+      const store = template.storageKey
+        ? templateManager.templatesJSON?.templates?.[template.storageKey]
+        : null;
+      return (
+        template.displayName === trimmedName
+        || template.remoteName === trimmedName
+        || store?.name === trimmedName
+        || store?.remoteName === trimmedName
+      );
+    })
+  );
+
   const importTemplateByName = async ({
     templateName,
     onStatus,
@@ -893,6 +1092,7 @@ export function createTemplateSync({
     syncExisting = false,
     remoteManual = false,
     replaceExistingMatches = false,
+    onExisting,
   } = {}) => {
     const statusHandler = typeof onStatus === 'function' ? onStatus : autoSyncOnStatus;
     const trimmedName = String(templateName ?? '').trim();
@@ -906,10 +1106,46 @@ export function createTemplateSync({
     try {
       let payload = null;
       const streams = getConfiguredStreams();
+      // A template with this name may already exist locally — possibly imported from a different
+      // stream. Never create a second copy: update the existing one in place and warn the caller.
+      const existingMatches = findLocalTemplatesByName(trimmedName);
+      const existingRemoteMatch = existingMatches.find((template) => {
+        const store = template?.storageKey
+          ? templateManager.templatesJSON?.templates?.[template.storageKey]
+          : null;
+        return template?.isRemote === true || store?.remote === true;
+      }) ?? null;
+      if (existingMatches.length > 0) {
+        replaceExistingMatches = true;
+        // Always re-sync as a tracked remote template: a tracked copy must stay tracked, and a
+        // detached local copy (added by an older build) has to become tracked so the author's
+        // later edits on the bot reach it through the update poll.
+        syncExisting = true;
+        const warning = existingRemoteMatch
+          ? `Template "${trimmedName}" already exists — updating the existing remote template instead of creating a new one.`
+          : `Template "${trimmedName}" already exists — updating the existing local copy and tracking it for remote updates.`;
+        logSync(warning, { statusHandler });
+        if (typeof onExisting === 'function') {
+          try { onExisting({ warning, templates: existingMatches, isRemote: !!existingRemoteMatch }); } catch (_) {}
+        }
+      }
       if (syncExisting) {
         let syncedTemplate = null;
         let syncedStream = null;
-        for (const stream of streams) {
+        // Try the stream the existing copy came from first so a same-named template in another
+        // stream can't hijack it.
+        const existingStream = existingRemoteMatch
+          ? getRemoteTemplateStream(
+            existingRemoteMatch,
+            existingRemoteMatch.storageKey
+              ? templateManager.templatesJSON?.templates?.[existingRemoteMatch.storageKey]
+              : null
+          )
+          : null;
+        const syncStreams = existingStream
+          ? [existingStream, ...streams.filter((stream) => normalizeRemoteStream(stream) !== existingStream)]
+          : streams;
+        for (const stream of syncStreams) {
           try {
             syncedTemplate = await syncTemplateByName({
               templateName: trimmedName,
@@ -961,20 +1197,7 @@ export function createTemplateSync({
         throw new Error(`Template "${trimmedName}" was not found in configured streams: ${streams.join(', ')}.`);
       }
 
-      const matchingTemplates = replaceExistingMatches
-        ? (templateManager.templatesArray ?? []).filter((template) => {
-          if (!template) return false;
-          const store = template.storageKey
-            ? templateManager.templatesJSON?.templates?.[template.storageKey]
-            : null;
-          return (
-            template.displayName === trimmedName
-            || template.remoteName === trimmedName
-            || store?.name === trimmedName
-            || store?.remoteName === trimmedName
-          );
-        })
-        : [];
+      const matchingTemplates = replaceExistingMatches ? findLocalTemplatesByName(trimmedName) : [];
       const preferredTemplate = matchingTemplates.find((template) => template?.enabled) ?? matchingTemplates[0] ?? null;
       const preferredStore = preferredTemplate?.storageKey
         ? templateManager.templatesJSON?.templates?.[preferredTemplate.storageKey]
@@ -1023,7 +1246,11 @@ export function createTemplateSync({
         safeCall(buildColorFilterListOverride ?? autoSyncBuildColorFilterList);
       }
       if (typeof statusHandler === 'function') {
-        statusHandler(`Imported "${trimmedName}" from stream "${payload.normalizedStream}" as a local template.`);
+        statusHandler(
+          matchingTemplates.length > 0
+            ? `Updated existing template "${trimmedName}" from stream "${payload.normalizedStream}".`
+            : `Imported "${trimmedName}" from stream "${payload.normalizedStream}" as a local template.`
+        );
       }
       return created;
     } catch (err) {
@@ -1063,15 +1290,18 @@ export function createTemplateSync({
           templateItems: (await fetchTemplateListForStream(stream, 'Template list'))?.templateItems,
         }))
       );
+      const listedKeys = new Set();
       for (const { stream, templateItems } of streamListings) {
         if (!Array.isArray(templateItems) || templateItems.length === 0) {
           continue;
         }
         hasServerTemplates = true;
+        await adoptLegacyLocalTemplates(templateItems, stream);
         for (const entry of templateItems) {
           const { entryMeta, templateName, remoteStream } = parseTemplateEntry(entry, stream);
-          if (entryMeta?.['deleted'] === true) { continue; }
           if (!templateName) { continue; }
+          listedKeys.add(`${remoteStream}:${templateName}`);
+          if (entryMeta?.['deleted'] === true) { continue; }
           const created = await syncTemplateByName({
             templateName,
             entryMeta,
@@ -1085,6 +1315,25 @@ export function createTemplateSync({
           if (created) {
             importedCount += 1;
           }
+        }
+      }
+      // Templates added by name may not appear in any listing, so refresh them from their meta.
+      for (const manual of collectUnlistedManualTemplates(listedKeys)) {
+        const entryMeta = await fetchManualTemplateEntry(manual);
+        if (!entryMeta) { continue; }
+        hasServerTemplates = true;
+        const created = await syncTemplateByName({
+          templateName: manual.templateName,
+          entryMeta,
+          remoteStream: manual.stream,
+          onStatus: statusHandler,
+          defaultEnabled: false,
+          remoteManual: true,
+          force: false,
+          refreshUi: false,
+        });
+        if (created) {
+          importedCount += 1;
         }
       }
       if (!hasServerTemplates) {
