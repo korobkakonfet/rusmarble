@@ -20,7 +20,7 @@
 }
 
 html[data-theme="dark"] .bm-map-comment-layer,
-html[data-theme="halloween"] .bm-map-comment-layer {
+html[data-rm-theme="halloween"] .bm-map-comment-layer {
   --bm-comment-bg: #2a3448;
   --bm-comment-color: #eef3ff;
   --bm-comment-text-subtle: rgba(238, 243, 255, 0.78);

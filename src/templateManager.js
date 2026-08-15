@@ -2871,6 +2871,41 @@ export default class TemplateManager {
     await this.storeUserSettings();
   }
 
+  /** A utility to return the user-defined custom theme palette.
+   * @returns {object} The raw stored palette; callers normalize it.
+   * @since 0.87.76
+   */
+  getCustomTheme() {
+    const stored = this.userSettings?.customTheme;
+    return (stored && typeof stored === 'object') ? stored : {};
+  }
+
+  /** Stores the user-defined custom theme palette.
+   * @param {object} value - The palette, keyed by token name.
+   * @since 0.87.76
+   */
+  async setCustomTheme(value) {
+    this.userSettings.customTheme = (value && typeof value === 'object') ? { ...value } : {};
+    await this.storeUserSettings();
+  }
+
+  /** Whether the custom theme also repaints wplace's own UI.
+   * @returns {boolean}
+   * @since 0.87.76
+   */
+  getCustomThemeApplyToSite() {
+    return this.userSettings?.customThemeApplyToSite === true;
+  }
+
+  /** Sets whether the custom theme also repaints wplace's own UI.
+   * @param {boolean} value
+   * @since 0.87.76
+   */
+  async setCustomThemeApplyToSite(value) {
+    this.userSettings.customThemeApplyToSite = !!value;
+    await this.storeUserSettings();
+  }
+
   /** Sets the current layout language to a value.
    * @param {string} value - The value
    */

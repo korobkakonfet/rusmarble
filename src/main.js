@@ -15,6 +15,8 @@ import { createMapCommentManager } from './mapComments.js';
 import { createHqTemplateManager } from './hqTemplate.js';
 import { createTemplateCreationUi } from './templateCreationUi.js';
 import { createArchiveTemplateUi } from './archiveTemplateUi.js';
+import { CUSTOM_LAYOUT_THEME, CUSTOM_THEME_DRAG_BG_VAR, buildCustomThemeCssVars, buildCustomThemeSiteVars, customThemeColorToCss, getDefaultCustomTheme } from './customTheme.js';
+import { createCustomThemeUi } from './customThemeUi.js';
 import { layoutLanguageOptions, normalizeLayoutLanguage, translateLayout, getLayoutThemeLabel as getLocalizedLayoutThemeLabel, getTemplateDisplayLabel as getLocalizedTemplateDisplayLabel, getTemplateCreateModeLabel, getChatBanTypeLabel, getColorSortLabel } from './layoutI18n.js';
 import { encodeChunkSampleBytes } from './templateChunkUtils.js';
 import { consoleLog, consoleWarn, consoleError, isDebugLoggingEnabled, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels, initMobileLayout, isMobileLayout, makePanelDraggable, registerFloatingPanel } from './utils.js';
@@ -91,7 +93,9 @@ const layoutThemeOptions = {
   "black": "Black",
   "mint": "Mint",
   "imperial": "Russian Imperial",
-  "tricolor": "Russian Tricolor"
+  "tricolor": "Russian Tricolor",
+  "halloween": "Halloween",
+  "custom": "Custom..."
 };
 const templateDisplayOptions = {
   "cross": "Cross",
@@ -1332,7 +1336,8 @@ const normalizeTemplateRemoteStream = (value) => {
 };
 const isWplaceDarkTheme = () => {
   const theme = String(document.documentElement?.dataset?.theme ?? '').toLowerCase();
-  return theme === 'dark' || theme === 'halloween';
+  const skin = String(document.documentElement?.dataset?.rmTheme ?? '').toLowerCase();
+  return theme === 'dark' || skin === 'halloween';
 };
 const applyWplaceThemeState = () => {
   const mode = isWplaceDarkTheme() ? 'dark' : 'light';
@@ -1347,11 +1352,11 @@ const applyWplaceThemeState = () => {
 };
 const observeWplaceTheme = () => {
   const observer = new MutationObserver((mutations) => {
-    if (mutations.some(mutation => mutation.type === 'attributes' && mutation.attributeName === 'data-theme')) {
+    if (mutations.some(mutation => mutation.type === 'attributes' && (mutation.attributeName === 'data-theme' || mutation.attributeName === 'data-rm-theme'))) {
       applyWplaceThemeState();
     }
   });
-  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-rm-theme'] });
   applyWplaceThemeState();
 };
 
@@ -1368,6 +1373,101 @@ const waitForBody = () => {
   });
 };
 
+/** Writes (or clears) the inline `--bm-*` properties backing the custom theme.
+ *
+ * The named themes are static CSS blocks; "custom" has no stylesheet of its own,
+ * so its palette is applied as inline custom properties on the same elements.
+ * Inline properties are cleared whenever another theme is active, otherwise they
+ * would keep overriding that theme's block.
+ *
+ * @param {string} theme - The normalized layout theme.
+ * @param {object} [colorsOverride] - A palette to apply instead of the stored one (live preview).
+ * @since 0.87.76
+ */
+/** The elements carrying the inline `--bm-*` palette, plus any live preview target. */
+const getCustomThemeTargets = (extraTarget = null) => [
+  document.getElementById('bm-overlay'),
+  document.getElementById('bm-notification-container'),
+  extraTarget,
+].filter(Boolean);
+
+/** Property-name lists are constant, so compute them once rather than per call. */
+let customThemeVarNamesCache = null;
+const getCustomThemeVarNames = () => {
+  if (!customThemeVarNamesCache) {
+    const defaults = getDefaultCustomTheme();
+    customThemeVarNamesCache = {
+      overlay: buildCustomThemeCssVars(defaults).map(([property]) => property),
+      site: buildCustomThemeSiteVars(defaults).map(([property]) => property),
+    };
+  }
+  return customThemeVarNamesCache;
+};
+
+const applyCustomThemeVars = (theme, colorsOverride = null, options = {}) => {
+  const { extraTarget = null, applyToSite = null } = options;
+  const targets = getCustomThemeTargets(extraTarget);
+  if (!targets.length) return;
+  const names = getCustomThemeVarNames();
+  const root = document.documentElement;
+
+  if (theme !== CUSTOM_LAYOUT_THEME) {
+    for (const target of targets) {
+      for (const property of names.overlay) { target.style.removeProperty(property); }
+    }
+    for (const property of names.site) { root?.style.removeProperty(property); }
+    return;
+  }
+
+  const colors = colorsOverride ?? templateManager?.getCustomTheme?.();
+  for (const target of targets) {
+    for (const [property, propertyValue] of buildCustomThemeCssVars(colors)) {
+      target.style.setProperty(property, propertyValue);
+    }
+  }
+
+  const siteEnabled = applyToSite ?? templateManager?.getCustomThemeApplyToSite?.() ?? false;
+  if (siteEnabled) {
+    for (const [property, propertyValue] of buildCustomThemeSiteVars(colors)) {
+      root?.style.setProperty(property, propertyValue);
+    }
+  } else {
+    for (const property of names.site) { root?.style.removeProperty(property); }
+  }
+};
+
+/** Writes a single token's property, the hot path while dragging a color picker.
+ *
+ * A full `applyCustomThemeVars()` pass rewrites ~45 properties across three
+ * elements and, via the `bm-layout-theme-changed` event, makes every floating
+ * panel re-run a `getComputedStyle` sweep. At one event per pointer move that is
+ * what made the picker crawl, so a single-token edit touches only its own
+ * property.
+ *
+ * @param {object} token - The token descriptor being edited.
+ * @param {string} colorValue - The new `#rrggbbaa` value.
+ * @param {HTMLElement|null} extraTarget - Additional element to update (the editor panel).
+ * @param {boolean} applyToSite - Whether wplace's own tokens are being written.
+ * @since 0.87.76
+ */
+const previewCustomThemeToken = (token, colorValue, extraTarget = null, applyToSite = false) => {
+  if (!token) return;
+  const css = customThemeColorToCss(colorValue);
+  if (token.cssVar) {
+    for (const target of getCustomThemeTargets(extraTarget)) {
+      target.style.setProperty(token.cssVar, css);
+    }
+  } else if (token.key === 'drag-dot') {
+    const value = `radial-gradient(circle at 3px 3px, ${css} 0 1.6px, transparent 1.6px)`;
+    for (const target of getCustomThemeTargets(extraTarget)) {
+      target.style.setProperty(CUSTOM_THEME_DRAG_BG_VAR, value);
+    }
+  }
+  if (token.siteVar && applyToSite) {
+    document.documentElement?.style.setProperty(token.siteVar, css);
+  }
+};
+
 const applyLayoutTheme = (value) => {
   const overlay = document.getElementById('bm-overlay');
   if (!overlay) return;
@@ -1378,7 +1478,18 @@ const applyLayoutTheme = (value) => {
   if (notificationContainer) {
     notificationContainer.dataset.layoutTheme = nextTheme;
   }
+  applyCustomThemeVars(nextTheme);
   document.dispatchEvent(new CustomEvent('bm-layout-theme-changed', { detail: { layoutTheme: nextTheme } }));
+};
+
+/** Applies a whole palette to the live UI without persisting it (editor preview).
+ *
+ * Used for bulk changes (open, import, reset, toggling the site option) - not
+ * for per-pointer-move edits, which go through `previewCustomThemeToken`.
+ */
+const previewCustomTheme = (colors, options = {}) => {
+  applyCustomThemeVars(CUSTOM_LAYOUT_THEME, colors, options);
+  document.dispatchEvent(new CustomEvent('bm-layout-theme-changed', { detail: { layoutTheme: CUSTOM_LAYOUT_THEME } }));
 };
 
 function readInjectedSafeModeBootstrap() {
@@ -4161,6 +4272,20 @@ function unbindTemplateViewportOverlayRefresh() {
   templateViewportOverlayRefreshHandler = null;
 }
 
+const { openCustomThemeEditor } = createCustomThemeUi({
+  t,
+  applyOverlayVarsToFloatingElement,
+  previewCustomTheme,
+  previewCustomThemeToken,
+  getCustomTheme: () => templateManager?.getCustomTheme?.(),
+  getCustomThemeApplyToSite: () => templateManager?.getCustomThemeApplyToSite?.() ?? false,
+  saveCustomTheme: async (colors, applyToSite) => {
+    await templateManager?.setCustomTheme?.(colors);
+    await templateManager?.setCustomThemeApplyToSite?.(applyToSite);
+    applyLayoutTheme(CUSTOM_LAYOUT_THEME);
+  },
+});
+
 const {
   openRemoteTemplateBuilder,
   openTemplatePaletteConversionPreview,
@@ -6927,6 +7052,7 @@ async function buildOverlayMain() {
       applyArchiveBackground: (enabled) => applyArchiveBackground(enabled),
       applySafeMode: () => applySafeModeState(),
       themeList,
+      openCustomThemeEditor,
       outputStatusId: overlayMain.outputStatusId,
       t,
     });

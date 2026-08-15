@@ -269,6 +269,253 @@
   --bm-drag-bg-size: 100% 100%;
 }
 
+#bm-overlay[data-layout-theme="halloween"] {
+  --bm-bg: rgba(24, 12, 32, 0.94);
+  --bm-panel-bg: rgba(24, 12, 32, 0.98);
+  --bm-comment-bg: rgba(24, 12, 32, 0.88);
+  --bm-fg: #ffe9cf;
+  --bm-muted: #c9a4d6;
+  --bm-border: rgba(255, 138, 40, 0.22);
+  --bm-border-strong: rgba(255, 138, 40, 0.38);
+  --bm-subtle-bg: rgba(255, 138, 40, 0.08);
+  --bm-btn-bg: #e2691a;
+  --bm-btn-hover: #f27c26;
+  --bm-btn-active: #b95312;
+  --bm-btn-text: #1b0f24;
+  --bm-accent: #ff8a28;
+  --bm-accent-strong: #ffbd6b;
+  --bm-accent-soft: rgba(255, 138, 40, 0.5);
+  --bm-charge-time: #ff8a28;
+  --bm-highlight-bg: rgba(255, 138, 40, 0.22);
+  --bm-highlight-border: rgba(255, 138, 40, 0.6);
+  --bm-highlight-text: #ffbd6b;
+  --bm-highlight-text-border: rgba(255, 189, 107, 0.75);
+  --bm-icon: #ffbd6b;
+  --bm-chat-reply-bg: rgba(120, 52, 158, 0.35);
+  --bm-chat-reply-border: rgba(255, 138, 40, 0.7);
+  --bm-drag-bg: radial-gradient(circle at 3px 3px, rgba(255, 138, 40, 0.6) 0 1.6px, transparent 1.6px);
+}
+
+/* The "custom" theme has no static palette: applyCustomThemeVars() writes the
+ * user's tokens inline onto #bm-overlay. This block only supplies a sane
+ * starting point for the tokens the editor does not expose.
+ * @since 0.87.76
+ */
+#bm-overlay[data-layout-theme="custom"] {
+  --bm-drag-bg-repeat: repeat;
+  --bm-drag-bg-size: 6px 6px;
+}
+
+/* --- custom theme editor window --- */
+
+.bm-custom-theme-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.bm-custom-theme-scroll {
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+  max-height: 46vh;
+  padding-right: 4px;
+  touch-action: pan-y;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bm-custom-theme-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bm-custom-theme-group-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--bm-accent);
+  border-bottom: 1px solid var(--bm-border);
+  padding-bottom: 2px;
+}
+
+.bm-custom-theme-row {
+  display: grid;
+  grid-template-columns: 1fr auto 64px 92px auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.bm-custom-theme-row-label {
+  font-size: 0.78rem;
+  color: var(--bm-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bm-custom-theme-swatch {
+  width: 30px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--bm-border-strong);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.bm-custom-theme-alpha {
+  width: 64px;
+  accent-color: var(--bm-accent);
+  cursor: pointer;
+}
+
+.bm-custom-theme-hex {
+  width: 92px;
+  box-sizing: border-box;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  padding: 2px 4px;
+  color: var(--bm-fg);
+  background: var(--bm-subtle-bg);
+  border: 1px solid var(--bm-border);
+  border-radius: 4px;
+}
+
+.bm-custom-theme-site-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--bm-fg);
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.bm-custom-theme-site-toggle input {
+  accent-color: var(--bm-accent);
+  cursor: pointer;
+}
+
+/* The wplace-UI rows stay visible but inert while the toggle is off, so the
+ * palette is still reviewable without it repainting the site. */
+.bm-custom-theme-group--off .bm-custom-theme-row {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.bm-custom-theme-example {
+  font-size: 0.62rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border: 1px solid var(--bm-border-strong);
+  border-radius: 4px;
+  color: var(--bm-muted);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.bm-custom-theme-example:hover,
+.bm-custom-theme-example:focus-visible {
+  color: var(--bm-fg);
+  border-color: var(--bm-accent);
+}
+
+/* Isolated stage for the wplace sample widgets. It carries the working
+ * --color-* values inline, so the samples preview the edited palette even
+ * while the site toggle is off. */
+.bm-custom-theme-sample {
+  margin: 4px 0 2px;
+  padding: 6px;
+  border: 1px dashed var(--bm-border-strong);
+  border-radius: 6px;
+  background: var(--bm-subtle-bg);
+}
+
+.bm-custom-theme-sample-caption {
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--bm-muted);
+  margin-bottom: 4px;
+}
+
+.bm-custom-theme-sample-stage {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 0.8rem;
+}
+
+.bm-custom-theme-sample-card {
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 0.78rem;
+}
+
+.bm-custom-theme-sample-chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+}
+
+.bm-custom-theme-share {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-top: 1px solid var(--bm-border);
+  padding-top: 8px;
+}
+
+.bm-custom-theme-code {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.7rem;
+  line-height: 1.35;
+  word-break: break-all;
+  color: var(--bm-fg);
+  background: var(--bm-subtle-bg);
+  border: 1px solid var(--bm-border);
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+
+.bm-custom-theme-share-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.bm-custom-theme-status {
+  min-height: 1.1em;
+}
+
+.bm-custom-theme-status--error {
+  color: var(--bm-danger);
+}
+
+.bm-layout-theme-customize {
+  margin-left: 6px;
+  padding: 1px 8px;
+  font-size: 0.75rem;
+}
+
+@media (max-width: 600px) {
+  .bm-custom-theme-row {
+    grid-template-columns: 1fr auto 52px 84px auto;
+  }
+  .bm-custom-theme-alpha { width: 52px; }
+  .bm-custom-theme-hex { width: 84px; }
+}
+
 #bm-overlay::before,
 #bm-contain-chat.bm-chat-floating::before,
 #bm-chat-bans-window::before,
@@ -319,6 +566,7 @@
 #bm-text-template-window > *,
 #bm-flag-template-window > *,
 #bm-remote-template-window > *,
+#bm-custom-theme-window > *,
 .bm-template-position-joystick > * {
   position: relative;
   z-index: 1;
@@ -329,6 +577,7 @@
 #bm-text-template-window,
 #bm-flag-template-window,
 #bm-remote-template-window,
+#bm-custom-theme-window,
 .bm-template-position-joystick {
   border: 1px solid var(--bm-glass-border);
   box-shadow: var(--bm-glass-shadow), var(--bm-glass-inner-shadow);
@@ -369,8 +618,52 @@
   }
 }
 
+/* wplace only ships daisyUI theme blocks for data-theme "dark" and "custom-winter",
+ * and its theme store actively rewrites any other data-theme value back to
+ * "custom-winter" -- so we cannot express Halloween through data-theme at all.
+ * setTheme() instead pairs data-theme="dark" with our own data-rm-theme="halloween",
+ * and this block repaints the site's --color-* tokens on top of the dark theme.
+ * The html[...] selector outranks daisyUI's [data-theme=dark], so these win.
+ * @since 0.87.76
+ */
+html[data-rm-theme="halloween"] {
+  color-scheme: dark;
+  --color-base-100: #221430;
+  --color-base-200: #1b0f26;
+  --color-base-300: #150b1e;
+  --color-base-content: #ffe9cf;
+  --color-primary: #ff8a28;
+  --color-primary-content: #2a1405;
+  --color-secondary: #a259d9;
+  --color-secondary-content: #1c0a2b;
+  --color-accent: #7ee06a;
+  --color-accent-content: #10300b;
+  --color-neutral: #0e0714;
+  --color-neutral-content: #e6d8ef;
+  --color-info: #6ab6ff;
+  --color-info-content: #052240;
+  --color-success: #57c96a;
+  --color-success-content: #06280e;
+  --color-warning: #fcb700;
+  --color-warning-content: #3d2600;
+  --color-error: #ff5f6d;
+  --color-error-content: #3d0410;
+  --radius-selector: 2rem;
+  --radius-field: 2rem;
+  --radius-box: 2rem;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 2px;
+  --depth: 1;
+  --noise: 0;
+}
+
+html[data-rm-theme="halloween"] .bg-base-content\/10 {
+  background-color: rgba(255, 233, 207, 0.1);
+}
+
 :root[data-theme="dark"] .bm-ruspixel-flag,
-:root[data-theme="halloween"] .bm-ruspixel-flag {
+:root[data-rm-theme="halloween"] .bm-ruspixel-flag {
   background-color: rgba(18, 24, 36, 0.95);
   background-image:
     linear-gradient(180deg, rgba(240, 245, 255, 0.12) 0% 33.33%, rgba(0, 57, 166, 0.28) 33.33% 66.66%, rgba(213, 43, 30, 0.28) 66.66% 100%),
@@ -379,7 +672,7 @@
 }
 
 :root[data-theme="dark"] .bm-ruspixel-flag-text,
-:root[data-theme="halloween"] .bm-ruspixel-flag-text {
+:root[data-rm-theme="halloween"] .bm-ruspixel-flag-text {
   text-shadow: 0 1px 1px rgba(0, 0, 0, 0.65);
 }
 
@@ -879,6 +1172,7 @@ input[type="file"][id*="template"] {
 #bm-text-template-window button,
 #bm-flag-template-window button,
 #bm-remote-template-window button,
+#bm-custom-theme-window button,
 .bm-template-position-joystick button {
   background: var(--bm-btn-bg);
   color: var(--bm-btn-text);
@@ -951,7 +1245,9 @@ input[type="file"][id*="template"] {
 #bm-flag-template-window button:hover,
 #bm-flag-template-window button:focus-visible,
 #bm-remote-template-window button:hover,
+#bm-custom-theme-window button:hover,
 #bm-remote-template-window button:focus-visible,
+#bm-custom-theme-window button:focus-visible,
 .bm-template-position-joystick button:hover,
 .bm-template-position-joystick button:focus-visible {
   background: var(--bm-btn-hover);
@@ -968,7 +1264,9 @@ input[type="file"][id*="template"] {
 #bm-flag-template-window button:active,
 #bm-flag-template-window button:disabled,
 #bm-remote-template-window button:active,
+#bm-custom-theme-window button:active,
 #bm-remote-template-window button:disabled,
+#bm-custom-theme-window button:disabled,
 .bm-template-position-joystick button:active,
 .bm-template-position-joystick button:disabled {
   background: var(--bm-btn-active);
@@ -1547,7 +1845,8 @@ span.bm-templatename:hover, a.bm-templatename:focus {
 
 #bm-text-template-window,
 #bm-flag-template-window,
-#bm-remote-template-window {
+#bm-remote-template-window,
+#bm-custom-theme-window {
   position: fixed;
   z-index: 9103;
   display: flex;
@@ -1588,6 +1887,7 @@ span.bm-templatename:hover, a.bm-templatename:focus {
 #bm-text-template-window .bm-text-template-window-close,
 #bm-flag-template-window .bm-text-template-window-close,
 #bm-remote-template-window .bm-text-template-window-close,
+#bm-custom-theme-window .bm-text-template-window-close,
 .bm-text-template-window-close {
   margin-left: auto;
   display: flex;
@@ -1857,7 +2157,8 @@ span.bm-templatename:hover, a.bm-templatename:focus {
 @media (max-width: 640px) {
   #bm-text-template-window,
   #bm-flag-template-window,
-  #bm-remote-template-window {
+  #bm-remote-template-window,
+  #bm-custom-theme-window {
     right: 8px !important;
     left: 8px !important;
     width: auto !important;
@@ -1938,6 +2239,13 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   --bm-notify-fg: #f4f7ff;
   --bm-notify-muted: #c0c7d6;
   --bm-notify-border: rgba(244, 247, 255, 0.3);
+}
+
+#bm-notification-container[data-layout-theme="halloween"] {
+  --bm-notify-bg: rgba(24, 12, 32, 0.96);
+  --bm-notify-fg: #ffe9cf;
+  --bm-notify-muted: #c9a4d6;
+  --bm-notify-border: rgba(255, 138, 40, 0.38);
 }
 
 #bm-overlay[data-layout-theme="classic"][data-wplace-theme="dark"] {
@@ -2306,7 +2614,8 @@ span.bm-templatename:hover, a.bm-templatename:focus {
 
   #bm-text-template-window,
   #bm-flag-template-window,
-  #bm-remote-template-window {
+  #bm-remote-template-window,
+  #bm-custom-theme-window {
     max-height: 86dvh;
     padding-bottom: env(safe-area-inset-bottom);
   }

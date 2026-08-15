@@ -696,16 +696,24 @@ export function forceRefreshTiles() {
 }
 
 /** The theme list used by wplace.live
- * Format: themeName: [label, darkUI]
+ * Format: themeName: [label, darkUI, skin]
+ *
+ * `darkUI` must be a value wplace itself accepts. Its theme store validates the
+ * stored value with `theme !== "dark" && theme !== "custom-winter" -> "custom-winter"`
+ * and re-writes `data-theme` on <html>, so any other value we set there is thrown
+ * away and the site UI falls back to the light theme.
+ *
+ * `skin` is our own extra flavour, applied as `data-rm-theme` (an attribute wplace
+ * never touches) so overlay.css can restyle on top of a valid wplace theme.
  * @since 0.85.40
  */
 export const themeList = {
-  "liberty": ["Liberty (Default)", ""],
-  "bright": ["Bright", ""],
-  "positron": ["Positron", ""],
+  "liberty": ["Liberty (Default)", "custom-winter"],
+  "bright": ["Bright", "custom-winter"],
+  "positron": ["Positron", "custom-winter"],
   "dark": ["Dark", "dark"],
   "fiord": ["Fiord (Dark)", "dark"],
-  "halloween": ["Fiord (Halloween)", "halloween"],
+  "halloween": ["Fiord (Halloween)", "dark", "halloween"],
 };
 
 /** Override the map theme
@@ -714,7 +722,13 @@ export const themeList = {
 export function setTheme(themeName) {
   if (!themeList[themeName]) return;
   const dataTheme = themeList[themeName][1];
+  const skin = themeList[themeName][2];
   document.documentElement.dataset["theme"] = dataTheme;
+  if (skin) {
+    document.documentElement.dataset["rmTheme"] = skin;
+  } else {
+    delete document.documentElement.dataset["rmTheme"];
+  }
   return controlMapTiler((map, themeName, bmCanvas) => {
     document.head["__bmCanvas"] = bmCanvas; // sync bmCanvas to document
     // The default pixel-hover styledata callback only triggers once that we cannot reset

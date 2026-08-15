@@ -1,3 +1,5 @@
+import { CUSTOM_LAYOUT_THEME } from './customTheme.js';
+
 /**
  * Builds the User Settings section of the overlay.
  * @param {object} deps - Dependency bag used inside the settings UI.
@@ -24,6 +26,7 @@
  * @param {(enabled: boolean) => void} deps.applyArchiveBackground - Enables/disables archive background raster layer.
  * @param {() => void} deps.applySafeMode - Applies the persisted safe mode state to runtime hooks.
  * @param {object} deps.themeList - Available theme list.
+ * @param {() => void} deps.openCustomThemeEditor - Opens the custom theme editor window.
  * @param {string} deps.outputStatusId - Element id for the status output.
  * @returns {import('./Overlay.js').default} Overlay builder instance for chaining.
  */
@@ -51,9 +54,16 @@ export function buildUserSettingsSection({
   applyArchiveBackground,
   applySafeMode,
   themeList,
+  openCustomThemeEditor,
   outputStatusId,
   t,
 }) {
+  /** The "Customize..." button is only meaningful while the custom theme is active. */
+  const syncCustomThemeButton = (theme) => {
+    const button = document.getElementById('bm-layout-theme-customize');
+    if (button) { button.style.display = theme === CUSTOM_LAYOUT_THEME ? '' : 'none'; }
+  };
+
   const callBuildColorFilterList = () => buildColorFilterList?.();
   const callBuildTemplateFilterList = () => buildTemplateFilterList?.();
   const callBuildEventList = () => buildEventList?.();
@@ -144,8 +154,18 @@ export function buildUserSettingsSection({
               const nextTheme = normalizeLayoutTheme(select.value);
               await templateManager.setLayoutTheme(nextTheme);
               applyLayoutTheme(nextTheme);
+              syncCustomThemeButton(nextTheme);
               instance.handleDisplayStatus(`Layout theme set to "${getLayoutThemeLabel(nextTheme)}".`);
+              // Picking "Custom..." is itself the request to customize, so open the editor.
+              if (nextTheme === CUSTOM_LAYOUT_THEME) { openCustomThemeEditor?.(); }
             });
+          }).buildElement()
+          .addButton({'id': 'bm-layout-theme-customize', 'className': 'bm-layout-theme-customize', 'textContent': t('settings.layoutTheme.customize')}, (instance, button) => {
+            button.title = t('settings.layoutTheme.customizeTitle');
+            if (normalizeLayoutTheme(templateManager.getLayoutTheme()) !== CUSTOM_LAYOUT_THEME) {
+              button.style.display = 'none';
+            }
+            button.addEventListener('click', () => { openCustomThemeEditor?.(); });
           }).buildElement()
         .buildElement()
         .addCheckbox({'id': 'bm-theme-override-enabled', 'textContent': t('settings.themeOverride.label'), 'checked': templateManager.isThemeOverridden()}, (instance, label, checkbox) => {
