@@ -56,6 +56,14 @@ class TemplateWorkerManager {
     return this.supported;
   }
 
+  /** How many jobs can actually run at once. Callers that split work into independent batches
+   * use this to size their dispatch window: queueing more than this just buffers in `queue`,
+   * while queueing fewer leaves workers idle.
+   */
+  getPoolSize() {
+    return DEFAULT_TEMPLATE_WORKER_POOL_SIZE;
+  }
+
   cancelGeneration(generation) {
     if (!generation) return;
     this.cancelledGenerations.add(generation);

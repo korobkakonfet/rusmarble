@@ -19,7 +19,6 @@ import { CUSTOM_LAYOUT_THEME } from './customTheme.js';
  * @param {() => void} deps.forceUpdateTheme - Forces template theme update.
  * @param {() => void} deps.buildColorFilterList - Rebuilds the color filter list.
  * @param {() => void} deps.buildTemplateFilterList - Rebuilds the template filter list.
- * @param {() => void} deps.buildEventList - Rebuilds the event list.
  * @param {(value?: boolean) => void} deps.forceRefreshTiles - Forces map tile refresh.
  * @param {(layer: string) => void} deps.removeLayer - Removes map layer by id.
  * @param {(enabled: boolean) => void} deps.setMapCommentsEnabled - Enables/disables map comments on the map layer.
@@ -47,7 +46,6 @@ export function buildUserSettingsSection({
   forceUpdateTheme,
   buildColorFilterList,
   buildTemplateFilterList,
-  buildEventList,
   forceRefreshTiles,
   removeLayer,
   setMapCommentsEnabled,
@@ -66,7 +64,6 @@ export function buildUserSettingsSection({
 
   const callBuildColorFilterList = () => buildColorFilterList?.();
   const callBuildTemplateFilterList = () => buildTemplateFilterList?.();
-  const callBuildEventList = () => buildEventList?.();
 
   return overlay
     .addDetails({'id': 'bm-checkbox-container', 'textContent': t('settings.section'), 'style': 'max-width: 100%; white-space: nowrap; border: 1px solid var(--bm-border); padding: 4px; border-radius: 4px; margin-top: 4px;'})
@@ -360,26 +357,6 @@ export function buildUserSettingsSection({
             callBuildTemplateFilterList();
           });
         }).buildElement()
-        .addCheckbox({'id': 'bm-enable-line-template', 'textContent':  t('settings.shapeTemplates'), 'checked': templateManager.isLineTemplateButtonShown()}, (instance, label, checkbox) => {
-          checkbox.addEventListener('change', () => {
-            templateManager.setLineTemplateButtonEnabled(checkbox.checked);
-            if (checkbox.checked) {
-              apiManager.updateAddLineTemplateButton();
-              apiManager.updateAddCircleTemplateButton();
-              instance.handleDisplayStatus("The Line and Circle Template Buttons are now Shown in Pixel Info.");
-            } else {
-              const btnLineTemplate = document.getElementById('bm-create-line-template');
-              if (btnLineTemplate) {
-                btnLineTemplate.remove();
-              }
-              const btnCircleTemplate = document.getElementById('bm-create-circle-template');
-              if (btnCircleTemplate) {
-                btnCircleTemplate.remove();
-              }
-              instance.handleDisplayStatus("The Line and Circle Template Buttons are now Hidden from Pixel Info.");
-            };
-          });
-        }).buildElement()
         .addCheckbox({'id': 'bm-ruspixel-flag-enabled', 'textContent': t('settings.ruspixelFlag'), 'checked': templateManager.isRuspixelFlagEnabled()}, (instance, label, checkbox) => {
           checkbox.addEventListener('change', () => {
             templateManager.setRuspixelFlagEnabled(checkbox.checked);
@@ -496,58 +473,6 @@ export function buildUserSettingsSection({
             });
           }).buildElement()
         .buildElement()
-        .addCheckbox({'id': 'bm-event-enabled', 'textContent': t('settings.enableEvent'), 'checked': templateManager.isEventEnabled()}, (instance, label, checkbox) => {
-          checkbox.addEventListener('change', () => {
-            templateManager.setEventEnabled(checkbox.checked);
-            if (checkbox.checked) {
-              instance.handleDisplayStatus("Event Mode Enabled.");
-              document.getElementById('bm-contain-eventitem').style.display = '';
-              document.getElementById('bm-event-hide-claimed').parentElement.style.display = '';
-              document.getElementById('bm-event-hide-unavailable').parentElement.style.display = '';
-              apiManager.refreshEventData();
-              callBuildEventList();
-            } else {
-              instance.handleDisplayStatus("Event Mode Disabled.");
-              document.getElementById('bm-contain-eventitem').style.display = 'none';
-              document.getElementById('bm-event-hide-claimed').parentElement.style.display = 'none';
-              document.getElementById('bm-event-hide-unavailable').parentElement.style.display = 'none';
-            }
-          });
-        }).buildElement()
-        .addCheckbox({'id': 'bm-event-hide-claimed', 'textContent': t('settings.hideClaimedEventItems'), 'checked': !templateManager.isEventClaimedShown()}, (instance, label, checkbox) => {
-          label.style.paddingLeft = '1em';
-          if (templateManager.isEventEnabled()) {
-            label.style.display = '';
-          } else {
-            label.style.display = 'none';
-          }
-          checkbox.addEventListener('change', () => {
-            templateManager.setEventClaimedShown(!checkbox.checked);
-            if (checkbox.checked) {
-              instance.handleDisplayStatus("Hidden All Event Claimed Items.");
-            } else {
-              instance.handleDisplayStatus("Restored All Event Claimed Items.");
-            }
-            callBuildEventList();
-          });
-        }).buildElement()
-        .addCheckbox({'id': 'bm-event-hide-unavailable', 'textContent': t('settings.hideUnavailableEventItems'), 'checked': !templateManager.isEventUnavailableShown()}, (instance, label, checkbox) => {
-          label.style.paddingLeft = '1em';
-          if (templateManager.isEventEnabled()) {
-            label.style.display = '';
-          } else {
-            label.style.display = 'none';
-          }
-          checkbox.addEventListener('change', () => {
-            templateManager.setEventUnavailableShown(!checkbox.checked);
-            if (checkbox.checked) {
-              instance.handleDisplayStatus("Hidden All Unavailable Event Items.");
-            } else {
-              instance.handleDisplayStatus("Restored All Unavailable Event Items.");
-            }
-            callBuildEventList();
-          });
-        }).buildElement()
         .addCheckbox({'id': 'bm-background-mode-enabled', 'textContent': t('settings.backgroundMode'), 'checked': templateManager.isBackgroundModeEnabled?.() ?? false}, (instance, label, checkbox) => {
           checkbox.addEventListener('change', async () => {
             await templateManager.setBackgroundModeEnabled?.(checkbox.checked);

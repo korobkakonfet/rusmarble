@@ -1394,6 +1394,111 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   color: var(--bm-muted);
 }
 
+/* D-pad block inside the flex-column panel: its own 3-column grid. */
+.bm-template-position-dpad {
+  display: grid;
+  grid-template-columns: repeat(3, 30px);
+  grid-template-rows: auto 30px 30px 30px;
+  gap: 4px;
+  justify-content: center;
+}
+
+.bm-template-position-dpad-hint {
+  grid-column: 1 / 4;
+  text-align: center;
+  font-size: 9px;
+  color: var(--bm-muted);
+}
+
+.bm-template-position-dpad .bm-template-position-joystick-btn {
+  border: 1px solid var(--bm-glass-border);
+  border-radius: 6px;
+  background: var(--bm-subtle-bg);
+  color: var(--bm-fg);
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  font-family: "Segoe UI Symbol", "Noto Sans Symbols 2", sans-serif;
+}
+
+.bm-template-position-dpad .bm-template-position-joystick-btn:hover {
+  background: var(--bm-btn-hover);
+  color: var(--bm-btn-text);
+}
+
+.bm-template-position-dpad .bm-template-position-joystick-btn:active {
+  background: var(--bm-btn-active);
+}
+
+.bm-template-position-joystick-center {
+  grid-column: 2;
+  grid-row: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--bm-muted);
+}
+
+.bm-template-position-joystick-up {
+  grid-column: 2;
+  grid-row: 2;
+  transform: rotate(0deg);
+}
+
+.bm-template-position-joystick-left {
+  grid-column: 1;
+  grid-row: 3;
+  transform: rotate(-90deg);
+}
+
+.bm-template-position-joystick-right {
+  grid-column: 3;
+  grid-row: 3;
+  transform: rotate(90deg);
+}
+
+.bm-template-position-joystick-down {
+  grid-column: 2;
+  grid-row: 4;
+  transform: rotate(180deg);
+}
+
+.bm-template-position-coords {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 3px;
+}
+
+.bm-template-position-coord {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--bm-border-strong);
+  border-radius: 6px;
+  background: var(--bm-subtle-bg);
+  color: var(--bm-fg);
+  font-size: 10px;
+  line-height: 1.2;
+  padding: 3px 4px;
+  text-align: center;
+  /* The spinners eat most of the width at this size and are useless for coordinates. */
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.bm-template-position-coord::-webkit-outer-spin-button,
+.bm-template-position-coord::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.bm-template-position-coord:focus-visible {
+  outline: 1px solid var(--bm-accent-strong, #4a90d9);
+  outline-offset: 0;
+}
+
 .bm-template-position-actions {
   display: flex;
   gap: 4px;
@@ -1411,18 +1516,31 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   cursor: pointer;
 }
 
+/* Viewport-sized clip box for the position preview. The template image inside is scaled to the
+   current zoom, which can be enormous, so this is what bounds the composited layer. */
 .bm-template-position-ghost {
   position: fixed;
   top: 0;
   left: 0;
   z-index: 9105;
   pointer-events: none;
-  image-rendering: pixelated;
-  image-rendering: crisp-edges;
+  overflow: hidden;
+  box-sizing: border-box;
   transform-origin: top left;
   will-change: transform, width, height;
-  outline: 1px solid var(--bm-accent-strong, #4a90d9);
-  outline-offset: 0;
+  border: 0 solid var(--bm-accent-strong, #4a90d9);
+}
+
+.bm-template-position-ghost-image {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  /* crisp-edges first so pixelated wins where both are supported. */
+  image-rendering: crisp-edges;
+  image-rendering: pixelated;
+  transform-origin: top left;
+  will-change: transform;
 }
 
 .bm-template-drop-overlay {
