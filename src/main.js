@@ -4536,10 +4536,6 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
       'sortBy': 'total-desc',
       'transparentEraseColor': '#ff0000',
       'memorySavingMode': false,
-      'eventEnabled': false,
-      'eventProvider': '',
-      'eventClaimedShown': true,
-      'eventUnavailableShown': true,
       'onlyCurrentColorShown': false,
       'themeOverridden': false,
       'currentTheme': '',
@@ -4556,7 +4552,6 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
       'showIntegerZoom': false,
       'enableKeybinds': false,
       'enableNextTemplatePixelShortcut': true,
-      'lineTemplateButton': false, // Hidden in settings
       'ruspixelFlagEnabled': true,
       'autoSyncTemplates': false,
       'templateSyncStreams': ['root'],
@@ -4922,6 +4917,21 @@ function normalizeTilePixelCoords(rawCoords) {
   const px = ((Math.trunc(pxRaw) % 1000) + 1000) % 1000;
   const py = ((Math.trunc(pyRaw) % 1000) + 1000) % 1000;
   return [tx, ty, px, py];
+}
+
+/** Parse four tile/pixel coordinates out of a pasted string.
+ * Accepts comma-separated, space-separated, and the site's own display format.
+ * @param {string} text
+ * @returns {number[] | null} [tileX, tileY, pixelX, pixelY]
+ * @since 0.90.2
+ */
+function parseTilePixelCoordsText(text) {
+  const match = [
+    /^\s*([012]?\d{1,3}),\s*([012]?\d{1,3}),\s*(\d{1,3}),\s*(\d{1,3})\s*$/, // comma-separated
+    /^\s*([012]?\d{1,3})\s+([012]?\d{1,3})\s+(\d{1,3})\s+(\d{1,3})\s*$/, // space-separated
+    /^\s*\(?Tl X: ([012]?\d{1,3}), Tl Y: ([012]?\d{1,3}), Px X: (\d{1,3}), Px Y: (\d{1,3})\)?\s*$/, // display format
+  ].map((pattern) => pattern.exec(String(text ?? ''))).filter(Boolean).pop();
+  return match ? match.slice(1).map(Number) : null;
 }
 
 function parseTemplateChunkKey(tileKey) {
@@ -6449,6 +6459,19 @@ const syncTemplatePositionJoystickLanguage = () => {
   if (!panel) return;
   const hint = panel.querySelector('.bm-template-position-joystick-hint');
   if (hint) hint.textContent = t('position.panel.hint');
+  const dpadHint = panel.querySelector('[data-role="position-dpad-hint"]');
+  if (dpadHint) dpadHint.textContent = t('joystick.hint');
+  [['up', 'moveUp'], ['left', 'moveLeft'], ['right', 'moveRight'], ['down', 'moveDown']].forEach(([direction, key]) => {
+    const button = panel.querySelector(`[data-role="position-dpad-${direction}"]`);
+    if (button) button.title = t(`joystick.${key}`);
+  });
+  ['tx', 'ty', 'px', 'py'].forEach((role) => {
+    const input = panel.querySelector(`[data-role="position-coord-${role}"]`);
+    if (!input) return;
+    const label = t(`coords.placeholder.${role}`);
+    input.placeholder = label;
+    input.title = label;
+  });
   const applyBtn = panel.querySelector('[data-role="position-apply-btn"]');
   if (applyBtn) {
     applyBtn.textContent = t('position.panel.apply');
@@ -6531,7 +6554,6 @@ const applyLayoutLanguage = (value = null) => {
     normalizeTemplateDisplay(templateManager.getTemplateDisplayMode())
   );
   setCheckboxLabelText('bm-template-list-remaining', t('settings.showRemainingCount'));
-  setCheckboxLabelText('bm-enable-line-template', t('settings.shapeTemplates'));
   setCheckboxLabelText('bm-ruspixel-flag-enabled', t('settings.ruspixelFlag'));
   setCheckboxLabelText('bm-auto-sync-templates', t('settings.autoUpdateTemplates'));
   setCheckboxLabelText('bm-only-current-color-enabled', t('settings.showCurrentColorOnly'));
@@ -6543,9 +6565,6 @@ const applyLayoutLanguage = (value = null) => {
   if (transparentEraseLabel) transparentEraseLabel.textContent = t('settings.transparentEraseColor.label');
   const transparentEraseInput = document.getElementById('bm-transparent-erase-color');
   if (transparentEraseInput) transparentEraseInput.title = t('settings.transparentEraseColor.title');
-  setCheckboxLabelText('bm-event-enabled', t('settings.enableEvent'));
-  setCheckboxLabelText('bm-event-hide-claimed', t('settings.hideClaimedEventItems'));
-  setCheckboxLabelText('bm-event-hide-unavailable', t('settings.hideUnavailableEventItems'));
   setCheckboxLabelText('bm-background-mode-enabled', t('settings.backgroundMode'));
   setCheckboxLabelText('bm-memory-saving-enabled', t('settings.memorySaving'));
   setCheckboxLabelText('bm-debug-logs-enabled', t('settings.debugLogs'));
@@ -6586,12 +6605,6 @@ const applyLayoutLanguage = (value = null) => {
 
   setSummaryText('bm-contain-chat', t('section.chat'));
   syncChatStaticLanguage();
-
-  setSummaryText('bm-contain-eventitem', t('section.event'));
-  const setProviderButton = document.getElementById('bm-button-set-eventprovider');
-  if (setProviderButton) setProviderButton.textContent = t('event.setProvider');
-  const refreshEventButton = document.getElementById('bm-button-refresh-event');
-  if (refreshEventButton) refreshEventButton.textContent = t('event.refresh');
 
   const usernameRow = document.getElementById('bm-user-name-row');
   if (usernameRow) setFirstTextNode(usernameRow, t('user.username'));
@@ -6640,7 +6653,6 @@ const applyLayoutLanguage = (value = null) => {
   syncDistanceToolUi();
   try { window.buildColorFilterList?.(); } catch (_) {}
   try { window.buildTemplateFilterList?.(); } catch (_) {}
-  try { window.buildEventList?.(); } catch (_) {}
 };
 window.getBlueMarbleNextPixelPlural = (count) => getNextPixelPluralSuffix(count);
 
@@ -6698,7 +6710,6 @@ async function buildOverlayMain() {
             const createButton = document.querySelector('#bm-button-create');
             const enableButton = document.querySelector('#bm-button-enable');
             const disableButton = document.querySelector('#bm-button-disable');
-            const eventContainer = document.querySelector('#bm-contain-eventitem');
             const coordInputs = document.querySelectorAll('#bm-contain-coords input');
             const statusTextbox = document.getElementById(instance.outputStatusId); // Status log textarea for user feedback
             
@@ -6759,11 +6770,6 @@ async function buildOverlayMain() {
                 disableButton.style.display = 'none';
               }
 
-              // Hide bm-contain-eventitem
-              if (templateManager.isEventEnabled()) {
-                eventContainer.style.display = 'none';
-              }
-              
               // Hide status textarea
               if (!templateManager.isStatusHidden()) {
                 statusTextbox.style.display = 'none';
@@ -6835,13 +6841,6 @@ async function buildOverlayMain() {
                 disableButton.style.marginTop = '';
               }
 
-              // Restore bm-contain-eventitem
-              if (templateManager.isEventEnabled()) {
-                eventContainer.style.display = '';
-              } else {
-                eventContainer.style.display = 'none'; // eventManager itself matches #bm-contain-automation > *:not(#bm-contain-coords)
-              }
-              
               // Restore status textarea
               if (!templateManager.isStatusHidden()) {
                 statusTextbox.style.display = '';
@@ -6972,30 +6971,21 @@ async function buildOverlayMain() {
           input.addEventListener("paste", (event) => {
             const clipboardText = (event.clipboardData || window.clipboardData).getData("text");
 
-            const matchResult = [
-              /^\s*([012]?\d{1,3}),\s*([012]?\d{1,3}),\s*(\d{1,3}),\s*(\d{1,3})\s*$/, // comma-separated
-              /^\s*([012]?\d{1,3})\s+([012]?\d{1,3})\s+(\d{1,3})\s+(\d{1,3})\s*$/, // space-separated
-              /^\s*\(?Tl X: ([012]?\d{1,3}), Tl Y: ([012]?\d{1,3}), Px X: (\d{1,3}), Px Y: (\d{1,3})\)?\s*$/, // display format
-            ].map(r => r.exec(clipboardText)).filter(r => r).pop(); //find the regex that matches the clipboard text
+            const splitText = parseTilePixelCoordsText(clipboardText);
 
-            if (matchResult === undefined) { // If we don't have 4 clean coordinates, end the function.
+            if (!splitText) { // If we don't have 4 clean coordinates, end the function.
               return;
             }
-            // let splitText = clipboardText.split(" ").filter(n => n).map(Number).filter(n => !isNaN(n)); //split and filter all Non Numbers
 
-            // if (splitText.length !== 4 ) { // If we don't have 4 clean coordinates, end the function.
-            //   return;
-            // }
+            let coords = selectAllCoordinateInputs(document);
 
-            let splitText = matchResult.slice(1).map(Number);
-
-            let coords = selectAllCoordinateInputs(document); 
-
-            for (let i = 0; i < coords.length; i++) { 
+            for (let i = 0; i < coords.length; i++) {
               coords[i].value = splitText[i]; //add the split vales
             }
 
             persistCoords();
+            // A paste while positioning should move the preview straight to those coordinates.
+            syncTemplatePositionPreviewFromOverlayInputs();
 
             event.preventDefault(); //prevent the pasting of the original paste that would overide the split value
           })
@@ -7045,7 +7035,6 @@ async function buildOverlayMain() {
       forceUpdateTheme: () => forceUpdateTheme(),
       buildColorFilterList: () => buildColorFilterList(),
       buildTemplateFilterList: () => buildTemplateFilterList(),
-      buildEventList: () => buildEventList(),
       forceRefreshTiles,
       removeLayer,
       setMapCommentsEnabled: (enabled) => setMapCommentsEnabled(enabled),
@@ -7486,35 +7475,6 @@ async function buildOverlayMain() {
             .addInput({'type': 'password', 'id': 'bm-chat-modcode', 'placeholder': 'Code', 'maxLength': 64, 'style': 'width: 100%;'}).buildElement()
           .buildElement()
         .buildElement()
-      // Event UI
-      .addDetails({'id': 'bm-contain-eventitem', 'textContent': t('section.event'), 'style': 'border: 1px solid var(--bm-border); padding: 4px; border-radius: 4px; display: none; margin-top: 4px;'}, (instance, summary, details) => {
-        if (templateManager.isEventEnabled()) {
-          details.style.display = '';
-        }
-        details.open = true;
-      })
-        .addButton({'id': 'bm-button-set-eventprovider', 'textContent': t('event.setProvider'), 'style': 'margin: 0 1ch;'}, (instance, button) => {
-          button.onclick = () => {
-            const currentProvider = templateManager.getEventProvider();
-            const providerURL = prompt('Enter the event data provider JSON URL:', currentProvider === "" ? "https://wplace.samuelscheit.com/tiles/pumpkin.json" : currentProvider);
-            if (!providerURL) { return; }
-            const isUrl = (content => {
-              try { return Boolean(new URL(content)); }
-              catch(e){ return false; }
-            })(providerURL);
-            if (!isUrl) {
-              alert("The URL you entered is not valid!");
-              return;
-            }
-            templateManager.setEventProvider(providerURL);
-            buildEventList();
-          };
-        }).buildElement()
-        .addButton({'id': 'bm-button-refresh-event', 'textContent': t('event.refresh'), 'style': 'margin: 0 1ch;'}, (instance, button) => {
-          button.onclick = () => buildEventList();
-        }).buildElement()
-        .addDiv({'id': 'bm-eventitem-list', 'style': 'max-height: 125px; overflow: auto; touch-action: pan-x pan-y; display: flex; flex-direction: column; gap: 4px;'}).buildElement()
-      .buildElement()
       // Status
       .addTextarea({'id': overlayMain.outputStatusId, 'placeholder': t('status.placeholder', { version }), 'readOnly': true}, (instance, textarea) => {
         if (templateManager.isStatusHidden()) {
@@ -7769,6 +7729,24 @@ async function buildOverlayMain() {
     const templateStore = templateManager.templatesJSON?.templates?.[template.storageKey] ?? {};
     return normalizeTemplateRemoteStream(template.remoteStream ?? templateStore.remoteStream);
   }
+  /** The four coordinate inputs inside the positioning panel, in [tx, ty, px, py] order.
+   * @returns {HTMLInputElement[]} empty when the panel has not been built yet
+   * @since 0.90.2
+   */
+  const getTemplatePositionPanelCoordInputs = () => {
+    const panel = templatePositionJoystickWindow;
+    if (!panel) return [];
+    return ['tx', 'ty', 'px', 'py']
+      .map((role) => panel.querySelector(`[data-role="position-coord-${role}"]`))
+      .filter((input) => input instanceof HTMLInputElement);
+  };
+  const setTemplatePositionPanelCoordInputs = (coords) => {
+    const normalized = normalizeTilePixelCoords(coords);
+    const inputs = getTemplatePositionPanelCoordInputs();
+    if (!normalized || inputs.length !== 4) return false;
+    inputs.forEach((input, index) => { input.value = String(normalized[index]); });
+    return true;
+  };
   const positionTemplateJoystickWindow = () => {
     const panel = templatePositionJoystickWindow;
     if (!panel) return;
@@ -7801,6 +7779,94 @@ async function buildOverlayMain() {
     hint.className = 'bm-template-position-joystick-hint';
     hint.textContent = t('position.panel.hint');
     panel.appendChild(hint);
+
+    // D-pad for pixel-exact nudges. It only shifts the preview coordinates, so - like dragging
+    // and the inputs below - nothing is committed to the template until Apply.
+    const dpad = document.createElement('div');
+    dpad.className = 'bm-template-position-dpad';
+
+    const dpadHint = document.createElement('div');
+    dpadHint.className = 'bm-template-position-dpad-hint';
+    dpadHint.dataset.role = 'position-dpad-hint';
+    dpadHint.textContent = t('joystick.hint');
+    dpad.appendChild(dpadHint);
+
+    const center = document.createElement('div');
+    center.className = 'bm-template-position-joystick-center';
+    center.textContent = '•';
+    dpad.appendChild(center);
+
+    const nudgePreview = (event, dx, dy) => {
+      event.preventDefault();
+      if (!templatePositionPreviewCoords) return;
+      const step = event.ctrlKey ? 10 : 1;
+      const next = shiftTilePixelCoordsByPixels(templatePositionPreviewCoords, dx * step, dy * step);
+      if (!next) {
+        overlayMain.handleDisplayError('Failed to update position from joystick.');
+        return;
+      }
+      setTemplatePositionPreviewCoords(next);
+    };
+    // Class names must stay literal strings - the CSS mangler cannot rewrite ones built at runtime.
+    [
+      ['up', 'bm-template-position-joystick-btn bm-template-position-joystick-up', '▲', 'joystick.moveUp', 0, -1],
+      ['left', 'bm-template-position-joystick-btn bm-template-position-joystick-left', '▲', 'joystick.moveLeft', -1, 0],
+      ['right', 'bm-template-position-joystick-btn bm-template-position-joystick-right', '▲', 'joystick.moveRight', 1, 0],
+      ['down', 'bm-template-position-joystick-btn bm-template-position-joystick-down', '▲', 'joystick.moveDown', 0, 1],
+    ].forEach(([direction, className, glyph, titleKey, dx, dy]) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = className;
+      button.dataset.role = `position-dpad-${direction}`;
+      button.textContent = glyph;
+      button.title = t(titleKey);
+      button.addEventListener('click', (event) => nudgePreview(event, dx, dy));
+      dpad.appendChild(button);
+    });
+    panel.appendChild(dpad);
+
+    // Same four numbers as the main overlay, editable without leaving the positioning panel.
+    const coordRow = document.createElement('div');
+    coordRow.className = 'bm-template-position-coords';
+    const applyPanelCoordInputs = () => {
+      const inputs = getTemplatePositionPanelCoordInputs();
+      if (inputs.length !== 4) return;
+      const coords = normalizeTilePixelCoords(inputs.map((input) => input.value));
+      if (!coords) return;
+      // Keep the panel's own fields untouched so a half-typed value is not rewritten mid-edit.
+      setTemplatePositionPreviewCoords(coords, { syncPanelInputs: false });
+    };
+    [
+      ['tx', t('coords.placeholder.tx'), 2047],
+      ['ty', t('coords.placeholder.ty'), 2047],
+      ['px', t('coords.placeholder.px'), 999],
+      ['py', t('coords.placeholder.py'), 999],
+    ].forEach(([role, placeholder, max]) => {
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.min = '0';
+      input.max = String(max);
+      input.step = '1';
+      input.placeholder = placeholder;
+      input.title = placeholder;
+      input.dataset.role = `position-coord-${role}`;
+      input.className = 'bm-template-position-coord';
+      input.addEventListener('input', applyPanelCoordInputs);
+      input.addEventListener('change', applyPanelCoordInputs);
+      // Pasting all four at once into any of the fields fills the row and moves the template.
+      input.addEventListener('paste', (event) => {
+        const clipboardText = (event.clipboardData || window.clipboardData)?.getData('text');
+        const parsed = parseTilePixelCoordsText(clipboardText);
+        if (!parsed) return;
+        event.preventDefault();
+        const coords = normalizeTilePixelCoords(parsed);
+        if (!coords) return;
+        setTemplatePositionPanelCoordInputs(coords);
+        setTemplatePositionPreviewCoords(coords, { syncPanelInputs: false });
+      });
+      coordRow.appendChild(input);
+    });
+    panel.appendChild(coordRow);
 
     const actionRow = document.createElement('div');
     actionRow.className = 'bm-template-position-actions';
@@ -7931,7 +7997,13 @@ async function buildOverlayMain() {
   // re-render happens until the user applies the position.
   const TEMPLATE_MAP_DRAG_MIN_HIT_PX = 14;
   let templatePositionPreviewCoords = null;
+  /** Slack around the viewport kept in the position preview's clip box, so the outline around
+   * the template stays visible when an edge sits just off screen.
+   * @since 0.90.2
+   */
+  const TEMPLATE_GHOST_CLIP_MARGIN_PX = 64;
   let templatePositionGhostElement = null;
+  let templatePositionGhostImage = null;
   let templatePositionGhostUrl = null;
   let templatePositionGhostSize = null;
   let templatePositionGhostFrame = null;
@@ -8008,16 +8080,58 @@ async function buildOverlayMain() {
    */
   const syncTemplatePositionGhost = () => {
     const ghost = templatePositionGhostElement;
+    const image = templatePositionGhostImage;
     if (!ghost) return;
     const rect = getTemplatePreviewScreenRect();
     if (!rect) {
       ghost.style.display = 'none';
       return;
     }
+    // Zooming in scales the preview exponentially (~2^zoom / 4000 screen px per wplace pixel),
+    // so at high zoom the full extent runs into the compositor's max texture size and the
+    // browser starts smearing one stretched texture over the whole layer. Only ever lay out
+    // the part that is actually on screen: the clip box stays viewport-sized while the image
+    // inside it keeps its true size and is offset negatively, so nothing shifts visually.
+    const viewWidth = window.innerWidth;
+    const viewHeight = window.innerHeight;
+    // A margin keeps the outline visible when an edge sits just past the viewport.
+    const margin = TEMPLATE_GHOST_CLIP_MARGIN_PX;
+    const clipLeft = Math.max(rect.left, -margin);
+    const clipTop = Math.max(rect.top, -margin);
+    const clipRight = Math.min(rect.left + rect.width, viewWidth + margin);
+    const clipBottom = Math.min(rect.top + rect.height, viewHeight + margin);
+    const clipWidth = clipRight - clipLeft;
+    const clipHeight = clipBottom - clipTop;
+    if (clipWidth <= 0 || clipHeight <= 0) {
+      ghost.style.display = 'none';
+      return;
+    }
     ghost.style.display = '';
-    ghost.style.transform = `translate3d(${rect.left}px, ${rect.top}px, 0)`;
-    ghost.style.width = `${Math.max(1, rect.width)}px`;
-    ghost.style.height = `${Math.max(1, rect.height)}px`;
+    ghost.style.transform = `translate3d(${clipLeft}px, ${clipTop}px, 0)`;
+    ghost.style.width = `${clipWidth}px`;
+    ghost.style.height = `${clipHeight}px`;
+    // The outline used to sit on the image itself; now that the box is a viewport-sized clip it
+    // would trace the screen instead of the template, so only draw the sides that survived the
+    // clip and are therefore genuine template edges.
+    const edge = (clipped, actual) => (Math.abs(clipped - actual) < 0.5 ? 1 : 0);
+    const borderTop = edge(clipTop, rect.top);
+    const borderLeft = edge(clipLeft, rect.left);
+    ghost.style.borderTopWidth = `${borderTop}px`;
+    ghost.style.borderLeftWidth = `${borderLeft}px`;
+    ghost.style.borderRightWidth = `${edge(clipRight, rect.left + rect.width)}px`;
+    ghost.style.borderBottomWidth = `${edge(clipBottom, rect.top + rect.height)}px`;
+    if (image) {
+      // Scale rather than resize: the image keeps its natural layout size (a few hundred px),
+      // so deep zoom never produces a layout box beyond what the engine can represent, and the
+      // magnification happens at raster time inside the clip.
+      const scale = templatePositionGhostSize?.width
+        ? rect.width / templatePositionGhostSize.width
+        : 1;
+      // Absolute offsets are measured from the padding box, so undo any border on those sides.
+      const offsetX = rect.left - clipLeft - borderLeft;
+      const offsetY = rect.top - clipTop - borderTop;
+      image.style.transform = `translate3d(${offsetX}px, ${offsetY}px, 0) scale(${scale})`;
+    }
   };
   /** Keep the ghost glued to the map while the camera pans or zooms.
    * @since 0.90.1
@@ -8042,6 +8156,7 @@ async function buildOverlayMain() {
     }
     templatePositionGhostElement?.remove();
     templatePositionGhostElement = null;
+    templatePositionGhostImage = null;
     templatePositionGhostSize = null;
     if (templatePositionGhostUrl) {
       URL.revokeObjectURL(templatePositionGhostUrl);
@@ -8068,14 +8183,21 @@ async function buildOverlayMain() {
       return false;
     }
     if (!blob || token !== templatePositionGhostToken) return false;
+    // The clip box is what gets laid out and composited; the image inside is only ever scaled.
+    const clip = document.createElement('div');
+    clip.className = 'bm-template-position-ghost';
     const image = document.createElement('img');
-    image.className = 'bm-template-position-ghost';
+    image.className = 'bm-template-position-ghost-image';
     image.draggable = false;
     image.alt = '';
+    image.width = size.width;
+    image.height = size.height;
     templatePositionGhostUrl = URL.createObjectURL(blob);
     image.src = templatePositionGhostUrl;
-    document.body.appendChild(image);
-    templatePositionGhostElement = image;
+    clip.appendChild(image);
+    document.body.appendChild(clip);
+    templatePositionGhostElement = clip;
+    templatePositionGhostImage = image;
     templatePositionGhostSize = size;
     // Hide the cross/dot overlay so only the true colours are visible while positioning.
     setTemplateSortIDLayersOpacity(template.sortID, 0);
@@ -8083,14 +8205,26 @@ async function buildOverlayMain() {
     startTemplatePositionGhostLoop();
     return true;
   };
-  const setTemplatePositionPreviewCoords = (coords, { syncInputs = true } = {}) => {
+  const setTemplatePositionPreviewCoords = (coords, { syncInputs = true, syncPanelInputs = true } = {}) => {
     const normalized = normalizeTilePixelCoords(coords);
     if (!normalized) return false;
     templatePositionPreviewCoords = normalized;
     if (syncInputs) setOverlayCoordsInputs(normalized);
+    // Skipped only while the user is typing in the panel itself, so their caret is left alone.
+    if (syncPanelInputs) setTemplatePositionPanelCoordInputs(normalized);
     syncTemplatePositionGhost();
     return true;
   };
+  /** Move the preview to whatever the main overlay's four coordinate inputs currently hold.
+   * No-op outside position-edit mode, so callers do not have to check.
+   * @since 0.90.2
+   */
+  function syncTemplatePositionPreviewFromOverlayInputs() {
+    if (!templatePositionEditStorageKey) return false;
+    const coords = getOverlayCoordsFromInputsNormalized();
+    if (!coords) return false;
+    return setTemplatePositionPreviewCoords(coords, { syncInputs: false });
+  }
   function endTemplateMapDrag() {
     if (!templateMapDragState.active) return;
     templateMapDragState.active = false;
@@ -8121,6 +8255,17 @@ async function buildOverlayMain() {
     if (templateMapDragState.pointerId !== null && event.pointerId !== templateMapDragState.pointerId) return;
     event.preventDefault();
     event.stopPropagation();
+    // Re-read the scale every move: zooming mid-drag (pinch, wheel) otherwise leaves the ratio
+    // captured at pointerdown in place and the template drifts away from the cursor. Re-anchor
+    // the gesture when it changes, so the already-applied movement is not reinterpreted at the
+    // new scale and made to jump.
+    const liveScale = Number(getPixelPerWplacePixel());
+    if (Number.isFinite(liveScale) && liveScale > 0 && liveScale !== templateMapDragState.pixelPerWplacePixel) {
+      templateMapDragState.pixelPerWplacePixel = liveScale;
+      templateMapDragState.startClientX = event.clientX;
+      templateMapDragState.startClientY = event.clientY;
+      templateMapDragState.startCoords = templatePositionPreviewCoords;
+    }
     const scale = templateMapDragState.pixelPerWplacePixel;
     const deltaX = Math.round((event.clientX - templateMapDragState.startClientX) / scale);
     const deltaY = Math.round((event.clientY - templateMapDragState.startClientY) / scale);
@@ -8165,6 +8310,7 @@ async function buildOverlayMain() {
     templatePositionEditStorageKey = template.storageKey;
     templatePositionPreviewCoords = startCoords;
     syncTemplatePositionJoystickWindow();
+    setTemplatePositionPanelCoordInputs(startCoords);
     const size = getTemplateSizePixels(template);
     if (focusMap) {
       const focusCoords = resolveTemplateFocusCoords(startCoords, size?.width, size?.height) || startCoords;
@@ -9499,22 +9645,6 @@ async function buildOverlayMain() {
     }
   };
 
-  const getEventDataEntries = (data) => {
-    if (Array.isArray(data)) {
-      return data.map((entry, index) => [entry?.id ?? index, entry]);
-    }
-    if (Array.isArray(data?.items)) {
-      return data.items.map((entry, index) => [entry?.id ?? index, entry]);
-    }
-    if (Array.isArray(data?.events)) {
-      return data.events.map((entry, index) => [entry?.id ?? index, entry]);
-    }
-    if (Array.isArray(data?.entries)) {
-      return data.entries.map((entry, index) => [entry?.id ?? index, entry]);
-    }
-    return Object.entries(data);
-  };
-
   const getRusMarbleTemplateList = () => (
     (templateManager.templatesArray ?? []).map((template, index) => {
       const store = template?.storageKey
@@ -9656,10 +9786,6 @@ async function buildOverlayMain() {
           dispatchRusMarbleConsoleResponse(requestId, { ok: true, result });
           return;
         }
-        case 'build-event-list':
-          buildEventList();
-          dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: 'Event list rebuild requested.' });
-          return;
         case 'build-template-filter-list':
           buildTemplateFilterList();
           dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: 'Template list rebuild requested.' });
@@ -9702,7 +9828,7 @@ async function buildOverlayMain() {
     const script = document.createElement('script');
     script.textContent = `
       (() => {
-        if (window.bmControl && window.buildEventList && window.buildTemplateFilterList && window.buildColorFilterList && window.getTemplateList && window.getColorList) {
+        if (window.bmControl && window.buildTemplateFilterList && window.buildColorFilterList && window.getTemplateList && window.getColorList) {
           return;
         }
         const requestEventName = ${JSON.stringify(BM_CONSOLE_REQUEST_EVENT)};
@@ -9745,7 +9871,6 @@ async function buildOverlayMain() {
           }));
         });
         window.bmControl = (payload) => sendRusMarbleCommand('control', payload);
-        window.buildEventList = () => sendRusMarbleCommand('build-event-list');
         window.buildTemplateFilterList = () => sendRusMarbleCommand('build-template-filter-list');
         window.getTemplateList = () => sendRusMarbleCommand('get-template-list');
         window.getColorList = () => sendRusMarbleCommand('get-color-list');
@@ -9760,156 +9885,6 @@ async function buildOverlayMain() {
 
   installRusMarblePageConsoleBridge();
 
-  const buildEventList = () => {
-    const listContainer = document.querySelector('#bm-eventitem-list');
-    const showClaimed = templateManager.isEventClaimedShown();
-    const showUnavailable = templateManager.isEventUnavailableShown();
-    const provider = apiManager.eventDataURL ?? templateManager.getEventProvider();
-    if (apiManager.eventData === null && (provider === null || provider == "")) {
-      // rely on external sources
-      listContainer.innerHTML = `<small>${
-        apiManager.eventClaimed === null
-          ? t('event.noClaimedLoaded')
-          : t('event.providerNotSet')
-      }</small>`;
-      return;
-    };
-    const eventClaimedList = new Set(Array.isArray(apiManager.eventClaimed) ? apiManager.eventClaimed : []);
-    consoleLog("eventClaimedList", eventClaimedList);
-    // Format: e.g. https://wplace.samuelscheit.com/tiles/pumpkin.json
-    (
-      apiManager.eventData === null ?
-      fetch(provider, {
-        "credentials": "include",
-      }).then(response => response.json()) :
-      new Promise(resolve => {
-        const consumed = apiManager.eventData;
-        apiManager.eventData = null; // already consumed
-        resolve(consumed);
-      })
-    ).then(data => {
-      consoleLog("event Location data", data);
-      if (typeof data !== 'object') {
-        listContainer.innerHTML = `<small>${t('event.unknownFormat')}</small>`;
-        return;
-      }
-      listContainer.textContent = "";
-      let hasEntries = false;
-      const dataSource = getEventDataEntries(data);
-      dataSource.forEach(([itemId, info]) => {
-        const numericItemId = Number(itemId);
-        const hasNumericItemId = Number.isFinite(numericItemId);
-        const itemLabel = hasNumericItemId ? `#${numericItemId}` : `#${String(itemId ?? '').trim() || '?'}`;
-        const controlAction = normalizeRusMarbleControlAction(info);
-        const isClaimed = hasNumericItemId && eventClaimedList.has(numericItemId);
-        if (!controlAction && isClaimed && !showClaimed) return;
-        const row = document.createElement('div');
-        row.style.display = 'flex';
-        row.style.alignItems = 'center';
-        row.style.gap = '6px';
-
-        let coords = null;
-        let coordStatus = "";
-        if (typeof info === 'object') {
-          if (info['lat'] !== undefined && info['lng'] !== undefined) {
-            coords = [info['lat'], info['lng']];
-          } else if (info['latitude'] !== undefined && info['longitude'] !== undefined) {
-            coords = [info['latitude'], info['longitude']];
-          } else if (
-            info['tileX'] !== undefined && info['offsetX'] !== undefined &&
-            info['tileY'] !== undefined && info['offsetY'] !== undefined
-          ) {
-            coords = coordsTileCoordsToGeoCoords(
-              [info['tileX'], info['tileY']],
-              [info['offsetX'], info['offsetY']]
-            )
-          }
-          // Check Time
-          if (info['foundAt'] !== undefined) {
-            const currentTimestamp = Date.now();
-            const currentHour = currentTimestamp - (currentTimestamp % 3600000);
-            const foundTimestamp = new Date(info['foundAt']).getTime();
-            const foundHour = foundTimestamp - (foundTimestamp % 3600000);
-            if (currentHour !== foundHour) {
-              coordStatus = t('event.expiredPrefix');
-              if (!showUnavailable) return;
-            }
-          }
-        }
-
-        if (coords !== null) {
-          let teleportButton = document.createElement('a');
-          teleportButton.className = 'bm-icon-link';
-          teleportButton.title = t('event.teleportTitle');
-          teleportButton.textContent = "✈️";
-          teleportButton.style.fontSize = '12px';
-          teleportButton.onclick = () => {
-            teleportToGeoCoords(coords[0], coords[1]);
-            const mapMarkers = Array.from(
-              document.querySelectorAll(".cursor-pointer.z-10") // z-10: not the pin (z-20)
-            ).filter( x => {
-              if (x.style.opacity != 1) return false;
-              const rect = x.getBoundingClientRect();
-              const windowWidth = window.innerWidth || document.documentElement.clientWidth;
-              const windowHeight = window.innerHeight || document.documentElement.clientHeight;
-              return (
-                rect.top >= 0 && rect.bottom <= windowWidth &&
-                rect.left >= 0 && rect.right <= windowHeight
-              );
-            });
-            if (mapMarkers.length === 1) { // only 1 opaque marker on screen
-              mapMarkers[0].click(); // safely click it  
-            };
-          }
-          row.appendChild(teleportButton);
-        } else if (!controlAction) {
-          coordStatus = t('event.unknownCoordsPrefix');
-        }
-
-        if (controlAction) {
-          const actionButton = document.createElement('button');
-          actionButton.type = 'button';
-          actionButton.textContent = controlAction.buttonText;
-          actionButton.style.fontSize = '11px';
-          actionButton.style.padding = '0 6px';
-          actionButton.onclick = async () => {
-            actionButton.disabled = true;
-            try {
-              await executeRusMarbleControlAction(controlAction);
-            } catch (error) {
-              consoleWarn('Failed to execute RusMarble control event.', { controlAction, error });
-              overlayMain.handleDisplayError(error?.message || 'Failed to execute the RusMarble control event.');
-            } finally {
-              actionButton.disabled = false;
-            }
-          };
-          row.appendChild(actionButton);
-        }
-
-        let label = document.createElement('span');
-        label.style.fontSize = '12px';
-        if (controlAction) {
-          const prefix = itemLabel ? `${itemLabel} • ` : '';
-          label.textContent = `${prefix}${controlAction.label}`;
-        } else {
-          label.textContent = `${itemLabel} • ${coordStatus}${eventClaimedList.has(numericItemId) ? t('event.claimed') : t('event.unclaimed')}`;
-        }
-        row.appendChild(label);
-        listContainer.appendChild(row);
-        hasEntries = true;
-      });
-      if (!hasEntries && listContainer) {
-        listContainer.innerHTML = `<small>${t('event.noItems', {
-          claimed: showClaimed ? '' : t('event.unclaimedQualifier'),
-          recent: showUnavailable ? '' : t('event.recentQualifier'),
-        })}</small>`;
-      }
-    }).catch(err => {
-      listContainer.innerHTML = `<small>${t('event.fetchFailed')}</small>`;
-    });
-
-  };
-  window.buildEventList = buildEventList;
 
   const forceUpdateTheme = () => {
     if (templateManager.isThemeOverridden()) {
@@ -9953,8 +9928,6 @@ async function buildOverlayMain() {
       try { buildColorFilterList(); } catch (_) {}
     } else if (event?.data?.bmEvent === 'bm-rebuild-template-list') {
       try { buildTemplateFilterList(); } catch (_) {}
-    } else if (event?.data?.bmEvent === 'bm-rebuild-event-list') {
-      try { buildEventList(); } catch (_) {}
     }
   });
 
@@ -9968,11 +9941,6 @@ async function buildOverlayMain() {
       }
       if (templateManager.templatesArray?.length > 0) {
         buildTemplateFilterList();
-      }
-    } catch (_) {}
-    try {
-      if (templateManager.isEventEnabled()) {
-        buildEventList();
       }
     } catch (_) {}
     try {

@@ -355,6 +355,7 @@ export function createTemplateSync({
     return adopted;
   };
   let templateUpdatePollId = null;
+  let deferredTemplateUpdateCheckId = null;
   let templateUpdatePollInFlight = false;
   let templateUpdatePendingCount = 0;
   let templateFlagSyncInFlight = false;
@@ -776,6 +777,20 @@ export function createTemplateSync({
     }
   };
 
+  /** Runs the update poll once the current burst of work has settled.
+   * The poll re-fetches every stream listing, walks legacy-adoption and flag-sync passes, and can
+   * cascade into a full auto-sync — running it the instant an import finishes makes it compete
+   * with the overlay render that import just started. The badge it maintains is informational, so
+   * a short delay costs nothing and repeated requests collapse into one run.
+   */
+  const scheduleTemplateUpdateCheck = (delayMs = 1500) => {
+    if (deferredTemplateUpdateCheckId) { clearTimeout(deferredTemplateUpdateCheckId); }
+    deferredTemplateUpdateCheckId = setTimeout(() => {
+      deferredTemplateUpdateCheckId = null;
+      checkTemplateUpdates();
+    }, delayMs);
+  };
+
   const startTemplateUpdatePolling = () => {
     if (templateUpdatePollId) return;
     templateUpdatePollId = setInterval(checkTemplateUpdates, templateUpdatePollMs);
@@ -786,6 +801,10 @@ export function createTemplateSync({
     if (templateUpdatePollId) {
       clearInterval(templateUpdatePollId);
       templateUpdatePollId = null;
+    }
+    if (deferredTemplateUpdateCheckId) {
+      clearTimeout(deferredTemplateUpdateCheckId);
+      deferredTemplateUpdateCheckId = null;
     }
     templateUpdatePollInFlight = false;
     resetTemplateUpdateBadge();
@@ -1023,7 +1042,7 @@ export function createTemplateSync({
         safeCall(buildTemplateFilterListOverride ?? buildTemplateFilterList);
         safeCall(buildColorFilterListOverride ?? autoSyncBuildColorFilterList);
         resetTemplateUpdateBadge();
-        checkTemplateUpdates();
+        scheduleTemplateUpdateCheck();
       }
       return created;
     } catch (err) {
@@ -1145,7 +1164,25 @@ export function createTemplateSync({
         const syncStreams = existingStream
           ? [existingStream, ...streams.filter((stream) => normalizeRemoteStream(stream) !== existingStream)]
           : streams;
-        for (const stream of syncStreams) {
+        // Probing the streams in parallel first turns "N serial full import attempts, each paying
+        // its own round trip to a 404" into one cheap fan-out plus a single import. Priority order
+        // is preserved: the first stream in syncStreams that answers wins, exactly as the serial
+        // loop below would have picked it. A probe that finds nothing falls through to that loop,
+        // so a probe failure can only cost time, never correctness.
+        const orderedSyncStreams = syncStreams.length > 1
+          ? await (async () => {
+            const probes = await Promise.all(syncStreams.map((stream) => (
+              fetchManualTemplateEntry({ templateName: trimmedName, stream })
+                .then((entry) => (entry ? stream : null))
+                .catch(() => null)
+            )));
+            const owningStream = probes.find((stream) => stream !== null) ?? null;
+            return owningStream
+              ? [owningStream, ...syncStreams.filter((stream) => stream !== owningStream)]
+              : syncStreams;
+          })()
+          : syncStreams;
+        for (const stream of orderedSyncStreams) {
           try {
             syncedTemplate = await syncTemplateByName({
               templateName: trimmedName,
@@ -1353,7 +1390,7 @@ export function createTemplateSync({
       }
       logSync(`Sync finished. Imported ${importedCount} template${importedCount === 1 ? '' : 's'}.`, { statusHandler });
       resetTemplateUpdateBadge();
-      checkTemplateUpdates();
+      scheduleTemplateUpdateCheck();
       return importedCount;
     } catch (err) {
       logSync('Failed to sync server templates.', { level: 'warn', err, statusHandler });

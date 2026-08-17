@@ -619,8 +619,12 @@ export default class Template {
     }
     let workerChunkBuildFailed = false;
     if (useWorkerChunkBuild) {
+      const batches = [];
       for (let index = 0; index < chunkDescriptors.length; index += TEMPLATE_CHUNK_BATCH_SIZE) {
-        const batchChunks = chunkDescriptors.slice(index, index + TEMPLATE_CHUNK_BATCH_SIZE);
+        batches.push(chunkDescriptors.slice(index, index + TEMPLATE_CHUNK_BATCH_SIZE));
+      }
+
+      const dispatchBatch = (batchChunks) => {
         const serializedMaskRowSpans = cloneMaskRowSpans(templateMaskRowSpans);
 
         // Send only the rows this batch actually reads. Copying the whole image per batch meant
@@ -640,7 +644,7 @@ export default class Template {
         const rowStride = imageWidth * 4;
         const workerSourceData = sourceData.slice(bandStartY * rowStride, bandEndY * rowStride);
 
-        const workerResult = await templateWorkerManager.runTask('buildTemplateChunkBatch', {
+        return templateWorkerManager.runTask('buildTemplateChunkBatch', {
           sourceData: workerSourceData,
           imageWidth,
           chunks: batchChunks.map((chunk) => ({
@@ -654,18 +658,52 @@ export default class Template {
           shreadSize,
           maskPoints: templateMaskPoints,
           maskRowSpans: serializedMaskRowSpans,
-          renderChunks: persistBitmapTiles || keepBitmapTilesInMemory,
+          // Raw pixels only when an in-memory bitmap needs them; persisted tiles come back as
+          // PNG bytes the worker encoded itself.
+          renderChunks: keepBitmapTilesInMemory,
+          encodeChunkPngs: persistBitmapTiles,
         }, {
           transferList: [
             workerSourceData.buffer,
             ...getMaskRowSpansTransferList(serializedMaskRowSpans),
           ],
-        });
+        // A crashed worker takes the pool down with it, so every later batch would return null
+        // anyway. Treating the rejection as a failed batch drops us onto the main-thread fallback
+        // below instead of failing template creation outright.
+        }).catch(() => null);
+      };
+
+      // The pool runs several workers, so dispatching one batch at a time left all but one idle.
+      // Keep the pool fed while still consuming results in batch order: palette stats merge into
+      // a shared accumulator whose iteration order decides the colour list's order, and holding
+      // only a window of results bounds the rendered-pixel memory in flight.
+      // A batch that returns raw rendered pixels is heavy — a full-tile chunk at shreadSize 5 is
+      // 5000x5000 RGBA — so keep that window narrow. Batches that come back as PNG bytes (or as
+      // samples only) are small enough to saturate the pool with.
+      const dispatchWindow = keepBitmapTilesInMemory
+        ? Math.min(2, templateWorkerManager.getPoolSize())
+        : templateWorkerManager.getPoolSize();
+      const maxInFlight = Math.max(1, Math.min(dispatchWindow, batches.length));
+      const inFlight = new Map();
+      let nextToDispatch = 0;
+      const fillDispatchWindow = () => {
+        while (inFlight.size < maxInFlight && nextToDispatch < batches.length) {
+          const batchIndex = nextToDispatch++;
+          inFlight.set(batchIndex, dispatchBatch(batches[batchIndex]));
+        }
+      };
+
+      for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+        fillDispatchWindow();
+        const workerResult = await inFlight.get(batchIndex);
+        inFlight.delete(batchIndex);
         if (!workerResult) {
           workerChunkBuildFailed = true;
           break;
         }
         mergePaletteStatsAccumulator(paletteStatsAccumulator, workerResult.paletteStats);
+        // Each tile's canvas work is independent, so encode them together rather than serially.
+        const pendingTileWork = [];
         for (const entry of (workerResult.chunkResults || [])) {
           const sampleData = decodeChunkSampleBuffer(entry.sampleBytes);
           if (sampleData) {
@@ -677,26 +715,43 @@ export default class Template {
               templateChunkSampleBuffers[entry.tileKey] = entry.sampleBytes;
             }
           }
-          if ((persistBitmapTiles || keepBitmapTilesInMemory) && entry.renderedPixels instanceof Uint8ClampedArray) {
-            let renderedCanvas = null;
-            try {
-              renderedCanvas = renderPixelsToCanvas(entry.renderedPixels, entry.renderedWidth, entry.renderedHeight);
-              if (keepBitmapTilesInMemory) {
-                templateTiles[entry.tileKey] = await createBitmapPreservingPixels(renderedCanvas);
+          if (persistBitmapTiles && entry.pngBytes instanceof Uint8Array) {
+            templateTilesBuffers[entry.tileKey] = entry.pngBytes;
+          }
+          // Raw pixels arrive when an in-memory bitmap was requested, or when the worker could
+          // not encode the PNG itself and left the job to us.
+          const needsMainThreadPng = persistBitmapTiles && !(entry.pngBytes instanceof Uint8Array);
+          if ((keepBitmapTilesInMemory || needsMainThreadPng) && entry.renderedPixels instanceof Uint8ClampedArray) {
+            pendingTileWork.push((async () => {
+              let renderedCanvas = null;
+              try {
+                renderedCanvas = renderPixelsToCanvas(entry.renderedPixels, entry.renderedWidth, entry.renderedHeight);
+                if (keepBitmapTilesInMemory) {
+                  templateTiles[entry.tileKey] = await createBitmapPreservingPixels(renderedCanvas);
+                }
+                if (needsMainThreadPng) {
+                  const canvasBlob = await renderedCanvas.convertToBlob();
+                  const canvasBuffer = await canvasBlob.arrayBuffer();
+                  templateTilesBuffers[entry.tileKey] = new Uint8Array(canvasBuffer);
+                }
+              } finally {
+                if (renderedCanvas) {
+                  cleanUpCanvas(renderedCanvas);
+                }
               }
-              if (persistBitmapTiles) {
-                const canvasBlob = await renderedCanvas.convertToBlob();
-                const canvasBuffer = await canvasBlob.arrayBuffer();
-                templateTilesBuffers[entry.tileKey] = new Uint8Array(canvasBuffer);
-              }
-            } finally {
-              if (renderedCanvas) {
-                cleanUpCanvas(renderedCanvas);
-              }
-            }
+            })());
           }
         }
+        if (pendingTileWork.length > 0) {
+          await Promise.all(pendingTileWork);
+        }
       }
+      // Drain anything still dispatched when the loop broke early, so a later rejection cannot
+      // surface as an unhandled rejection.
+      for (const pending of inFlight.values()) {
+        try { await pending; } catch (_) {}
+      }
+      inFlight.clear();
     }
     if (workerChunkBuildFailed) {
       Object.keys(templateTiles).forEach((key) => { delete templateTiles[key]; });

@@ -122,6 +122,14 @@ export const collectProgressWithWasm = ({
   // pre-zero result area and missingMask
   memU8.fill(0, resultPtr, resultPtr + resultBytes);
   memU8.fill(0, missingMaskPtr, missingMaskPtr + sampleCount);
+  // The error map must be zeroed too. collectProgress only stores at the pixels it has a verdict
+  // for, so every pixel it skips — anything outside the template, below the alpha threshold, a
+  // deface pixel, or filtered out by the enabled-colour list — keeps whatever the previous call
+  // left at that address in this reused arena. That is usually the last tile's live RGBA, which
+  // reads back as multicoloured noise with a non-zero alpha instead of staying transparent.
+  if (errorDataWasmPtr !== 0) {
+    memU8.fill(0, errorDataWasmPtr, errorDataWasmPtr + errorDataBytes);
+  }
 
   state.collectProgress(
     sampleCount,

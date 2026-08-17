@@ -155,8 +155,18 @@ export default function mangleSelectors({
     )
   };
   
-  // Compile the RegEx from the selector map
-  const regex = new RegExp(Object.keys(matchedSelectors).map(selector => escapeRegex(selector)).join('|'), 'g');
+  // Compile the RegEx from the selector map.
+  // Sort again here, not just above: `importMap` is spread in first and carries whatever order it
+  // was persisted in, so without this a stored short key (`bm-foo`) can win the alternation over a
+  // longer one that starts with it (`bm-foo-bar`), leaving half-mangled names like `bm-6W-image`
+  // in the JS while the CSS gets the real replacement.
+  const regex = new RegExp(
+    Object.keys(matchedSelectors)
+      .sort((a, b) => b.length - a.length)
+      .map(selector => escapeRegex(selector))
+      .join('|'),
+    'g'
+  );
 
   // Replaces the CSS selectors in both files with encoded versions
   fs.writeFileSync(pathJS, fileInputJS.replace(regex, match => matchedSelectors[match]), 'utf8');

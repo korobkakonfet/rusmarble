@@ -500,16 +500,6 @@ export default class TemplateManager {
     } catch (_) { /* no-op */ }
   }
 
-  requestEventRebuild() {
-    if (!this.isEventEnabled()) return;
-    try {
-      const templateUI = document.querySelector('#bm-contain-eventlist');
-      if (templateUI) { templateUI.style.display = ''; }
-      // Deferred palette list rendering; actual DOM is built in main via helper
-      window.postMessage({ source: 'blue-marble', bmEvent: 'bm-rebuild-event-list' }, '*');
-    } catch (_) { /* no-op */ }
-  }
-
   /** Generates a {@link Template} class instance from the JSON object template
    */
   #loadTemplate() {
@@ -2722,74 +2712,6 @@ export default class TemplateManager {
     await this.storeUserSettings();
   }
 
-  /** A utility to check if events are enabled.
-   * @returns {boolean}
-   * @since 0.85.35
-   */
-  isEventEnabled() {
-    return this.userSettings?.eventEnabled ?? false;
-  }
-
-  /** Sets the event enabled to a value.
-   * @param {boolean} value - The value
-   * @since 0.85.35
-   */
-  async setEventEnabled(value) {
-    this.userSettings.eventEnabled = value;
-    await this.storeUserSettings();
-  }
-
-  /** A utility to check if event claimed are shown.
-   * @returns {boolean}
-   * @since 0.85.35
-   */
-  isEventClaimedShown() {
-    return this.userSettings?.eventClaimedShown ?? true;
-  }
-
-  /** Sets the event claimed shown to a value.
-   * @param {boolean} value - The value
-   * @since 0.85.35
-   */
-  async setEventClaimedShown(value) {
-    this.userSettings.eventClaimedShown = value;
-    await this.storeUserSettings();
-  }
-
-  /** A utility to check if event unavailable are shown.
-   * @returns {boolean}
-   * @since 0.85.35
-   */
-  isEventUnavailableShown() {
-    return this.userSettings?.eventUnavailableShown ?? true;
-  }
-
-  /** Sets the event unavailable shown to a value.
-   * @param {boolean} value - The value
-   * @since 0.85.35
-   */
-  async setEventUnavailableShown(value) {
-    this.userSettings.eventUnavailableShown = value;
-    await this.storeUserSettings();
-  }
-
-  /** A utility to return the current event provider.
-   * @returns {string}
-   * @since 0.85.35
-   */
-  getEventProvider() {
-    return this.userSettings?.eventProvider ?? "";
-  }
-
-  /** Sets the event provider to a value.
-   * @param {string} value - The value
-   * @since 0.85.35
-   */
-  async setEventProvider(value) {
-    this.userSettings.eventProvider = value;
-    await this.storeUserSettings();
-  }
-
   /** A utility to check if only the currently selected color is shown.
    * @returns {boolean}
    * @since 0.85.37
@@ -3196,23 +3118,6 @@ export default class TemplateManager {
    */
   async setSafeModeEnabled(value) {
     this.userSettings.safeMode = Boolean(value);
-    await this.storeUserSettings();
-  }
-
-  /** Whether the "+ Line" and "+ Circle" buttons are displayed
-   * @returns {boolean}
-   * @since 0.86.13
-   */
-  isLineTemplateButtonShown() {
-    return this.userSettings?.lineTemplateButton ?? false;
-  }
-
-  /** Sets the lineTemplateButton to a value.
-   * @param {boolean} value - The value
-   * @since 0.86.13
-   */
-  async setLineTemplateButtonEnabled(value) {
-    this.userSettings.lineTemplateButton = value;
     await this.storeUserSettings();
   }
 

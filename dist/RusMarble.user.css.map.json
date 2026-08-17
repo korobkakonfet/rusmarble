@@ -424,5 +424,11 @@
   "bm-custom-theme-sample-card": "bm-7w",
   "bm-custom-theme-sample-chip": "bm-7x",
   "bm-custom-theme-example": "bm-8u",
-  "bm-custom-theme-sample": "bm-8R"
+  "bm-custom-theme-sample": "bm-8R",
+  "bm-template-position-ghost-image": "bm-6R",
+  "bm-template-position-coords": "bm-7J",
+  "bm-template-position-coord": "bm-7Y",
+  "bm-template-position-dpad-hint": "bm-7b",
+  "bm-template-position-joystick-": "bm-7h",
+  "bm-template-position-dpad": "bm-8p"
 }

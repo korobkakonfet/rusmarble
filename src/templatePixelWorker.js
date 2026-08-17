@@ -390,7 +390,25 @@ const handlers = {
     return { resultWidth, resultHeight, pixels };
   },
 
-  buildTemplateChunkBatch(payload) {
+  /** Encodes rendered chunk pixels to PNG bytes in-worker.
+   * Returns null when the runtime can't do it, so the caller keeps the raw pixels and the main
+   * thread can encode them itself.
+   */
+  async encodeRenderedChunkToPng(pixels, width, height) {
+    if (typeof OffscreenCanvas === 'undefined') return null;
+    try {
+      const canvas = new OffscreenCanvas(width, height);
+      const context = canvas.getContext('2d');
+      if (!context) return null;
+      context.putImageData(new ImageData(pixels, width, height), 0, 0);
+      const blob = await canvas.convertToBlob();
+      return new Uint8Array(await blob.arrayBuffer());
+    } catch (_) {
+      return null;
+    }
+  },
+
+  async buildTemplateChunkBatch(payload) {
     const sourceData = toUint8Clamped(payload.sourceData);
     const chunkResults = [];
     const paletteStatsAccumulator = {
@@ -418,12 +436,16 @@ const handlers = {
         tileKey: chunk.tileKey,
         sampleBytes,
       };
-      if (payload.renderChunks === true) {
+      // Rendered pixels are shreadSize² larger than the source region — 25x on most machines —
+      // so returning them is by far the most expensive part of the reply. Encode to PNG here
+      // when the caller only wants bytes to persist: that both shrinks the transfer by an order
+      // of magnitude and keeps the encode off the main thread.
+      const needsRenderedPixels = payload.renderChunks === true;
+      const needsPng = payload.encodeChunkPngs === true;
+      if (needsRenderedPixels || needsPng) {
         const renderedWidth = chunk.drawSizeX * payload.shreadSize;
         const renderedHeight = chunk.drawSizeY * payload.shreadSize;
-        resultEntry.renderedWidth = renderedWidth;
-        resultEntry.renderedHeight = renderedHeight;
-        resultEntry.renderedPixels = renderChunkPixels({
+        const renderedPixels = renderChunkPixels({
           sampleData,
           resultWidth: renderedWidth,
           resultHeight: renderedHeight,
@@ -433,6 +455,19 @@ const handlers = {
           displayedColors: null,
           includeDefaceCheckerboard: true,
         });
+        resultEntry.renderedWidth = renderedWidth;
+        resultEntry.renderedHeight = renderedHeight;
+        const pngBytes = needsPng
+          ? await handlers.encodeRenderedChunkToPng(renderedPixels, renderedWidth, renderedHeight)
+          : null;
+        if (pngBytes) {
+          resultEntry.pngBytes = pngBytes;
+        }
+        // Keep the raw pixels only when the caller needs them for an in-memory bitmap, or when
+        // the in-worker encode failed and the main thread has to do it instead.
+        if (needsRenderedPixels || !pngBytes) {
+          resultEntry.renderedPixels = renderedPixels;
+        }
       }
       chunkResults.push(resultEntry);
     }
@@ -712,7 +747,7 @@ self.onmessage = async (event) => {
     }
     if (Array.isArray(result?.chunkResults)) {
       result.chunkResults.forEach((entry) => {
-        transferList.push(...transferBuffers([entry.sampleBytes, entry.renderedPixels]));
+        transferList.push(...transferBuffers([entry.sampleBytes, entry.renderedPixels, entry.pngBytes]));
       });
     }
     if (Array.isArray(result?.results)) {
