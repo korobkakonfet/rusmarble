@@ -17,6 +17,7 @@ import { createTemplateCreationUi } from './templateCreationUi.js';
 import { createArchiveTemplateUi } from './archiveTemplateUi.js';
 import { CUSTOM_LAYOUT_THEME, CUSTOM_THEME_DRAG_BG_VAR, buildCustomThemeCssVars, buildCustomThemeSiteVars, customThemeColorToCss, getDefaultCustomTheme } from './customTheme.js';
 import { createCustomThemeUi } from './customThemeUi.js';
+import { initOverlayDodge } from './overlayDodge.js';
 import { layoutLanguageOptions, normalizeLayoutLanguage, translateLayout, getLayoutThemeLabel as getLocalizedLayoutThemeLabel, getTemplateDisplayLabel as getLocalizedTemplateDisplayLabel, getTemplateCreateModeLabel, getChatBanTypeLabel, getColorSortLabel } from './layoutI18n.js';
 import { encodeChunkSampleBytes } from './templateChunkUtils.js';
 import { consoleLog, consoleWarn, consoleError, isDebugLoggingEnabled, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels, initMobileLayout, isMobileLayout, makePanelDraggable, registerFloatingPanel } from './utils.js';
@@ -60,7 +61,78 @@ let chatInitialized = false;
 let mapCommentManager = null;
 let hqTemplateManager = null;
 let templateManagerRef = null;
+/** Gap kept between the overlay and the paint panel when the palette pushes it aside. */
+const OVERLAY_PALETTE_SHIFT_GAP = 8;
+
+/** Moves #bm-overlay up clear of wplace's paint panel while the palette is expanded, and puts it
+ * back when the palette collapses.
+ *
+ * The position is written as inline `!important`. The mobile bottom-sheet rules in overlay.css
+ * (`@media (max-width: 640px), (pointer: coarse)`) set top/bottom with `!important` in order to
+ * beat the drag handler's inline styles, so an ordinary inline style here is silently outranked —
+ * the element keeps its declared position no matter what is assigned to it. Inline `!important`
+ * is what outranks a stylesheet `!important`.
+ * @since 0.87.79
+ */
+function updateOverlayPaletteShift(paletteAnchor, diagnostics = null) {
+  const report = (reason, extra = {}) => {
+    if (diagnostics) Object.assign(diagnostics, { reason, ...extra });
+  };
+  const overlay = document.getElementById('bm-overlay');
+  if (!overlay) { report('overlay-not-found'); return; }
+
+  const clear = () => {
+    if (overlay.dataset.bmShiftPrevBottom === undefined) return;
+    // removeProperty first: these were written with !important, which assigning cannot undo.
+    overlay.style.removeProperty('bottom');
+    overlay.style.removeProperty('max-height');
+    overlay.style.bottom = overlay.dataset.bmShiftPrevBottom;
+    overlay.style.maxHeight = overlay.dataset.bmShiftPrevMaxHeight ?? '';
+    delete overlay.dataset.bmShiftPrevBottom;
+    delete overlay.dataset.bmShiftPrevMaxHeight;
+  };
+
+  // The palette lives inside wplace's rounded bottom sheet; walk up from a swatch to find it.
+  const panel = paletteAnchor?.closest?.('.absolute') ?? null;
+  if (!panel) { clear(); report('no-palette-panel'); return; }
+
+  // Measure from the unshifted position so repeated runs cannot compound the offset.
+  clear();
+  const overlayRect = overlay.getBoundingClientRect();
+  const panelRect = panel.getBoundingClientRect();
+  if (!overlayRect.width || !panelRect.width) { report('zero-size', { overlayRect, panelRect }); return; }
+
+  const overlaps = overlayRect.left < panelRect.right && overlayRect.right > panelRect.left
+    && overlayRect.top < panelRect.bottom && overlayRect.bottom > panelRect.top;
+  if (!overlaps) { report('no-overlap', { overlayRect, panelRect }); return; }
+
+  // The panel is full-width, so only moving up can clear it. Clamp the lift to the room actually
+  // available rather than giving up when the full clearance does not fit.
+  // Anchor from the bottom rather than setting `top`. The expanded sheet is laid out as
+  // `top: auto; bottom: 0; max-height: 70dvh; overflow-y: auto` (overlay.css), so its internal
+  // scrolling depends on staying bottom-anchored — pinning `top` instead makes the height
+  // content-driven, max-height stops applying, and the sheet can no longer be scrolled.
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+  const bottomOffset = Math.max(0, viewportHeight - panelRect.top + OVERLAY_PALETTE_SHIFT_GAP);
+  const availableHeight = Math.max(0, panelRect.top - OVERLAY_PALETTE_SHIFT_GAP);
+  if (availableHeight <= 0) { report('no-room', { bottomOffset, overlayRect, panelRect }); return; }
+
+  overlay.dataset.bmShiftPrevBottom = overlay.style.bottom ?? '';
+  overlay.dataset.bmShiftPrevMaxHeight = overlay.style.maxHeight ?? '';
+  overlay.style.setProperty('bottom', `${bottomOffset}px`, 'important');
+  // Keep the sheet inside the space left above the panel, so it stays scrollable instead of
+  // growing behind the palette.
+  overlay.style.setProperty('max-height', `${availableHeight}px`, 'important');
+  report('shifted', { bottomOffset, availableHeight, overlayRect, panelRect });
+}
+
 let observeBlackObserver = null;
+/** Resize handler installed by observeBlack; kept module-level so stopObserveBlack can detach it. */
+let observeBlackResizeHandler = null;
+/** Watches the paint panel's own box. Expanding the palette changes the panel's height without
+ * touching its children, so the childList MutationObserver in observeBlack never fires for it —
+ * this is what actually detects the palette opening and closing. */
+let palettePanelResizeObserver = null;
 const reportCommentsState = {
   isApplied: false,
   clickActive: false,
@@ -4141,6 +4213,7 @@ inject(() => {
     };
   }
 
+  let mapPrototypeRestoreTimer = null;
   const hookedMapFuncs = {
     "values": Map.prototype.values
   };
@@ -4170,8 +4243,16 @@ inject(() => {
     };
   };
   const restoreMapPrototype = function () {
+    if (mapPrototypeRestoreTimer !== null) {
+      clearTimeout(mapPrototypeRestoreTimer);
+      mapPrototypeRestoreTimer = null;
+    }
     for (const key in hookedMapFuncs) {
-      Map.prototype[key] = hookedMapFuncs[key];
+      // Only unpatch what is still ours. If another script layered its own hook on top after
+      // us, blindly assigning the builtin back would silently clobber theirs.
+      if (Map.prototype[key] === hookedMapValues) {
+        Map.prototype[key] = hookedMapFuncs[key];
+      }
     }
   };
   // Don't hook "set", "get", "has", some Proxy object doing something like "setDefault" may make it into infinite recursion
@@ -4183,6 +4264,17 @@ inject(() => {
   //   };
   // });
   Map.prototype.values = hookedMapValues;
+  // Patching a builtin on Map.prototype disables SpiderMonkey's (and V8's) inline fast path for
+  // Map iteration process-wide, and wplace is Svelte 5 — very Map-heavy. The hook normally
+  // removes itself the moment it spots the maplibre instance, but if wplace ever changes shape
+  // so that never matches, leaving it installed taxes every Map iteration for the whole session.
+  // The map is constructed during page load, so anything past this deadline is a lost cause.
+  mapPrototypeRestoreTimer = setTimeout(() => {
+    mapPrototypeRestoreTimer = null;
+    if (document.head["__bmmap"]) { return; }
+    console.warn(`%c${name}%c: map handle not found before deadline; removing the Map.prototype.values hook.`, consoleStyle, '');
+    restoreMapPrototype();
+  }, 30000);
 });
 
 // Imports the CSS file (inline build) or remote fallback
@@ -4515,8 +4607,35 @@ window.addEventListener('message', (event) => {
   );
 });
 
-GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
-  const userSettingsValue = await GM.getValue('bmUserSettings', '{}');
+/** Reads a GM storage key without letting it strand boot.
+ * Tampermonkey moves storage over Chrome's extension messaging channel, which rejects payloads
+ * over 64MiB. An oversized template made that read reject (or hang) and, because every piece of
+ * UI init lives in the continuation below, the whole script silently never loaded — the only way
+ * out was clearing storage. Falling back to the default keeps the overlay (and the
+ * getStorageReport diagnostic) reachable so the oversized data can be inspected and removed.
+ * @since 0.87.79
+ */
+function readBootStorageValue(key, fallback, timeoutMs = 15000) {
+  return Promise.race([
+    GM.getValue(key, fallback),
+    new Promise((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+  ]).then((value) => {
+    if (value === null || value === undefined) {
+      bootStorageFailures.push(key);
+      return fallback;
+    }
+    return value;
+  }).catch(() => {
+    bootStorageFailures.push(key);
+    return fallback;
+  });
+}
+
+/** Storage keys that failed or timed out during boot; surfaced to the user once the UI exists. */
+const bootStorageFailures = [];
+
+readBootStorageValue('bmTemplates', '{}').then(async storageTemplatesValue => {
+  const userSettingsValue = await readBootStorageValue('bmUserSettings', '{}');
   let userSettings;
   try {
     userSettings = JSON.parse(userSettingsValue);
@@ -4592,6 +4711,7 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   applySafeModeState();
 
   overlayMain.handleDrag('#bm-overlay', '#bm-bar-drag'); // Creates dragging capability on the drag bar for dragging the overlay
+  initOverlayDodge(); // Moves the overlay aside when a wplace panel would be hidden behind it
   const rebuildOverlayIfMissing = async () => {
     if (overlayBuildInFlight || document.getElementById('bm-overlay')) return;
     overlayBuildInFlight = true;
@@ -4710,6 +4830,17 @@ GM.getValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   apiManager.spontaneousResponseListener(overlayMain); // Reads spontaneous fetch responces
 
   consoleLog(`%c${name}%c (${version}) userscript has loaded!`, 'color: cornflowerblue;', '');
+
+  if (bootStorageFailures.length > 0) {
+    // The UI is up but some stored data never arrived — say so rather than silently showing
+    // an empty template list, which reads as data loss.
+    overlayMain.handleDisplayError(
+      `Storage failed to load (${bootStorageFailures.join(', ')}). Run getStorageReport() in the console — a template may exceed the 64MiB browser storage limit.`
+    );
+  }
+}).catch((error) => {
+  // Last resort: boot must never die silently, or the script simply "does not load".
+  consoleWarn('[boot] initialisation failed', error?.message || error);
 });
 
 /** Add the zoom level buttons if they do not exist.
@@ -4817,7 +4948,21 @@ function observeBlack() {
       createZoomButtons();
 
       const black = document.querySelector('#color-1');
-      if (!black) { return; }
+      // No swatches in the DOM means the palette is closed: drop any shift it caused.
+      if (!black) { updateOverlayPaletteShift(null); return; }
+
+      updateOverlayPaletteShift(black);
+
+      // Re-run the shift whenever the panel resizes, i.e. whenever the palette expands/collapses.
+      const palettePanel = black.closest?.('.absolute');
+      if (palettePanel && typeof ResizeObserver === 'function' && !palettePanel.dataset.bmPaletteShiftObserved) {
+        palettePanelResizeObserver?.disconnect();
+        palettePanelResizeObserver = new ResizeObserver(() => updateOverlayPaletteShift(
+          document.querySelector('#color-1')
+        ));
+        palettePanelResizeObserver.observe(palettePanel);
+        palettePanel.dataset.bmPaletteShiftObserved = '1';
+      }
 
       let move = document.querySelector('#bm-button-move');
 
@@ -4891,6 +5036,10 @@ function observeBlack() {
     }
   });
 
+  // A resize changes whether the overlay still overlaps the panel, so re-measure.
+  observeBlackResizeHandler = queueObserveBlackSync;
+  window.addEventListener('resize', observeBlackResizeHandler);
+
   queueObserveBlackSync();
   observeBlackObserver = observer;
   observer.observe(document.body, { childList: true, subtree: true });
@@ -4902,6 +5051,15 @@ function stopObserveBlack() {
     observeBlackObserver.disconnect();
   } catch (_) {}
   observeBlackObserver = null;
+  if (observeBlackResizeHandler) {
+    window.removeEventListener('resize', observeBlackResizeHandler);
+    observeBlackResizeHandler = null;
+  }
+  try { palettePanelResizeObserver?.disconnect(); } catch (_) {}
+  palettePanelResizeObserver = null;
+  document.querySelectorAll('[data-bm-palette-shift-observed]')
+    .forEach((element) => { delete element.dataset.bmPaletteShiftObserved; });
+  updateOverlayPaletteShift(null); // safe mode / teardown must not leave the overlay nudged
 }
 
 function normalizeTilePixelCoords(rawCoords) {
@@ -9802,6 +9960,16 @@ async function buildOverlayMain() {
           buildColorFilterList();
           dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: 'Color list rebuild requested.' });
           return;
+        case 'palette-shift-debug': {
+          const diagnostics = { scriptVersion: version };
+          updateOverlayPaletteShift(document.querySelector('#color-1'), diagnostics);
+          dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: diagnostics });
+          return;
+        }
+        case 'storage-report':
+        case 'report-storage':
+          dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: await templateManager.reportStorageUsage() });
+          return;
         case 'sync-toggle-list':
           syncToggleList();
           dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: 'Template state synced.' });
@@ -9828,7 +9996,7 @@ async function buildOverlayMain() {
     const script = document.createElement('script');
     script.textContent = `
       (() => {
-        if (window.bmControl && window.buildTemplateFilterList && window.buildColorFilterList && window.getTemplateList && window.getColorList) {
+        if (window.bmControl && window.buildTemplateFilterList && window.buildColorFilterList && window.getTemplateList && window.getColorList && window.getStorageReport) {
           return;
         }
         const requestEventName = ${JSON.stringify(BM_CONSOLE_REQUEST_EVENT)};
@@ -9876,6 +10044,8 @@ async function buildOverlayMain() {
         window.getColorList = () => sendRusMarbleCommand('get-color-list');
         window.buildColorFilterList = () => sendRusMarbleCommand('build-color-filter-list');
         window.syncToggleList = () => sendRusMarbleCommand('sync-toggle-list');
+        window.getStorageReport = () => sendRusMarbleCommand('storage-report');
+        window.debugPaletteShift = () => sendRusMarbleCommand('palette-shift-debug');
       })();
     `;
     document.documentElement.dataset.bmConsoleBridgeInstalled = '1';

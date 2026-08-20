@@ -14,8 +14,11 @@ import {
   mergeTemplateExampleReservoir,
   findNearestUnpaintedSamplePixel,
   renderSampleDataToImage,
+  paintablePaletteChannels,
 } from '../src/templateChunkUtils.js';
 import { convertImageDataToWplacePalette } from '../src/Template.js';
+import { templatePaletteChannels } from '../src/templatePaletteConversion.js';
+import { createExactNearestLookup } from '../src/templateNearestPalette.js';
 import { colorpalette, rgbToMeta, uint8ToBase64, base64ToUint8 } from '../src/utils.js';
 import { createTemplateSampleExtractorWithWasm, isTemplateSampleExtractWasmAvailable } from '../src/templateSampleExtractWasm.js';
 import { filterBitmapPixelsWithWasm, isFilterBitmapPixelsWasmAvailable } from '../src/templateFilterWasm.js';
@@ -1833,6 +1836,89 @@ function buildTileProgressAggregationBenchmarks(sampleData, tilePixels) {
   ];
 }
 
+// ── Exactness gate ────────────────────────────────────────────────────────────────────────────
+// The optimisations below are only worth having if they are bit-identical to the algorithms they
+// replace, so that claim is checked rather than asserted. These run before the timings and abort
+// the whole benchmark on any mismatch.
+
+/** The nearest-colour scan as it was written before the cube replaced it: linear, LRU-memoised. */
+function makeLegacyNearestScan(channels, weightR = 1, weightG = 1, weightB = 1, cacheMax = 16384) {
+  const cache = new Map();
+  return (r, g, b) => {
+    const packed = ((r << 16) | (g << 8) | b) >>> 0;
+    const hit = cache.get(packed);
+    if (hit !== undefined) return hit;
+    let bestIndex = 0;
+    let bestDistance = Infinity;
+    for (let index = 0; index < channels.count; index++) {
+      const dr = r - channels.r[index];
+      const dg = g - channels.g[index];
+      const db = b - channels.b[index];
+      const distance = dr * dr * weightR + dg * dg * weightG + db * db * weightB;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestIndex = index;
+        if (distance === 0) break;
+      }
+    }
+    if (cache.size >= cacheMax) {
+      const oldest = cache.keys().next().value;
+      if (oldest !== undefined) cache.delete(oldest);
+    }
+    cache.set(packed, bestIndex);
+    return bestIndex;
+  };
+}
+
+/**
+ * Walks the entire 2^24 colour space comparing the cube against the scan it replaces. Exhaustive
+ * rather than sampled: the cube's whole justification is that it is exact everywhere, and the
+ * failure mode it guards against -- a boundary cell resolving to the wrong side -- is exactly the
+ * kind of thing random sampling misses.
+ */
+function assertNearestLookupExact(label, lookup, reference) {
+  let mismatches = 0;
+  let firstMismatch = null;
+  for (let r = 0; r < 256; r++) {
+    for (let g = 0; g < 256; g++) {
+      for (let b = 0; b < 256; b++) {
+        if (lookup(r, g, b) !== reference(r, g, b)) {
+          if (!mismatches) firstMismatch = [r, g, b];
+          mismatches++;
+        }
+      }
+    }
+  }
+  if (mismatches) {
+    throw new Error(`${label}: ${mismatches} mismatches vs the scan, first at rgb(${firstMismatch})`);
+  }
+  return 16777216;
+}
+
+function runEquivalenceChecks() {
+  const checks = [];
+  const paletteChannels = templatePaletteChannels;
+  const weighted = createExactNearestLookup(paletteChannels, { weightR: 0.2126, weightG: 0.7152, weightB: 0.0722 });
+  const euclidean = createExactNearestLookup(paletteChannels);
+  const paintable = createExactNearestLookup(paintablePaletteChannels);
+
+  checks.push(['templatePalette/weighted', assertNearestLookupExact(
+    'templatePalette/weighted', weighted,
+    makeLegacyNearestScan(paletteChannels, 0.2126, 0.7152, 0.0722))]);
+  checks.push(['templatePalette/euclidean', assertNearestLookupExact(
+    'templatePalette/euclidean', euclidean, makeLegacyNearestScan(paletteChannels))]);
+  checks.push(['paintablePalette/euclidean', assertNearestLookupExact(
+    'paintablePalette/euclidean', paintable, makeLegacyNearestScan(paintablePaletteChannels))]);
+
+  console.log('Equivalence checks (exhaustive over all 16777216 colours)');
+  for (const [label, count] of checks) {
+    console.log(`  ${label.padEnd(28)} ${count.toLocaleString()} colours, 0 mismatches`);
+  }
+  console.log('');
+  return { weighted, euclidean, paintable };
+}
+
+
 async function main() {
   const sourceData = buildSourceImageData();
   const nonPaletteSourceData = buildNonPaletteSourceImageData();
@@ -1916,6 +2002,8 @@ async function main() {
   } catch (error) {
     console.warn('WASM benchmark path disabled (install optional dependency `wabt` to enable).', error?.message || error);
   }
+
+  const exactLookups = runEquivalenceChecks();
 
   const results = [
     runBenchmark('buildMaskRowSpans(cross-mask)', 5000, () => {
@@ -2354,6 +2442,32 @@ async function main() {
       sampleExtractor: wasmSampleExtractor,
     })] : []),
   ];
+
+  // Paired old/new for the nearest-colour lookup itself, on a colour distribution that actually
+  // misses the LRU -- which is what a photographic source looks like to the converter.
+  const nearestProbe = (() => {
+    const probeRng = createRng(20260820);
+    const probe = new Uint8Array(400000 * 3);
+    for (let i = 0; i < probe.length; i++) probe[i] = (probeRng() * 256) | 0;
+    return probe;
+  })();
+  const legacyNearest = makeLegacyNearestScan(templatePaletteChannels, 0.2126, 0.7152, 0.0722);
+  const cubeNearest = exactLookups.weighted;
+  const probeCount = nearestProbe.length / 3;
+  results.push(runBenchmark('nearestPaletteColor(legacy scan+LRU)', 6, () => {
+    let checksum = 0;
+    for (let i = 0; i < probeCount; i++) {
+      checksum += legacyNearest(nearestProbe[i * 3], nearestProbe[i * 3 + 1], nearestProbe[i * 3 + 2]);
+    }
+    return checksum;
+  }));
+  results.push(runBenchmark('nearestPaletteColor(exact cube)', 6, () => {
+    let checksum = 0;
+    for (let i = 0; i < probeCount; i++) {
+      checksum += cubeNearest(nearestProbe[i * 3], nearestProbe[i * 3 + 1], nearestProbe[i * 3 + 2]);
+    }
+    return checksum;
+  }));
 
   printResults(results, { sampleData });
   printTemplateCreationBreakdown(templateCreationBreakdowns);

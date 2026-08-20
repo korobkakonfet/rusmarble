@@ -1,0 +1,996 @@
+{
+  "version": 1,
+  "sessionStart": "2026-08-19T22:43:27.988Z",
+  "snapshotIntervalMs": 2000,
+  "snapshots": [
+    {
+      "t": 2.072,
+      "stats": [
+        {
+          "label": "worker:extractChunkSamples",
+          "count": 1,
+          "avgMs": 170,
+          "maxMs": 170,
+          "totalMs": 170,
+          "lastMs": 170
+        }
+      ]
+    },
+    {
+      "t": 4.091,
+      "stats": [
+        {
+          "label": "worker:extractChunkSamples",
+          "count": 20,
+          "avgMs": 397.75,
+          "maxMs": 820,
+          "totalMs": 7955,
+          "lastMs": 90
+        },
+        {
+          "label": "overlay:phase1",
+          "count": 2,
+          "avgMs": 981,
+          "maxMs": 1392,
+          "totalMs": 1962,
+          "lastMs": 1392
+        },
+        {
+          "label": "worker:renderAndMergeOverlayChunks",
+          "count": 4,
+          "avgMs": 348.25,
+          "maxMs": 435,
+          "totalMs": 1393,
+          "lastMs": 186
+        },
+        {
+          "label": "createOverlayOnMap",
+          "count": 1,
+          "avgMs": 598,
+          "maxMs": 598,
+          "totalMs": 598,
+          "lastMs": 598
+        },
+        {
+          "label": "worker:renderOverlayChunkBatch",
+          "count": 1,
+          "avgMs": 290,
+          "maxMs": 290,
+          "totalMs": 290,
+          "lastMs": 290
+        },
+        {
+          "label": "overlay:phase3",
+          "count": 1,
+          "avgMs": 27,
+          "maxMs": 27,
+          "totalMs": 27,
+          "lastMs": 27
+        },
+        {
+          "label": "canvasUpload:drawImage",
+          "count": 1,
+          "avgMs": 21,
+          "maxMs": 21,
+          "totalMs": 21,
+          "lastMs": 21
+        },
+        {
+          "label": "overlay:mergeCaps:side8192:area40000000:gpu16384",
+          "count": 5,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mergeEligible",
+          "count": 4,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mountMerged",
+          "count": 1,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mergeBlocked",
+          "count": 1,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mergeBlocked:overSideCap:src2069x1497@5=merged10345x7485",
+          "count": 1,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        }
+      ]
+    },
+    {
+      "t": 7.679,
+      "stats": [
+        {
+          "label": "worker:extractChunkSamples",
+          "count": 20,
+          "avgMs": 397.75,
+          "maxMs": 820,
+          "totalMs": 7955,
+          "lastMs": 90
+        },
+        {
+          "label": "createOverlayOnMap",
+          "count": 2,
+          "avgMs": 2681.5,
+          "maxMs": 4765,
+          "totalMs": 5363,
+          "lastMs": 4765
+        },
+        {
+          "label": "overlay:phase3",
+          "count": 2,
+          "avgMs": 1699,
+          "maxMs": 3371,
+          "totalMs": 3398,
+          "lastMs": 3371
+        },
+        {
+          "label": "overlay:phase1",
+          "count": 2,
+          "avgMs": 981,
+          "maxMs": 1392,
+          "totalMs": 1962,
+          "lastMs": 1392
+        },
+        {
+          "label": "worker:renderAndMergeOverlayChunks",
+          "count": 4,
+          "avgMs": 348.25,
+          "maxMs": 435,
+          "totalMs": 1393,
+          "lastMs": 186
+        },
+        {
+          "label": "canvasUpload:bitmapDecode",
+          "count": 6,
+          "avgMs": 71.16666666666667,
+          "maxMs": 162,
+          "totalMs": 427,
+          "lastMs": 27
+        },
+        {
+          "label": "canvasUpload:bitmapBlit",
+          "count": 6,
+          "avgMs": 62.166666666666664,
+          "maxMs": 145,
+          "totalMs": 373,
+          "lastMs": 17
+        },
+        {
+          "label": "worker:renderOverlayChunkBatch",
+          "count": 1,
+          "avgMs": 290,
+          "maxMs": 290,
+          "totalMs": 290,
+          "lastMs": 290
+        },
+        {
+          "label": "canvasUpload:drawImage",
+          "count": 4,
+          "avgMs": 23,
+          "maxMs": 45,
+          "totalMs": 92,
+          "lastMs": 10
+        },
+        {
+          "label": "overlay:mergeCaps:side8192:area40000000:gpu16384",
+          "count": 5,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mergeEligible",
+          "count": 4,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mountMerged",
+          "count": 4,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mergeBlocked",
+          "count": 1,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mergeBlocked:overSideCap:src2069x1497@5=merged10345x7485",
+          "count": 1,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mountPerTile",
+          "count": 6,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        }
+      ]
+    },
+    {
+      "t": 9.693,
+      "stats": [
+        {
+          "label": "worker:extractChunkSamples",
+          "count": 20,
+          "avgMs": 397.75,
+          "maxMs": 820,
+          "totalMs": 7955,
+          "lastMs": 90
+        },
+        {
+          "label": "createOverlayOnMap",
+          "count": 2,
+          "avgMs": 2681.5,
+          "maxMs": 4765,
+          "totalMs": 5363,
+          "lastMs": 4765
+        },
+        {
+          "label": "overlay:phase3",
+          "count": 2,
+          "avgMs": 1699,
+          "maxMs": 3371,
+          "totalMs": 3398,
+          "lastMs": 3371
+        },
+        {
+          "label": "overlay:phase1",
+          "count": 2,
+          "avgMs": 981,
+          "maxMs": 1392,
+          "totalMs": 1962,
+          "lastMs": 1392
+        },
+        {
+          "label": "worker:renderAndMergeOverlayChunks",
+          "count": 4,
+          "avgMs": 348.25,
+          "maxMs": 435,
+          "totalMs": 1393,
+          "lastMs": 186
+        },
+        {
+          "label": "canvasUpload:bitmapDecode",
+          "count": 6,
+          "avgMs": 71.16666666666667,
+          "maxMs": 162,
+          "totalMs": 427,
+          "lastMs": 27
+        },
+        {
+          "label": "canvasUpload:bitmapBlit",
+          "count": 6,
+          "avgMs": 62.166666666666664,
+          "maxMs": 145,
+          "totalMs": 373,
+          "lastMs": 17
+        },
+        {
+          "label": "worker:renderOverlayChunkBatch",
+          "count": 1,
+          "avgMs": 290,
+          "maxMs": 290,
+          "totalMs": 290,
+          "lastMs": 290
+        },
+        {
+          "label": "canvasUpload:drawImage",
+          "count": 4,
+          "avgMs": 23,
+          "maxMs": 45,
+          "totalMs": 92,
+          "lastMs": 10
+        },
+        {
+          "label": "overlay:mergeCaps:side8192:area40000000:gpu16384",
+          "count": 5,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mergeEligible",
+          "count": 4,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mountMerged",
+          "count": 4,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mergeBlocked",
+          "count": 1,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mergeBlocked:overSideCap:src2069x1497@5=merged10345x7485",
+          "count": 1,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mountPerTile",
+          "count": 6,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        }
+      ]
+    },
+    {
+      "t": 11.702,
+      "stats": [
+        {
+          "label": "worker:extractChunkSamples",
+          "count": 20,
+          "avgMs": 397.75,
+          "maxMs": 820,
+          "totalMs": 7955,
+          "lastMs": 90
+        },
+        {
+          "label": "createOverlayOnMap",
+          "count": 2,
+          "avgMs": 2681.5,
+          "maxMs": 4765,
+          "totalMs": 5363,
+          "lastMs": 4765
+        },
+        {
+          "label": "overlay:phase3",
+          "count": 2,
+          "avgMs": 1699,
+          "maxMs": 3371,
+          "totalMs": 3398,
+          "lastMs": 3371
+        },
+        {
+          "label": "overlay:phase1",
+          "count": 2,
+          "avgMs": 981,
+          "maxMs": 1392,
+          "totalMs": 1962,
+          "lastMs": 1392
+        },
+        {
+          "label": "worker:renderAndMergeOverlayChunks",
+          "count": 4,
+          "avgMs": 348.25,
+          "maxMs": 435,
+          "totalMs": 1393,
+          "lastMs": 186
+        },
+        {
+          "label": "canvasUpload:bitmapDecode",
+          "count": 6,
+          "avgMs": 71.16666666666667,
+          "maxMs": 162,
+          "totalMs": 427,
+          "lastMs": 27
+        },
+        {
+          "label": "canvasUpload:bitmapBlit",
+          "count": 6,
+          "avgMs": 62.166666666666664,
+          "maxMs": 145,
+          "totalMs": 373,
+          "lastMs": 17
+        },
+        {
+          "label": "worker:renderOverlayChunkBatch",
+          "count": 1,
+          "avgMs": 290,
+          "maxMs": 290,
+          "totalMs": 290,
+          "lastMs": 290
+        },
+        {
+          "label": "canvasUpload:drawImage",
+          "count": 4,
+          "avgMs": 23,
+          "maxMs": 45,
+          "totalMs": 92,
+          "lastMs": 10
+        },
+        {
+          "label": "overlay:mergeCaps:side8192:area40000000:gpu16384",
+          "count": 5,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mergeEligible",
+          "count": 4,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mountMerged",
+          "count": 4,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mergeBlocked",
+          "count": 1,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mergeBlocked:overSideCap:src2069x1497@5=merged10345x7485",
+          "count": 1,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mountPerTile",
+          "count": 6,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        }
+      ]
+    },
+    {
+      "t": 13.703,
+      "stats": [
+        {
+          "label": "worker:extractChunkSamples",
+          "count": 20,
+          "avgMs": 397.75,
+          "maxMs": 820,
+          "totalMs": 7955,
+          "lastMs": 90
+        },
+        {
+          "label": "createOverlayOnMap",
+          "count": 2,
+          "avgMs": 2681.5,
+          "maxMs": 4765,
+          "totalMs": 5363,
+          "lastMs": 4765
+        },
+        {
+          "label": "overlay:phase3",
+          "count": 2,
+          "avgMs": 1699,
+          "maxMs": 3371,
+          "totalMs": 3398,
+          "lastMs": 3371
+        },
+        {
+          "label": "overlay:phase1",
+          "count": 2,
+          "avgMs": 981,
+          "maxMs": 1392,
+          "totalMs": 1962,
+          "lastMs": 1392
+        },
+        {
+          "label": "worker:renderAndMergeOverlayChunks",
+          "count": 4,
+          "avgMs": 348.25,
+          "maxMs": 435,
+          "totalMs": 1393,
+          "lastMs": 186
+        },
+        {
+          "label": "canvasUpload:bitmapDecode",
+          "count": 6,
+          "avgMs": 71.16666666666667,
+          "maxMs": 162,
+          "totalMs": 427,
+          "lastMs": 27
+        },
+        {
+          "label": "canvasUpload:bitmapBlit",
+          "count": 6,
+          "avgMs": 62.166666666666664,
+          "maxMs": 145,
+          "totalMs": 373,
+          "lastMs": 17
+        },
+        {
+          "label": "worker:renderOverlayChunkBatch",
+          "count": 1,
+          "avgMs": 290,
+          "maxMs": 290,
+          "totalMs": 290,
+          "lastMs": 290
+        },
+        {
+          "label": "canvasUpload:drawImage",
+          "count": 4,
+          "avgMs": 23,
+          "maxMs": 45,
+          "totalMs": 92,
+          "lastMs": 10
+        },
+        {
+          "label": "overlay:mergeCaps:side8192:area40000000:gpu16384",
+          "count": 5,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mergeEligible",
+          "count": 4,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mountMerged",
+          "count": 4,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mergeBlocked",
+          "count": 1,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mergeBlocked:overSideCap:src2069x1497@5=merged10345x7485",
+          "count": 1,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mountPerTile",
+          "count": 6,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        }
+      ]
+    },
+    {
+      "t": 15.708,
+      "stats": [
+        {
+          "label": "worker:extractChunkSamples",
+          "count": 20,
+          "avgMs": 397.75,
+          "maxMs": 820,
+          "totalMs": 7955,
+          "lastMs": 90
+        },
+        {
+          "label": "createOverlayOnMap",
+          "count": 2,
+          "avgMs": 2681.5,
+          "maxMs": 4765,
+          "totalMs": 5363,
+          "lastMs": 4765
+        },
+        {
+          "label": "overlay:phase3",
+          "count": 2,
+          "avgMs": 1699,
+          "maxMs": 3371,
+          "totalMs": 3398,
+          "lastMs": 3371
+        },
+        {
+          "label": "overlay:phase1",
+          "count": 2,
+          "avgMs": 981,
+          "maxMs": 1392,
+          "totalMs": 1962,
+          "lastMs": 1392
+        },
+        {
+          "label": "worker:renderAndMergeOverlayChunks",
+          "count": 4,
+          "avgMs": 348.25,
+          "maxMs": 435,
+          "totalMs": 1393,
+          "lastMs": 186
+        },
+        {
+          "label": "canvasUpload:bitmapDecode",
+          "count": 6,
+          "avgMs": 71.16666666666667,
+          "maxMs": 162,
+          "totalMs": 427,
+          "lastMs": 27
+        },
+        {
+          "label": "canvasUpload:bitmapBlit",
+          "count": 6,
+          "avgMs": 62.166666666666664,
+          "maxMs": 145,
+          "totalMs": 373,
+          "lastMs": 17
+        },
+        {
+          "label": "worker:renderOverlayChunkBatch",
+          "count": 1,
+          "avgMs": 290,
+          "maxMs": 290,
+          "totalMs": 290,
+          "lastMs": 290
+        },
+        {
+          "label": "canvasUpload:drawImage",
+          "count": 4,
+          "avgMs": 23,
+          "maxMs": 45,
+          "totalMs": 92,
+          "lastMs": 10
+        },
+        {
+          "label": "overlay:mergeCaps:side8192:area40000000:gpu16384",
+          "count": 5,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mergeEligible",
+          "count": 4,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mountMerged",
+          "count": 4,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mergeBlocked",
+          "count": 1,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mergeBlocked:overSideCap:src2069x1497@5=merged10345x7485",
+          "count": 1,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mountPerTile",
+          "count": 6,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        }
+      ]
+    },
+    {
+      "t": 17.721,
+      "stats": [
+        {
+          "label": "worker:extractChunkSamples",
+          "count": 20,
+          "avgMs": 397.75,
+          "maxMs": 820,
+          "totalMs": 7955,
+          "lastMs": 90
+        },
+        {
+          "label": "createOverlayOnMap",
+          "count": 2,
+          "avgMs": 2681.5,
+          "maxMs": 4765,
+          "totalMs": 5363,
+          "lastMs": 4765
+        },
+        {
+          "label": "overlay:phase3",
+          "count": 2,
+          "avgMs": 1699,
+          "maxMs": 3371,
+          "totalMs": 3398,
+          "lastMs": 3371
+        },
+        {
+          "label": "overlay:phase1",
+          "count": 2,
+          "avgMs": 981,
+          "maxMs": 1392,
+          "totalMs": 1962,
+          "lastMs": 1392
+        },
+        {
+          "label": "worker:renderAndMergeOverlayChunks",
+          "count": 4,
+          "avgMs": 348.25,
+          "maxMs": 435,
+          "totalMs": 1393,
+          "lastMs": 186
+        },
+        {
+          "label": "canvasUpload:bitmapDecode",
+          "count": 6,
+          "avgMs": 71.16666666666667,
+          "maxMs": 162,
+          "totalMs": 427,
+          "lastMs": 27
+        },
+        {
+          "label": "canvasUpload:bitmapBlit",
+          "count": 6,
+          "avgMs": 62.166666666666664,
+          "maxMs": 145,
+          "totalMs": 373,
+          "lastMs": 17
+        },
+        {
+          "label": "worker:renderOverlayChunkBatch",
+          "count": 1,
+          "avgMs": 290,
+          "maxMs": 290,
+          "totalMs": 290,
+          "lastMs": 290
+        },
+        {
+          "label": "canvasUpload:drawImage",
+          "count": 4,
+          "avgMs": 23,
+          "maxMs": 45,
+          "totalMs": 92,
+          "lastMs": 10
+        },
+        {
+          "label": "overlay:mergeCaps:side8192:area40000000:gpu16384",
+          "count": 5,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mergeEligible",
+          "count": 4,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mountMerged",
+          "count": 4,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mergeBlocked",
+          "count": 1,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mergeBlocked:overSideCap:src2069x1497@5=merged10345x7485",
+          "count": 1,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mountPerTile",
+          "count": 6,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        }
+      ]
+    },
+    {
+      "t": 17.823,
+      "stats": [
+        {
+          "label": "worker:extractChunkSamples",
+          "count": 20,
+          "avgMs": 397.75,
+          "maxMs": 820,
+          "totalMs": 7955,
+          "lastMs": 90
+        },
+        {
+          "label": "createOverlayOnMap",
+          "count": 2,
+          "avgMs": 2681.5,
+          "maxMs": 4765,
+          "totalMs": 5363,
+          "lastMs": 4765
+        },
+        {
+          "label": "overlay:phase3",
+          "count": 2,
+          "avgMs": 1699,
+          "maxMs": 3371,
+          "totalMs": 3398,
+          "lastMs": 3371
+        },
+        {
+          "label": "overlay:phase1",
+          "count": 2,
+          "avgMs": 981,
+          "maxMs": 1392,
+          "totalMs": 1962,
+          "lastMs": 1392
+        },
+        {
+          "label": "worker:renderAndMergeOverlayChunks",
+          "count": 4,
+          "avgMs": 348.25,
+          "maxMs": 435,
+          "totalMs": 1393,
+          "lastMs": 186
+        },
+        {
+          "label": "canvasUpload:bitmapDecode",
+          "count": 6,
+          "avgMs": 71.16666666666667,
+          "maxMs": 162,
+          "totalMs": 427,
+          "lastMs": 27
+        },
+        {
+          "label": "canvasUpload:bitmapBlit",
+          "count": 6,
+          "avgMs": 62.166666666666664,
+          "maxMs": 145,
+          "totalMs": 373,
+          "lastMs": 17
+        },
+        {
+          "label": "worker:renderOverlayChunkBatch",
+          "count": 1,
+          "avgMs": 290,
+          "maxMs": 290,
+          "totalMs": 290,
+          "lastMs": 290
+        },
+        {
+          "label": "canvasUpload:drawImage",
+          "count": 4,
+          "avgMs": 23,
+          "maxMs": 45,
+          "totalMs": 92,
+          "lastMs": 10
+        },
+        {
+          "label": "overlay:mergeCaps:side8192:area40000000:gpu16384",
+          "count": 5,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mergeEligible",
+          "count": 4,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mountMerged",
+          "count": 4,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mergeBlocked",
+          "count": 1,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mergeBlocked:overSideCap:src2069x1497@5=merged10345x7485",
+          "count": 1,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        },
+        {
+          "label": "overlay:mountPerTile",
+          "count": 6,
+          "avgMs": 0,
+          "maxMs": 0,
+          "totalMs": 0,
+          "lastMs": 0
+        }
+      ]
+    }
+  ]
+}
