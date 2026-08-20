@@ -1,7 +1,7 @@
 ﻿import Template from "./Template";
 import { getTemplateMaskPoints } from './templateMaskPoints.js';
 import { profiler } from './profiler.js';
-import { numberToEncoded, cleanUpCanvas, rgbToMeta, sortByOptions, testCanvasSize, getCurrentColor, sleep, createBitmapPreservingPixels, consoleLog, uint8ToBase64, setDebugLoggingEnabled as setGlobalDebugLoggingEnabled } from "./utils";
+import { numberToEncoded, cleanUpCanvas, rgbToMeta, sortByOptions, testCanvasSize, getCurrentColor, sleep, createBitmapPreservingPixels, consoleLog, consoleWarn, uint8ToBase64, base64ToUint8, TEMPLATE_BUFFER_GZIP_PREFIX, canCompressTemplateBuffers, compressTemplateBufferPayload, setDebugLoggingEnabled as setGlobalDebugLoggingEnabled } from "./utils";
 import { themeList, addTemplateCanvas, addTemplateFullCanvas, removeLayer, removeTemplateCanvasSources, forceRefreshTiles, coordsGeoCoordsToTileCoords, getMapBounds, doAfterMapFound, isMapTilerLoaded, bmCanvas, getMountedTemplateCanvasSourceIDs, setUsageLayersOpacity } from './utilsMaptiler.js';
 import {
   buildMaskRowSpans,
@@ -17,6 +17,7 @@ import {
   renderSampleDataToImage,
 } from './templateChunkUtils.js';
 import { templateWorkerManager } from './templateWorkerManager.js';
+import { canUseTemplateBufferDb, readTemplateBuffers, writeTemplateBuffers, deleteTemplateBuffers, listTemplateBufferKeys, reportTemplateBufferBytes, estimateStorageQuota } from './templateBufferStore.js';
 
 const DEFAULT_TEMPLATE_SYNC_STREAM = 'root';
 const DEFAULT_TEMPLATE_EXAMPLE_LIMIT = 32;
@@ -160,34 +161,30 @@ const normalizeTimeArchiveMeta = (value) => {
 const templateJsonReplacer = (_key, value) => (
   value instanceof Uint8Array ? uint8ToBase64(value) : value
 );
-/** Marker prefix for a gzip-compressed, base64-wrapped buffer payload. Self-describing, so a
- * stored payload identifies its own encoding: anything without this prefix is plain JSON written
- * before compression existed and is parsed directly.
- * @since 0.87.79
- */
-const TEMPLATE_BUFFER_GZIP_PREFIX = 'GZ1:';
+/** Storage keys whose read failed or timed out; surfaced alongside the boot diagnostics. */
+const templateBufferReadFailures = new Set();
 
-/** True when the browser exposes the native compression streams this layer needs. */
-const canCompressTemplateBuffers = () => (
-  typeof CompressionStream === 'function' && typeof DecompressionStream === 'function'
-);
-
-/** gzip a string and wrap it in base64 so it can ride the JSON-only GM storage channel.
- * The payload is a columnar sample encoding (see encodeChunkSampleBytes) where each plane is
- * highly self-similar, so DEFLATE does far better here than it would on interleaved records.
- * Returns null when compression is unavailable or fails, so callers fall back to plain JSON.
- * @since 0.87.79
+/** GM.getValue that cannot strand the caller.
+ * Tampermonkey moves storage over Chrome's extension messaging channel, which rejects payloads
+ * over 64MiB. An oversized key written by an older build makes the read reject *or* never settle
+ * at all. Every buffer read below sits on the boot path, so an unsettled promise there silently
+ * kills the whole script. Resolving to the fallback instead lets the template be skipped and the
+ * UI (and the getStorageReport diagnostic) come up so the bad data can be found and removed.
+ * @since 0.87.80
  */
-async function compressTemplateBufferPayload(json) {
-  if (!canCompressTemplateBuffers()) return null;
-  try {
-    const stream = new Blob([json]).stream().pipeThrough(new CompressionStream('gzip'));
-    const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
-    return TEMPLATE_BUFFER_GZIP_PREFIX + uint8ToBase64(bytes);
-  } catch (_) {
-    return null;
+const readTemplateStorageValue = (key, fallback = '', timeoutMs = 15000) => Promise.race([
+  Promise.resolve().then(() => GM.getValue(key, fallback)),
+  new Promise((resolve) => setTimeout(() => resolve(undefined), timeoutMs)),
+]).then((value) => {
+  if (value === undefined || value === null) {
+    templateBufferReadFailures.add(key);
+    return fallback;
   }
-}
+  return value;
+}).catch(() => {
+  templateBufferReadFailures.add(key);
+  return fallback;
+});
 
 /** Reverses compressTemplateBufferPayload, passing uncompressed payloads through untouched. */
 async function decompressTemplateBufferPayload(payload) {
@@ -548,7 +545,7 @@ export default class TemplateManager {
   /** Stores the JSON object of the loaded templates into TamperMonkey (GreaseMonkey) storage.
    * @since 0.72.7
    */
-  async storeTemplates() {
+  async storeTemplates(options = {}) {
     // An explicit write supersedes any queued debounced one.
     if (this._storeTemplatesTimer) {
       clearTimeout(this._storeTemplatesTimer);
@@ -559,7 +556,7 @@ export default class TemplateManager {
     // Buffers live in their own per-template keys and only get rewritten when their contents
     // actually changed, so a metadata-only save (an enabled flip, a palette toggle) never touches
     // them. See _persistTemplateBuffers for how "changed" is decided.
-    await this._persistChangedTemplateBuffers();
+    await this._persistChangedTemplateBuffers(options);
 
     const data = this.getPersistableTemplatesJSON();
     // Metadata only — no Uint8Arrays reach this — so stringify on the main thread is cheap and
@@ -579,7 +576,7 @@ export default class TemplateManager {
    * @returns {Promise<{parts:number}|object|null>}
    */
   async _readTemplateBufferManifest(storageKey) {
-    const raw = await GM.getValue(this._getTemplateBuffersStorageKey(storageKey), '');
+    const raw = await readTemplateStorageValue(this._getTemplateBuffersStorageKey(storageKey), '');
     if (!raw) return null;
     try {
       return JSON.parse(raw);
@@ -610,7 +607,7 @@ export default class TemplateManager {
           ? this._getTemplateBuffersStorageKey(storageKey, index)
           : this._getTemplateBuffersStorageKey(storageKey);
         try {
-          const slice = await GM.getValue(key, '');
+          const slice = await readTemplateStorageValue(key, '');
           if (!slice) { failedParts.push(index); continue; }
           if (index === 0 && slice.startsWith(TEMPLATE_BUFFER_GZIP_PREFIX)) compressed = true;
           bytes += slice.length; // base64 payload: characters ~= bytes
@@ -633,19 +630,112 @@ export default class TemplateManager {
     const metadata = JSON.stringify(this.getPersistableTemplatesJSON(), templateJsonReplacer).length;
     total += metadata;
     rows.sort((a, b) => b.bytes - a.bytes);
+
+    // IndexedDB bytes are reported separately: they do NOT cross the extension messaging
+    // channel, so they never count toward the 64MiB ceiling that breaks startup. Only the GM
+    // total above does.
+    let indexedDb = { available: canUseTemplateBufferDb(), templates: [], totalBytes: 0 };
+    if (canUseTemplateBufferDb()) {
+      try {
+        const idbRows = await reportTemplateBufferBytes();
+        let idbTotal = 0;
+        for (const row of idbRows) idbTotal += row.bytes;
+        indexedDb = {
+          available: true,
+          // `persisted: false` on mobile means these buffers can be evicted by the browser.
+          quota: await estimateStorageQuota(),
+          totalBytes: idbTotal,
+          totalMiB: (idbTotal / 1048576).toFixed(2),
+          templates: idbRows
+            .map((row) => ({
+              ...row,
+              name: this.templatesJSON?.templates?.[row.storageKey]?.name ?? row.storageKey,
+              MiB: (row.bytes / 1048576).toFixed(2),
+            }))
+            .sort((a, b) => b.bytes - a.bytes),
+        };
+      } catch (error) {
+        indexedDb = { available: true, error: error?.message || String(error), templates: [], totalBytes: 0 };
+      }
+    }
+
     return {
-      total,
-      totalMiB: (total / 1048576).toFixed(2),
+      gmStorageTotal: total,
+      gmStorageTotalMiB: (total / 1048576).toFixed(2),
       metadataBytes: metadata,
       metadataMiB: (metadata / 1048576).toFixed(2),
+      // Only GM storage rides the capped channel.
       overChromeLimit: total > 64 * 1048576,
+      legacyGmBuffersRemaining: rows.filter((row) => row.bytes > 0).length,
       compressionAvailable: canCompressTemplateBuffers(),
+      indexedDb,
       templates: rows,
     };
   }
 
-  /** Removes a template's buffer manifest and every payload slice it refers to. */
-  async _deleteTemplateBufferKeys(storageKey, knownParts = null) {
+  /** Deletes buffer keys that no live template refers to.
+   * The read guard keeps an oversized legacy key from stranding boot, but the key itself stays in
+   * storage and keeps failing on every load. This is the cleanup: it enumerates every
+   * `bmTemplateBuffers:*` key, keeps only those belonging to a template still present in
+   * `templatesJSON` (and within that template's declared part count), and deletes the rest.
+   * Reachable from the page console as `RusMarble.purgeStorage()`.
+   * @returns {Promise<{deleted:string[], kept:number, unavailable?:boolean}>}
+   * @since 0.87.80
+   */
+  async purgeOrphanTemplateBuffers() {
+    if (typeof GM.listValues !== 'function' || typeof GM.deleteValue !== 'function') {
+      return { deleted: [], kept: 0, unavailable: true };
+    }
+    const keys = await GM.listValues().catch(() => []);
+    const live = new Set();
+    for (const storageKey of Object.keys(this.templatesJSON?.templates || {})) {
+      const manifestKey = this._getTemplateBuffersStorageKey(storageKey);
+      live.add(manifestKey);
+      // The manifest read is guarded, so a hostile key here degrades to "no parts" rather than
+      // hanging; its slices then look orphaned and get swept, which is the desired outcome.
+      const manifest = await this._readTemplateBufferManifest(storageKey).catch(() => null);
+      const parts = Number.isFinite(manifest?.parts) ? manifest.parts : 0;
+      for (let index = 0; index < parts; index++) {
+        live.add(this._getTemplateBuffersStorageKey(storageKey, index));
+      }
+    }
+    const deleted = [];
+    for (const key of keys) {
+      if (typeof key !== 'string' || !key.startsWith('bmTemplateBuffers:')) continue;
+      if (live.has(key)) continue;
+      try {
+        await GM.deleteValue(key);
+        deleted.push(key);
+      } catch (_) {}
+    }
+
+    // Sweep IndexedDB records whose template no longer exists.
+    const deletedFromDb = [];
+    if (canUseTemplateBufferDb()) {
+      const liveTemplates = new Set(Object.keys(this.templatesJSON?.templates || {}));
+      try {
+        for (const storageKey of await listTemplateBufferKeys()) {
+          if (liveTemplates.has(storageKey)) continue;
+          try {
+            await deleteTemplateBuffers(storageKey);
+            deletedFromDb.push(storageKey);
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
+
+    return {
+      deleted,
+      deletedFromIndexedDb: deletedFromDb,
+      kept: live.size,
+      readFailures: [...templateBufferReadFailures],
+    };
+  }
+
+  /** Removes a template's legacy GM-storage buffer manifest and every payload slice it refers to.
+   * Buffers now live in IndexedDB; this only cleans up what the GM-storage era left behind.
+   */
+  async _deleteLegacyTemplateBufferKeys(storageKey, knownParts = null) {
     if (typeof GM.deleteValue !== 'function') return;
     let parts = knownParts;
     if (parts === null) {
@@ -656,6 +746,14 @@ export default class TemplateManager {
       try { await GM.deleteValue(this._getTemplateBuffersStorageKey(storageKey, index)); } catch (_) {}
     }
     try { await GM.deleteValue(this._getTemplateBuffersStorageKey(storageKey)); } catch (_) {}
+  }
+
+  /** Removes a template's buffers from both stores. */
+  async _deleteTemplateBufferKeys(storageKey, knownParts = null) {
+    if (canUseTemplateBufferDb()) {
+      try { await deleteTemplateBuffers(storageKey); } catch (_) {}
+    }
+    await this._deleteLegacyTemplateBufferKeys(storageKey, knownParts);
   }
 
   /** A cheap stand-in for the buffer payload's identity: which chunks exist and how big each is.
@@ -679,7 +777,8 @@ export default class TemplateManager {
   }
 
   /** Writes the buffer blob for every template whose buffers changed since the last write. */
-  async _persistChangedTemplateBuffers() {
+  async _persistChangedTemplateBuffers(options = {}) {
+    const teardown = options?.teardown === true;
     if (!this._persistedBufferFingerprints) this._persistedBufferFingerprints = new Map();
     for (const template of (this.templatesArray || [])) {
       const storageKey = template?.storageKey;
@@ -692,50 +791,94 @@ export default class TemplateManager {
         tiles: template.getPersistableChunkBuffers?.(tileKeys) ?? {},
         samples: template.getPersistableChunkSampleBuffers?.(tileKeys) ?? {},
       };
-      // This one is genuinely large, so base64 + stringify goes to a worker when available.
+
+      // IndexedDB structured-clones the Uint8Arrays straight through: no base64, no
+      // JSON.stringify, no gzip, no chunking, and no worker round trip. That is why this path is
+      // both smaller on disk and fast enough to run inline during a teardown flush.
+      if (canUseTemplateBufferDb()) {
+        try {
+          await writeTemplateBuffers(storageKey, payload);
+          // Retire whatever the GM-storage era left behind for this template, so the two copies
+          // cannot both count against storage.
+          await this._deleteLegacyTemplateBufferKeys(storageKey);
+          this._persistedBufferFingerprints.set(storageKey, fingerprint);
+          continue;
+        } catch (error) {
+          consoleWarn('IndexedDB write failed; falling back to GM storage.', error);
+        }
+      }
+
+      // Fallback only: IndexedDB unavailable (or the write failed). This is the old GM-storage
+      // path, kept intact — it still carries the 64MiB aggregate risk, hence the fallback status.
       let json;
+      let alreadyCompressed = false;
       if (templateWorkerManager.canUseWorkers()) {
-        const result = await templateWorkerManager.runTask('serializeJson', { data: payload }).catch(() => null);
-        json = result?.json ?? JSON.stringify(payload, templateJsonReplacer);
+        const result = await templateWorkerManager
+          .runTask('serializeJson', { data: payload, compress: !teardown })
+          .catch(() => null);
+        if (result?.json) {
+          json = result.json;
+          alreadyCompressed = result.compressed === true;
+        } else {
+          json = JSON.stringify(payload, templateJsonReplacer);
+        }
       } else {
         json = JSON.stringify(payload, templateJsonReplacer);
       }
-      // GM.setValue crosses the extension messaging channel, which Chrome caps at 64MiB per
-      // message. A large template's base64 payload blows straight past that and the write fails
-      // with "Message exceeded maximum allowed size of 64MiB", so slice it into safe parts.
       const previousParts = Number.isFinite(this._persistedBufferParts?.get(storageKey))
         ? this._persistedBufferParts.get(storageKey)
         : (Number((await this._readTemplateBufferManifest(storageKey).catch(() => null))?.parts) || 0);
-
-      // NOTE: compression is deliberately NOT applied on write. storeTemplatesDebounced flushes
-      // on pagehide/beforeunload, and the extra async hops of CompressionStream do not complete
-      // during teardown — the GM.setValue never lands and the template is lost on reload.
-      // decompressTemplateBufferPayload still runs on read, so payloads written by the version
-      // that did compress here remain loadable.
-      const storedPayload = json;
+      const storedPayload = (teardown || alreadyCompressed)
+        ? json
+        : ((await compressTemplateBufferPayload(json)) ?? json);
 
       const partCount = Math.max(1, Math.ceil(storedPayload.length / TEMPLATE_BUFFER_CHUNK_CHARS));
       for (let index = 0; index < partCount; index++) {
         const slice = storedPayload.slice(index * TEMPLATE_BUFFER_CHUNK_CHARS, (index + 1) * TEMPLATE_BUFFER_CHUNK_CHARS);
         await GM.setValue(this._getTemplateBuffersStorageKey(storageKey, index), slice);
       }
-      // Write the manifest only after every slice landed, so an interrupted save leaves the old
-      // manifest pointing at a complete payload rather than a half-written one.
       await GM.setValue(this._getTemplateBuffersStorageKey(storageKey), JSON.stringify({ parts: partCount }));
-
-      // Drop slices left over from a previously larger payload.
       for (let index = partCount; index < previousParts; index++) {
         try { await GM.deleteValue?.(this._getTemplateBuffersStorageKey(storageKey, index)); } catch (_) {}
       }
-
       if (!this._persistedBufferParts) this._persistedBufferParts = new Map();
       this._persistedBufferParts.set(storageKey, partCount);
       this._persistedBufferFingerprints.set(storageKey, fingerprint);
     }
   }
 
-  /** Loads a template's buffers from its own storage keys. Returns null when absent. */
+  /** Loads a template's buffers, preferring IndexedDB and migrating legacy GM-storage data.
+   * Templates saved before the IndexedDB move still live in GM keys; the first successful read
+   * of one copies it across and deletes the originals, which is what actually drains the
+   * oversized GM storage that broke script startup.
+   * Returns null when absent.
+   */
   async _loadTemplateBuffers(storageKey) {
+    if (canUseTemplateBufferDb()) {
+      try {
+        const stored = await readTemplateBuffers(storageKey);
+        if (stored && (Object.keys(stored.tiles).length || Object.keys(stored.samples).length)) {
+          return stored;
+        }
+      } catch (error) {
+        consoleWarn('IndexedDB read failed; falling back to GM storage.', error);
+      }
+    }
+    const legacy = await this._loadLegacyTemplateBuffers(storageKey);
+    if (legacy && canUseTemplateBufferDb()) {
+      try {
+        await writeTemplateBuffers(storageKey, legacy);
+        await this._deleteLegacyTemplateBufferKeys(storageKey);
+        consoleLog(`Migrated template buffers to IndexedDB: ${storageKey}`);
+      } catch (error) {
+        consoleWarn('Failed to migrate template buffers to IndexedDB.', error);
+      }
+    }
+    return legacy;
+  }
+
+  /** The pre-IndexedDB reader: chunked (or single-blob) base64 payloads in GM storage. */
+  async _loadLegacyTemplateBuffers(storageKey) {
     try {
       const manifest = await this._readTemplateBufferManifest(storageKey);
       if (!manifest || typeof manifest !== 'object') return null;
@@ -744,7 +887,7 @@ export default class TemplateManager {
       if (Number.isFinite(manifest.parts)) {
         const slices = [];
         for (let index = 0; index < manifest.parts; index++) {
-          const slice = await GM.getValue(this._getTemplateBuffersStorageKey(storageKey, index), '');
+          const slice = await readTemplateStorageValue(this._getTemplateBuffersStorageKey(storageKey, index), '');
           if (!slice) return null; // incomplete payload — treat as absent rather than corrupt
           slices.push(slice);
         }
@@ -802,7 +945,8 @@ export default class TemplateManager {
     }
     if (!this._storeTemplatesPending) return Promise.resolve();
     this._storeTemplatesPending = false;
-    return this.storeTemplates().catch(() => {});
+    // Teardown: skip compression so the write can land synchronously enough to survive unload.
+    return this.storeTemplates({ teardown: true }).catch(() => {});
   }
 
   getPersistableTemplatesJSON() {

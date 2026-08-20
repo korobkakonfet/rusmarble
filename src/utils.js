@@ -176,6 +176,32 @@ export function base64ToUint8(base64) {
   return array;
 }
 
+/** Marker prefix for a gzip-compressed, base64-wrapped template buffer payload.
+ * Shared so the worker (which writes it) and templateManager (which reads it) cannot drift.
+ * @since 0.87.80
+ */
+export const TEMPLATE_BUFFER_GZIP_PREFIX = 'GZ1:';
+
+/** True when this realm exposes the native compression streams. Available on workers too. */
+export const canCompressTemplateBuffers = () => (
+  typeof CompressionStream === 'function' && typeof DecompressionStream === 'function'
+);
+
+/** gzip a string and wrap it in base64 so it can ride the JSON-only GM storage channel.
+ * Returns null when unavailable or on failure, so callers fall back to the plain JSON.
+ * @since 0.87.80
+ */
+export async function compressTemplateBufferPayload(json) {
+  if (!canCompressTemplateBuffers()) return null;
+  try {
+    const stream = new Blob([json]).stream().pipeThrough(new CompressionStream('gzip'));
+    const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+    return TEMPLATE_BUFFER_GZIP_PREFIX + uint8ToBase64(bytes);
+  } catch (_) {
+    return null;
+  }
+}
+
 /** Returns the coordinate input fields
  * @returns {Element[]} The 4 coordinate Inputs
  * @since 0.74.0

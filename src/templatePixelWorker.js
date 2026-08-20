@@ -15,7 +15,7 @@ import {
   isFilterBitmapPixelsWasmAvailable,
 } from './templateFilterWasm.js';
 import { convertImageDataToWplacePalette, templatePalettePackedSet } from './templatePaletteConversion.js';
-import { uint8ToBase64 } from './utils.js';
+import { uint8ToBase64, compressTemplateBufferPayload } from './utils.js';
 
 const cloneDisplayedColorSet = (displayedColors) => (
   Array.isArray(displayedColors) ? new Set(displayedColors) : null
@@ -675,9 +675,18 @@ const handlers = {
     return { sampleData };
   },
 
-  serializeJson(payload) {
+  /** Serializes a buffer payload, and optionally gzips it, entirely off the main thread.
+   * Both passes are expensive over megabytes: JSON.stringify with the base64 replacer, and then
+   * the base64 of the compressed bytes. Doing them here keeps template creation from blocking
+   * the UI while it persists. `compress` is false for the pagehide flush, which has no time for
+   * the extra async hops.
+   */
+  async serializeJson(payload) {
     const jsonReplacer = (_key, value) => (value instanceof Uint8Array ? uint8ToBase64(value) : value);
-    return { json: JSON.stringify(payload.data, jsonReplacer) };
+    const json = JSON.stringify(payload.data, jsonReplacer);
+    if (payload.compress !== true) return { json, compressed: false };
+    const compressed = await compressTemplateBufferPayload(json);
+    return compressed ? { json: compressed, compressed: true } : { json, compressed: false };
   },
 
   findNearestUnpainted(payload) {
