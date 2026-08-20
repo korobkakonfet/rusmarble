@@ -2,6 +2,8 @@
  * @since 0.0.0
  */
 import "./polyfill.js";
+import { installGmStorageInstrumentation, getGmStorageLog } from './gmStorageInstrument.js';
+installGmStorageInstrumentation();
 import { profiler, initProfiler } from './profiler.js';
 import Overlay from './Overlay.js';
 // import Observers from './observers.js';
@@ -4835,7 +4837,7 @@ readBootStorageValue('bmTemplates', '{}').then(async storageTemplatesValue => {
     // The UI is up but some stored data never arrived — say so rather than silently showing
     // an empty template list, which reads as data loss.
     overlayMain.handleDisplayError(
-      `Storage failed to load (${bootStorageFailures.join(', ')}). Run getStorageReport() in the console — a template may exceed the 64MiB browser storage limit.`
+      `Storage failed to load (${bootStorageFailures.join(', ')}). Run getStorageReport() in the console — a template may exceed the 64MiB browser storage limit. purgeStorage() removes buffer data no template still uses.`
     );
   }
 }).catch((error) => {
@@ -9970,6 +9972,13 @@ async function buildOverlayMain() {
         case 'report-storage':
           dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: await templateManager.reportStorageUsage() });
           return;
+        case 'storage-log':
+          dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: getGmStorageLog() });
+          return;
+        case 'purge-storage':
+        case 'purge-template-buffers':
+          dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: await templateManager.purgeOrphanTemplateBuffers() });
+          return;
         case 'sync-toggle-list':
           syncToggleList();
           dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: 'Template state synced.' });
@@ -10045,6 +10054,8 @@ async function buildOverlayMain() {
         window.buildColorFilterList = () => sendRusMarbleCommand('build-color-filter-list');
         window.syncToggleList = () => sendRusMarbleCommand('sync-toggle-list');
         window.getStorageReport = () => sendRusMarbleCommand('storage-report');
+        window.purgeStorage = () => sendRusMarbleCommand('purge-storage');
+        window.storageLog = () => sendRusMarbleCommand('storage-log');
         window.debugPaletteShift = () => sendRusMarbleCommand('palette-shift-debug');
       })();
     `;
