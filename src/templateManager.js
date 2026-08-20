@@ -160,6 +160,45 @@ const normalizeTimeArchiveMeta = (value) => {
 const templateJsonReplacer = (_key, value) => (
   value instanceof Uint8Array ? uint8ToBase64(value) : value
 );
+/** Marker prefix for a gzip-compressed, base64-wrapped buffer payload. Self-describing, so a
+ * stored payload identifies its own encoding: anything without this prefix is plain JSON written
+ * before compression existed and is parsed directly.
+ * @since 0.87.79
+ */
+const TEMPLATE_BUFFER_GZIP_PREFIX = 'GZ1:';
+
+/** True when the browser exposes the native compression streams this layer needs. */
+const canCompressTemplateBuffers = () => (
+  typeof CompressionStream === 'function' && typeof DecompressionStream === 'function'
+);
+
+/** gzip a string and wrap it in base64 so it can ride the JSON-only GM storage channel.
+ * The payload is a columnar sample encoding (see encodeChunkSampleBytes) where each plane is
+ * highly self-similar, so DEFLATE does far better here than it would on interleaved records.
+ * Returns null when compression is unavailable or fails, so callers fall back to plain JSON.
+ * @since 0.87.79
+ */
+async function compressTemplateBufferPayload(json) {
+  if (!canCompressTemplateBuffers()) return null;
+  try {
+    const stream = new Blob([json]).stream().pipeThrough(new CompressionStream('gzip'));
+    const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+    return TEMPLATE_BUFFER_GZIP_PREFIX + uint8ToBase64(bytes);
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Reverses compressTemplateBufferPayload, passing uncompressed payloads through untouched. */
+async function decompressTemplateBufferPayload(payload) {
+  if (typeof payload !== 'string' || !payload.startsWith(TEMPLATE_BUFFER_GZIP_PREFIX)) {
+    return payload; // pre-compression payload: already plain JSON
+  }
+  const bytes = base64ToUint8(payload.slice(TEMPLATE_BUFFER_GZIP_PREFIX.length));
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+  return await new Response(stream).text();
+}
+
 const paintPixelsToCanvas = (pixels, width, height) => {
   let canvas = new OffscreenCanvas(width, height);
   const context = canvas.getContext('2d');
@@ -549,6 +588,62 @@ export default class TemplateManager {
     }
   }
 
+  /** Measures how much GM storage each template's buffers occupy.
+   * Diagnostic for "Message exceeded maximum allowed size of 64MiB": Tampermonkey moves storage
+   * over Chrome's extension messaging channel. Reports per-template and total bytes, flags any
+   * slice that fails to read back, and reports the compressed-vs-raw split.
+   * @returns {Promise<object>}
+   * @since 0.87.79
+   */
+  async reportStorageUsage() {
+    const rows = [];
+    let total = 0;
+    const storageKeys = Object.keys(this.templatesJSON?.templates || {});
+    for (const storageKey of storageKeys) {
+      const manifest = await this._readTemplateBufferManifest(storageKey).catch(() => null);
+      const parts = Number.isFinite(manifest?.parts) ? manifest.parts : (manifest ? 1 : 0);
+      let bytes = 0;
+      let compressed = false;
+      const failedParts = [];
+      for (let index = 0; index < parts; index++) {
+        const key = Number.isFinite(manifest?.parts)
+          ? this._getTemplateBuffersStorageKey(storageKey, index)
+          : this._getTemplateBuffersStorageKey(storageKey);
+        try {
+          const slice = await GM.getValue(key, '');
+          if (!slice) { failedParts.push(index); continue; }
+          if (index === 0 && slice.startsWith(TEMPLATE_BUFFER_GZIP_PREFIX)) compressed = true;
+          bytes += slice.length; // base64 payload: characters ~= bytes
+        } catch (_) {
+          failedParts.push(index);
+        }
+      }
+      total += bytes;
+      rows.push({
+        name: this.templatesJSON?.templates?.[storageKey]?.name ?? storageKey,
+        storageKey,
+        parts,
+        bytes,
+        MiB: (bytes / 1048576).toFixed(2),
+        compressed,
+        failedParts,
+      });
+    }
+
+    const metadata = JSON.stringify(this.getPersistableTemplatesJSON(), templateJsonReplacer).length;
+    total += metadata;
+    rows.sort((a, b) => b.bytes - a.bytes);
+    return {
+      total,
+      totalMiB: (total / 1048576).toFixed(2),
+      metadataBytes: metadata,
+      metadataMiB: (metadata / 1048576).toFixed(2),
+      overChromeLimit: total > 64 * 1048576,
+      compressionAvailable: canCompressTemplateBuffers(),
+      templates: rows,
+    };
+  }
+
   /** Removes a template's buffer manifest and every payload slice it refers to. */
   async _deleteTemplateBufferKeys(storageKey, knownParts = null) {
     if (typeof GM.deleteValue !== 'function') return;
@@ -612,9 +707,16 @@ export default class TemplateManager {
         ? this._persistedBufferParts.get(storageKey)
         : (Number((await this._readTemplateBufferManifest(storageKey).catch(() => null))?.parts) || 0);
 
-      const partCount = Math.max(1, Math.ceil(json.length / TEMPLATE_BUFFER_CHUNK_CHARS));
+      // NOTE: compression is deliberately NOT applied on write. storeTemplatesDebounced flushes
+      // on pagehide/beforeunload, and the extra async hops of CompressionStream do not complete
+      // during teardown — the GM.setValue never lands and the template is lost on reload.
+      // decompressTemplateBufferPayload still runs on read, so payloads written by the version
+      // that did compress here remain loadable.
+      const storedPayload = json;
+
+      const partCount = Math.max(1, Math.ceil(storedPayload.length / TEMPLATE_BUFFER_CHUNK_CHARS));
       for (let index = 0; index < partCount; index++) {
-        const slice = json.slice(index * TEMPLATE_BUFFER_CHUNK_CHARS, (index + 1) * TEMPLATE_BUFFER_CHUNK_CHARS);
+        const slice = storedPayload.slice(index * TEMPLATE_BUFFER_CHUNK_CHARS, (index + 1) * TEMPLATE_BUFFER_CHUNK_CHARS);
         await GM.setValue(this._getTemplateBuffersStorageKey(storageKey, index), slice);
       }
       // Write the manifest only after every slice landed, so an interrupted save leaves the old
@@ -646,7 +748,9 @@ export default class TemplateManager {
           if (!slice) return null; // incomplete payload — treat as absent rather than corrupt
           slices.push(slice);
         }
-        parsed = JSON.parse(slices.join(''));
+        // Payloads written before compression existed are plain JSON; the prefix check inside
+        // decompressTemplateBufferPayload passes those through unchanged.
+        parsed = JSON.parse(await decompressTemplateBufferPayload(slices.join('')));
         if (!this._persistedBufferParts) this._persistedBufferParts = new Map();
         this._persistedBufferParts.set(storageKey, manifest.parts);
       } else {

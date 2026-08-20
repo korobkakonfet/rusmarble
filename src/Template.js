@@ -25,6 +25,7 @@ import {
 } from './templatePaletteConversion.js';
 export { templatePaletteConversionDefaults, normalizeTemplatePaletteConversionOptions, convertImageDataToWplacePalette };
 import { templateWorkerManager } from './templateWorkerManager.js';
+import { profiler } from './profiler.js';
 
 const packRgb = (r, g, b) => ((r << 16) | (g << 8) | b) >>> 0;
 const TEMPLATE_DEFACE_PACKED = packRgb(TEMPLATE_DEFACE_RGB[0], TEMPLATE_DEFACE_RGB[1], TEMPLATE_DEFACE_RGB[2]);
@@ -48,6 +49,17 @@ const renderPixelsToCanvas = (pixels, width, height) => {
  * @class Template
  * @since 0.65.2
  */
+/** Notified when a template lazily extracts chunk samples that were not already persisted, so
+ * the manager can schedule a (debounced) write-back. Set once by templateManager.
+ * @type {((template: Template) => void) | null}
+ */
+let chunkSampleCacheListener = null;
+
+/** @param {((template: Template) => void) | null} listener */
+export function setChunkSampleCacheListener(listener) {
+  chunkSampleCacheListener = typeof listener === 'function' ? listener : null;
+}
+
 export default class Template {
 
   /** The constructor for the {@link Template} class with enhanced pixel tracking.
@@ -239,7 +251,10 @@ export default class Template {
       ditherStrength: 0,
       antiDitherStrength: 0,
       alphaThreshold: 1,
-      useWasm: true,
+      // The JS path now resolves nearest-palette from a proven-exact RGB cube and benchmarks about
+      // twice as fast as the WASM module for identical output, so it is the one we want here. The
+      // WASM path is kept behind this flag and still measured by build/benchmark.js.
+      useWasm: false,
     };
     const pixelData = new Uint8ClampedArray(data);
     const workerResult = await templateWorkerManager.runTask('convertImageData', {
@@ -387,47 +402,58 @@ export default class Template {
     sampleCanvas = null;
 
     const center = (shreadSize - 1) >> 1;
-    let count = 0;
-    for (let y = 0, sampleY = center; y < logicalHeight; y++, sampleY += shreadSize) {
-      for (let x = 0, sampleX = center; x < logicalWidth; x++, sampleX += shreadSize) {
-        const idx = (sampleY * bitmap.width + sampleX) * 4;
-        if ((imageData[idx + 3] || 0) > 0) {
-          count++;
-        }
-      }
-    }
-    const sampleData = createChunkSampleData(logicalWidth, logicalHeight, count, false);
+    // Single pass over the logical grid. Allocating at the full grid size and trimming with
+    // subarray afterwards -- the same shape buildChunkSampleDataFromSource uses -- costs one
+    // transient allocation instead of a second full scan just to learn the count.
+    const sampleData = createChunkSampleData(logicalWidth, logicalHeight, logicalWidth * logicalHeight, false);
+    const outX = sampleData.x, outY = sampleData.y, outFlags = sampleData.flags;
+    const outR = sampleData.r, outG = sampleData.g, outB = sampleData.b, outA = sampleData.a;
     let writeIndex = 0;
     for (let y = 0, sampleY = center; y < logicalHeight; y++, sampleY += shreadSize) {
       for (let x = 0, sampleX = center; x < logicalWidth; x++, sampleX += shreadSize) {
         const idx = (sampleY * bitmap.width + sampleX) * 4;
         const alpha = imageData[idx + 3] || 0;
         if (alpha <= 0) continue;
-        sampleData.x[writeIndex] = x;
-        sampleData.y[writeIndex] = y;
+        outX[writeIndex] = x;
+        outY[writeIndex] = y;
         const rawR = imageData[idx], rawG = imageData[idx + 1], rawB = imageData[idx + 2];
         if (isDefaceRgb(rawR, rawG, rawB)) {
-          sampleData.r[writeIndex] = rawR;
-          sampleData.g[writeIndex] = rawG;
-          sampleData.b[writeIndex] = rawB;
-          sampleData.flags[writeIndex] = TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE;
+          outR[writeIndex] = rawR;
+          outG[writeIndex] = rawG;
+          outB[writeIndex] = rawB;
+          outFlags[writeIndex] = TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE;
         } else {
           const snapped = snapRgbToNearestPalette(rawR, rawG, rawB);
-          sampleData.r[writeIndex] = snapped.r;
-          sampleData.g[writeIndex] = snapped.g;
-          sampleData.b[writeIndex] = snapped.b;
-          sampleData.flags[writeIndex] = 0;
+          outR[writeIndex] = snapped.r;
+          outG[writeIndex] = snapped.g;
+          outB[writeIndex] = snapped.b;
+          outFlags[writeIndex] = 0;
         }
-        sampleData.a[writeIndex] = alpha;
+        outA[writeIndex] = alpha;
         writeIndex++;
       }
     }
+    if (writeIndex !== outX.length) {
+      sampleData.x = outX.subarray(0, writeIndex);
+      sampleData.y = outY.subarray(0, writeIndex);
+      sampleData.r = outR.subarray(0, writeIndex);
+      sampleData.g = outG.subarray(0, writeIndex);
+      sampleData.b = outB.subarray(0, writeIndex);
+      sampleData.a = outA.subarray(0, writeIndex);
+      sampleData.flags = outFlags.subarray(0, writeIndex);
+    }
+    sampleData.count = writeIndex;
     return sampleData;
   }
 
   async getChunkSamples(tileKey, options = {}) {
     const stored = this.decodeStoredChunkSamples(tileKey);
-    if (stored) return stored;
+    // Cache hit vs miss, so a profile shows whether the write-back is actually paying off across
+    // sessions. A warm session should be nearly all storeHit and no extractChunkSamples calls.
+    if (stored) {
+      profiler.record('samples:storeHit', 0);
+      return stored;
+    }
     if (this.chunkedSamples?.[tileKey]) return this.chunkedSamples[tileKey];
     if (options?.allowBitmapFallback === false) return null;
 
@@ -439,6 +465,7 @@ export default class Template {
     }
     const extractPromise = (async () => {
       const memorySaving = options?.memorySaving === true;
+      profiler.record('samples:extractMiss', 0);
       const bitmap = await this.getChunked(tileKey, memorySaving);
       if (!(bitmap instanceof ImageBitmap)) return null;
       const shreadSize = Math.max(1, Math.trunc(Number(this.shreadSize) || 1));
@@ -455,7 +482,25 @@ export default class Template {
         sampleData = this.extractChunkSamplesFromBitmap(bitmap);
         if (memorySaving) bitmap.close?.();
       }
-      if (sampleData) this.chunkedSamples[tileKey] = sampleData;
+      if (sampleData) {
+        this.chunkedSamples[tileKey] = sampleData;
+        // Remote templates are created with persistChunkSamples=false (they persist PNG tiles
+        // instead), so every session re-derived these samples from the PNGs — measured at ~8s of
+        // worker time across 20 tiles. Flip persistence on once we have paid that cost so the
+        // samples get written back and later sessions read them straight from storage.
+        // getPersistableChunkSampleBuffers already encodes in-memory samples when no buffer
+        // exists, so flipping the flag is all that is needed on the Template side.
+        this.persistChunkSamples = true;
+        // Encode into chunkedSamplesBuffer, not just chunkedSamples. The manager decides whether
+        // a template needs rewriting via _getTemplateBufferFingerprint, which only looks at
+        // chunkedSamplesBuffer — leaving the samples decoded-only would keep the fingerprint
+        // identical and the write-back would be skipped as "unchanged".
+        try {
+          if (!this.chunkedSamplesBuffer) this.chunkedSamplesBuffer = {};
+          this.chunkedSamplesBuffer[tileKey] = encodeChunkSampleBytes(sampleData);
+        } catch (_) { /* fall back to the encode-on-persist path in getPersistableChunkSampleBuffers */ }
+        try { chunkSampleCacheListener?.(this); } catch (_) {}
+      }
       return sampleData;
     })();
     this._pendingExtractions.set(tileKey, extractPromise);

@@ -430,5 +430,6 @@
   "bm-template-position-coord": "bm-7Y",
   "bm-template-position-dpad-hint": "bm-7b",
   "bm-template-position-joystick-": "bm-7h",
-  "bm-template-position-dpad": "bm-8p"
+  "bm-template-position-dpad": "bm-8p",
+  "bm-palette-shift-observed": "bm-8r"
 }

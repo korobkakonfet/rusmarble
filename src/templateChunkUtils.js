@@ -1,6 +1,7 @@
 import { uint8ToBase64, base64ToUint8, rgbToMeta } from './utils.js';
 import { findNearestUnpaintedPixelWithWasm, isTemplateNearestWasmAvailable } from './templateNearestWasm.js';
 import { collectProgressWithWasm, isCollectProgressWasmAvailable } from './templateProgressWasm.js';
+import { createExactNearestLookup } from './templateNearestPalette.js';
 
 export const TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE = 1;
 export const TEMPLATE_CHUNK_SAMPLE_HEADER_BYTES = 8;
@@ -56,7 +57,6 @@ const PALETTE_INDEX_OTHER = (() => {
 // Some browsers can slightly shift decoded tile RGB values (color management / canvas path differences).
 // Keep a tolerant per-channel delta so painted pixels are still recognized reliably.
 const LIVE_COLOR_MATCH_DELTA = 8;
-const NEAREST_PAINTABLE_CACHE_MAX = 16384;
 const getPaletteIndexForPackedRgb = (packedColor) => (
   paletteIndexByPackedRgb.get(packedColor) ?? PALETTE_INDEX_OTHER
 );
@@ -109,40 +109,25 @@ const wasmPaletteRgb = (() => {
   }
   return { r, g, b };
 })();
-const nearestPaintablePackedCache = new Map();
-const cacheNearestPaintablePacked = (packed, nearestPacked) => {
-  if (nearestPaintablePackedCache.size >= NEAREST_PAINTABLE_CACHE_MAX) {
-    const oldestKey = nearestPaintablePackedCache.keys().next().value;
-    if (oldestKey !== undefined) {
-      nearestPaintablePackedCache.delete(oldestKey);
-    }
+// Nearest-paintable snapping used to be a full palette scan behind an LRU Map, which cost a Map
+// hash on every hit and a 60-odd entry scan on every miss. The cube answers most colours with a
+// single array load and is proven to return the same index the scan would, including its tie-break.
+export const paintablePaletteChannels = {
+  r: wasmPaletteRgb.r,
+  g: wasmPaletteRgb.g,
+  b: wasmPaletteRgb.b,
+  count: paintablePaletteColors.length,
+};
+let nearestPaintableIndexOf = null;
+const getNearestPaintableLookup = () => {
+  if (!nearestPaintableIndexOf) {
+    nearestPaintableIndexOf = createExactNearestLookup(paintablePaletteChannels);
   }
-  nearestPaintablePackedCache.set(packed, nearestPacked);
-  return nearestPacked;
+  return nearestPaintableIndexOf;
 };
 const getNearestPaintablePacked = (r, g, b) => {
-  const packed = packRgb(r, g, b);
-  const cached = nearestPaintablePackedCache.get(packed);
-  if (cached !== undefined) {
-    return cached;
-  }
-  let bestPacked = packed;
-  let bestDistanceSq = Number.POSITIVE_INFINITY;
-  for (let index = 0; index < paintablePaletteColors.length; index++) {
-    const color = paintablePaletteColors[index];
-    const dr = color.r - r;
-    const dg = color.g - g;
-    const db = color.b - b;
-    const distanceSq = dr * dr + dg * dg + db * db;
-    if (distanceSq < bestDistanceSq) {
-      bestDistanceSq = distanceSq;
-      bestPacked = color.packed;
-      if (distanceSq === 0) {
-        break;
-      }
-    }
-  }
-  return cacheNearestPaintablePacked(packed, bestPacked);
+  if (!paintablePaletteColors.length) return packRgb(r, g, b);
+  return wasmPalettePackedColors[getNearestPaintableLookup()(r, g, b)];
 };
 export const snapRgbToNearestPalette = (r, g, b) => {
   const packed = getNearestPaintablePacked(r, g, b);
@@ -243,6 +228,62 @@ export const packTransparentEraseColor = (value) => {
   return packRgbaUint32(255, 0, 0, 255);
 };
 
+// A mask is reused across every sample of every tile, but the old code rebuilt its offsets with a
+// `.map()` on each call and then walked `maskRowSpans` -- an array of arrays -- once per sample.
+// Both forms are flattened here into typed arrays and memoised per (mask, drawSize, resultWidth),
+// so the per-sample inner loop is a strided walk over one Int32Array.
+const maskPlanCache = new WeakMap();
+
+const buildMaskPlan = (maskSource, usePointMode, drawSize, resultWidth) => {
+  if (usePointMode) {
+    // A plain packed-smi array, not a typed array: V8 keeps these in registers across the tiny
+    // inner loop and measured faster than Int32Array for the handful of offsets a mask has.
+    const offsets = [];
+    for (let index = 0; index < maskSource.length; index++) {
+      const point = maskSource[index];
+      offsets.push(point[1] * resultWidth + point[0]);
+    }
+    return { offsets, spans: null, solid: false };
+  }
+
+  // Flat (rowOffset, start, end) triples.
+  let spanCount = 0;
+  for (let row = 0; row < maskSource.length; row++) {
+    const spans = maskSource[row];
+    if (spans) spanCount += spans.length >> 1;
+  }
+  const flat = new Int32Array(spanCount * 3);
+  let write = 0;
+  let solid = maskSource.length === drawSize;
+  for (let row = 0; row < maskSource.length; row++) {
+    const spans = maskSource[row];
+    if (!spans || spans.length === 0) { solid = false; continue; }
+    if (spans.length !== 2 || spans[0] !== 0 || spans[1] !== drawSize) solid = false;
+    const rowOffset = row * resultWidth;
+    for (let index = 0; index < spans.length; index += 2) {
+      flat[write++] = rowOffset;
+      flat[write++] = spans[index];
+      flat[write++] = spans[index + 1];
+    }
+  }
+  return { offsets: null, spans: flat, solid };
+};
+
+const getMaskPlan = (maskSource, usePointMode, drawSize, resultWidth) => {
+  let byShape = maskPlanCache.get(maskSource);
+  if (!byShape) {
+    byShape = new Map();
+    maskPlanCache.set(maskSource, byShape);
+  }
+  const key = `${drawSize}:${resultWidth}`;
+  let plan = byShape.get(key);
+  if (!plan) {
+    plan = buildMaskPlan(maskSource, usePointMode, drawSize, resultWidth);
+    byShape.set(key, plan);
+  }
+  return plan;
+};
+
 export const renderSampleDataToImage = ({
   sampleData,
   imageData,
@@ -266,97 +307,101 @@ export const renderSampleDataToImage = ({
     imageData.data.byteLength >>> 2
   );
   const usePointMode = Array.isArray(maskPoints) && maskPoints.length > 0 && maskPoints.length <= 32;
-  const pointOffsets = usePointMode
-    ? maskPoints.map((point) => point[1] * safeResultWidth + point[0])
-    : null;
+  const maskSource = usePointMode ? maskPoints : maskRowSpans;
+  if (!maskSource) return imageData;
+  const plan = getMaskPlan(maskSource, usePointMode, safeDrawSize, safeResultWidth);
+  const offsets = plan.offsets;
+  const spans = plan.spans;
+  const offsetCount = offsets ? offsets.length : 0;
+  const spanCount = spans ? spans.length : 0;
+  const solid = plan.solid;
+
   const checkerDark = packRgbaUint32(0, 0, 0, 32);
   const checkerLight = packRgbaUint32(255, 255, 255, 32);
 
-  // Which logical positions the template actually covers. Inferring this from "the output block is
-  // still blank" cannot tell a transparent template pixel from one whose colour is filtered out,
-  // which is why the transparent-as-erase pass used to be skipped entirely whenever a colour filter
-  // was active. Recording coverage as we go makes it exact, so the flag works with filters on.
   const logicalWidth = sampleData.width | 0;
   const logicalHeight = sampleData.height | 0;
-  const covered = enforceTransparentAsDeface
-    ? new Uint8Array(Math.max(0, logicalWidth * logicalHeight))
-    : null;
+
+  // Which logical positions the template covers cannot be inferred from "the output block is still
+  // blank": that cannot tell a transparent template pixel from one whose colour is filtered out.
+  // Instead of recording coverage in a side bitmap and then sweeping every logical position, paint
+  // the erase mark everywhere up front and let covered positions overwrite it. One block row is
+  // built by hand and the rest of the raster is replicated from it with copyWithin, so the pass
+  // costs a memmove instead of logicalWidth * logicalHeight masked block writes.
+  if (enforceTransparentAsDeface) {
+    const erasePacked = packTransparentEraseColor(transparentEraseColor);
+    const rowPixels = Math.min(safeResultWidth, logicalWidth * safeDrawSize);
+    const stripHeight = Math.min(safeDrawSize, Math.max(0, (pixelData32.length / safeResultWidth) | 0));
+    if (rowPixels > 0 && stripHeight > 0) {
+      for (let baseX = 0; baseX < rowPixels; baseX += safeDrawSize) {
+        if (offsets) {
+          for (let index = 0; index < offsetCount; index++) {
+            pixelData32[baseX + offsets[index]] = erasePacked;
+          }
+        } else {
+          for (let index = 0; index < spanCount; index += 3) {
+            const rowOffset = baseX + spans[index];
+            pixelData32.fill(erasePacked, rowOffset + spans[index + 1], rowOffset + spans[index + 2]);
+          }
+        }
+      }
+      const stripPixels = stripHeight * safeResultWidth;
+      const totalRows = Math.min(logicalHeight * safeDrawSize, (pixelData32.length / safeResultWidth) | 0);
+      const totalPixels = totalRows * safeResultWidth;
+      for (let written = stripPixels; written < totalPixels; written += stripPixels) {
+        pixelData32.copyWithin(written, 0, Math.min(stripPixels, totalPixels - written));
+      }
+    }
+  }
+  // With the prefill in place, a sample that is skipped below has to clear its own block back to
+  // transparent, which is what the old code achieved by simply never marking it covered.
+  const clearSkipped = enforceTransparentAsDeface;
 
   for (let index = 0; index < sampleData.count; index++) {
     const alpha = sampleData.a[index];
     if (alpha < 1) continue;
-    if (covered) covered[sampleData.y[index] * logicalWidth + sampleData.x[index]] = 1;
     const baseX = sampleData.x[index] * safeDrawSize;
     const baseY = sampleData.y[index] * safeDrawSize;
+    const baseOffset = baseY * safeResultWidth + baseX;
     const red = sampleData.r[index];
     const green = sampleData.g[index];
     const blue = sampleData.b[index];
-    const isDefacePixel = (sampleData.flags[index] & TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) === TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE;
 
-    if (isDefacePixel) {
-      if (!includeDefaceCheckerboard) continue;
-      for (let offsetY = 0; offsetY < safeDrawSize; offsetY++) {
-        const rowOffset = (baseY + offsetY) * safeResultWidth + baseX;
-        const parity = offsetY & 1;
-        for (let offsetX = 0; offsetX < safeDrawSize; offsetX++) {
-          pixelData32[rowOffset + offsetX] = ((offsetX + parity) & 1) === 0 ? checkerDark : checkerLight;
-        }
-      }
-      continue;
-    }
-
-    if (displayedColorSet) {
-      const colorKey = getPaletteKeyForRgb(red, green, blue);
-      if (!displayedColorSet.has(colorKey)) continue;
-    }
-
-    const packedColor = packRgbaUint32(red, green, blue, alpha);
-    if (usePointMode) {
-      const baseOffset = baseY * safeResultWidth + baseX;
-      for (let pointIndex = 0; pointIndex < pointOffsets.length; pointIndex++) {
-        pixelData32[baseOffset + pointOffsets[pointIndex]] = packedColor;
-      }
-      continue;
-    }
-    for (let row = 0; row < maskRowSpans.length; row++) {
-      const spans = maskRowSpans[row];
-      if (!spans || spans.length === 0) continue;
-      const rowOffset = (baseY + row) * safeResultWidth + baseX;
-      for (let spanIndex = 0; spanIndex < spans.length; spanIndex += 2) {
-        pixelData32.fill(
-          packedColor,
-          rowOffset + spans[spanIndex],
-          rowOffset + spans[spanIndex + 1]
-        );
-      }
-    }
-  }
-
-  // Post-pass: mark every logical position the template does not cover — its transparent pixels —
-  // with a cross in the configured colour, drawn with the same mask as ordinary template pixels so
-  // it reads as part of the overlay rather than as a separate kind of mark.
-  if (covered) {
-    const erasePacked = packTransparentEraseColor(transparentEraseColor);
-    for (let ly = 0; ly < logicalHeight; ly++) {
-      const baseY = ly * safeDrawSize;
-      for (let lx = 0; lx < logicalWidth; lx++) {
-        if (covered[ly * logicalWidth + lx]) continue;
-        const baseX = lx * safeDrawSize;
-        if (usePointMode) {
-          const baseOffset = baseY * safeResultWidth + baseX;
-          for (let pointIndex = 0; pointIndex < pointOffsets.length; pointIndex++) {
-            pixelData32[baseOffset + pointOffsets[pointIndex]] = erasePacked;
-          }
-          continue;
-        }
-        for (let row = 0; row < maskRowSpans.length; row++) {
-          const spans = maskRowSpans[row];
-          if (!spans || spans.length === 0) continue;
-          const rowOffset = (baseY + row) * safeResultWidth + baseX;
-          for (let spanIndex = 0; spanIndex < spans.length; spanIndex += 2) {
-            pixelData32.fill(erasePacked, rowOffset + spans[spanIndex], rowOffset + spans[spanIndex + 1]);
+    let packedColor;
+    if ((sampleData.flags[index] & TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) === TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) {
+      if (includeDefaceCheckerboard) {
+        for (let offsetY = 0; offsetY < safeDrawSize; offsetY++) {
+          const rowOffset = baseOffset + offsetY * safeResultWidth;
+          const parity = offsetY & 1;
+          for (let offsetX = 0; offsetX < safeDrawSize; offsetX++) {
+            pixelData32[rowOffset + offsetX] = ((offsetX + parity) & 1) === 0 ? checkerDark : checkerLight;
           }
         }
+        continue;
+      }
+      if (!clearSkipped) continue;
+      packedColor = 0;
+    } else if (displayedColorSet && !displayedColorSet.has(getPaletteKeyForRgb(red, green, blue))) {
+      if (!clearSkipped) continue;
+      packedColor = 0;
+    } else {
+      packedColor = packRgbaUint32(red, green, blue, alpha);
+    }
+
+    if (offsets) {
+      for (let point = 0; point < offsetCount; point++) {
+        pixelData32[baseOffset + offsets[point]] = packedColor;
+      }
+    } else if (solid) {
+      // Every row of the mask is one full-width run, so the block is safeDrawSize flat fills.
+      for (let row = 0; row < safeDrawSize; row++) {
+        const rowOffset = baseOffset + row * safeResultWidth;
+        pixelData32.fill(packedColor, rowOffset, rowOffset + safeDrawSize);
+      }
+    } else {
+      for (let span = 0; span < spanCount; span += 3) {
+        const rowOffset = baseOffset + spans[span];
+        pixelData32.fill(packedColor, rowOffset + spans[span + 1], rowOffset + spans[span + 2]);
       }
     }
   }
@@ -728,18 +773,29 @@ export const buildChunkSampleDataFromSource = (
     : null;
   const maxCount = Math.max(0, Math.trunc(chunkWidth * chunkHeight));
   const sampleData = createChunkSampleData(chunkWidth, chunkHeight, maxCount, true);
+  // Hoisted out of the per-pixel loop: the normalizer test, and direct references to the output
+  // arrays so each write is an indexed store instead of a property load followed by a store.
+  const hasNormalizer = typeof sampleNormalizer === 'function';
+  const outX = sampleData.x;
+  const outY = sampleData.y;
+  const outR = sampleData.r;
+  const outG = sampleData.g;
+  const outB = sampleData.b;
+  const outA = sampleData.a;
+  const outFlags = sampleData.flags;
   let writeIndex = 0;
   for (let y = 0; y < chunkHeight; y++) {
+    const rowBase = ((sourceY + y) * imageWidth + sourceX) * 4;
     for (let x = 0; x < chunkWidth; x++) {
-      const idx = ((sourceY + y) * imageWidth + (sourceX + x)) * 4;
-      const alpha = sourceData[idx + 3] || 0;
-      if (alpha <= 0) continue;
+      const idx = rowBase + x * 4;
+      const alpha = sourceData[idx + 3];
+      if (!(alpha > 0)) continue;
       let red = sourceData[idx];
       let green = sourceData[idx + 1];
       let blue = sourceData[idx + 2];
       let alphaOut = alpha;
       let forcedDeface = false;
-      if (typeof sampleNormalizer === 'function' && alpha >= 64) {
+      if (hasNormalizer && alpha >= 64) {
         const normalized = sampleNormalizer(red, green, blue, alpha);
         if (normalized && Number.isFinite(normalized.r) && Number.isFinite(normalized.g) && Number.isFinite(normalized.b)) {
           red = Math.max(0, Math.min(255, Math.round(normalized.r)));
@@ -751,20 +807,23 @@ export const buildChunkSampleDataFromSource = (
           forcedDeface = normalized.isDeface === true;
         }
       }
-      const packedRaw = packRgb(red, green, blue);
-      const isDefacePixel = forcedDeface || packedRaw === PACKED_DEFACE_RGB;
-      if (!isDefacePixel && alphaOut >= 64 && typeof sampleNormalizer !== 'function') {
-        const snapped = snapRgbToNearestPalette(red, green, blue);
-        red = snapped.r; green = snapped.g; blue = snapped.b;
+      let packedColor = packRgb(red, green, blue);
+      const isDefacePixel = forcedDeface || packedColor === PACKED_DEFACE_RGB;
+      if (!isDefacePixel && alphaOut >= 64 && !hasNormalizer) {
+        // Straight to the packed value: the object snapRgbToNearestPalette returns was an
+        // allocation per pixel, and the pack that followed it recomputed what we already have.
+        packedColor = getNearestPaintablePacked(red, green, blue);
+        red = (packedColor >> 16) & 255;
+        green = (packedColor >> 8) & 255;
+        blue = packedColor & 255;
       }
-      sampleData.x[writeIndex] = x;
-      sampleData.y[writeIndex] = y;
-      sampleData.r[writeIndex] = red;
-      sampleData.g[writeIndex] = green;
-      sampleData.b[writeIndex] = blue;
-      sampleData.a[writeIndex] = alphaOut;
-      const packedColor = packRgb(red, green, blue);
-      sampleData.flags[writeIndex] = isDefacePixel ? TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE : 0;
+      outX[writeIndex] = x;
+      outY[writeIndex] = y;
+      outR[writeIndex] = red;
+      outG[writeIndex] = green;
+      outB[writeIndex] = blue;
+      outA[writeIndex] = alphaOut;
+      outFlags[writeIndex] = isDefacePixel ? TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE : 0;
       if (paletteStatsAccumulator && alphaOut >= 64) {
         if (isDefacePixel) {
           paletteStatsAccumulator.deface++;
