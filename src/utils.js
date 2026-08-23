@@ -1,3 +1,5 @@
+import { archiveTileUrl, decodeArchiveTile } from './archiveTileCodec.js';
+
 
 
 /** Sanitizes HTML to display as plain-text.
@@ -541,20 +543,6 @@ const normalizeBaseUrl = (rawUrl, fallbackUrl) => {
   return value.replace(/\/+$/, '');
 };
 
-const parseArchiveVersion = (rawVersion) => {
-  const version = String(rawVersion ?? '').trim();
-  if (!version) {
-    return { baseVersion: '', diffVersion: '' };
-  }
-  if (!version.includes('.')) {
-    return { baseVersion: version, diffVersion: '' };
-  }
-  return {
-    baseVersion: version.split('.')[0],
-    diffVersion: version
-  };
-};
-
 const gmFetchBlob = (url) => new Promise((resolve, reject) => {
   if (typeof GM_xmlhttpRequest !== 'function') {
     reject(new Error('GM_xmlhttpRequest is unavailable for archive tile download.'));
@@ -601,30 +589,6 @@ const blobToImage = (blob) => new Promise((resolve, reject) => {
   img.src = objectUrl;
 });
 
-const mergeArchiveTileBlobs = async (baseBlob, diffBlob) => {
-  const [baseImage, diffImage] = await Promise.all([
-    blobToImage(baseBlob),
-    blobToImage(diffBlob),
-  ]);
-  const width = baseImage.naturalWidth || baseImage.width;
-  const height = baseImage.naturalHeight || baseImage.height;
-  let canvas = new OffscreenCanvas(width, height);
-  const context = canvas.getContext('2d');
-  if (!context) {
-    cleanUpCanvas(canvas);
-    canvas = null;
-    throw new Error('Failed to initialize canvas context for archive tile merge.');
-  }
-  context.imageSmoothingEnabled = false;
-  context.clearRect(0, 0, width, height);
-  context.drawImage(baseImage, 0, 0);
-  context.drawImage(diffImage, 0, 0);
-  const mergedBlob = await canvas.convertToBlob({ type: 'image/png' });
-  cleanUpCanvas(canvas);
-  canvas = null;
-  return blobToImage(mergedBlob);
-};
-
 const downloadLiveTile = (tx, ty, options = {}) => {
   const liveBaseUrl = normalizeBaseUrl(options?.liveBaseUrl, LIVE_TILE_BASE_URL);
   const remoteURL = `${liveBaseUrl}/${tx % 2048}/${ty}.png`;
@@ -641,10 +605,15 @@ const downloadLiveTile = (tx, ty, options = {}) => {
   });
 };
 
+/** Pull one archive tile and reconstruct it for the requested version.
+ *
+ * The archive serves a zstd bundle per week per tile rather than a PNG per version;
+ * `decodeArchiveTile` rebuilds the requested frame from it. See archiveTileCodec.js.
+ */
 const downloadArchiveTile = async (tx, ty, options = {}) => {
   const archiveBaseUrl = normalizeBaseUrl(options?.archiveBaseUrl, ARCHIVE_TILE_BASE_URL);
-  const { baseVersion, diffVersion } = parseArchiveVersion(options?.archiveVersion);
-  if (!baseVersion) {
+  const version = String(options?.archiveVersion ?? '').trim();
+  if (!version) {
     throw new Error('Archive version is required.');
   }
   const safeTx = ((Number(tx) % 2048) + 2048) % 2048;
@@ -652,27 +621,13 @@ const downloadArchiveTile = async (tx, ty, options = {}) => {
   if (!Number.isFinite(safeTy)) {
     throw new Error('Archive tile Y coordinate is invalid.');
   }
-  if (!diffVersion) {
-    const blob = await gmFetchBlob(`${archiveBaseUrl}/tiles/${baseVersion}/${ARCHIVE_TILE_ZOOM}/${safeTx}/${safeTy}.png`);
-    if (!blob) {
-      throw new Error(`Archive tile not found for ${baseVersion}/${ARCHIVE_TILE_ZOOM}/${safeTx}/${safeTy}.png`);
-    }
-    return blobToImage(blob);
+  const containerUrl = archiveTileUrl(archiveBaseUrl, version, ARCHIVE_TILE_ZOOM, safeTx, safeTy);
+  const blob = await gmFetchBlob(containerUrl);
+  if (!blob) {
+    throw new Error(`Archive tile not found at ${containerUrl}`);
   }
-  const [baseBlob, diffBlob] = await Promise.all([
-    gmFetchBlob(`${archiveBaseUrl}/tiles/${baseVersion}/${ARCHIVE_TILE_ZOOM}/${safeTx}/${safeTy}.png`),
-    gmFetchBlob(`${archiveBaseUrl}/tiles/${diffVersion}/${ARCHIVE_TILE_ZOOM}/${safeTx}/${safeTy}.png`),
-  ]);
-  if (!baseBlob && !diffBlob) {
-    throw new Error(`Archive tile not found for ${diffVersion}/${ARCHIVE_TILE_ZOOM}/${safeTx}/${safeTy}.png`);
-  }
-  if (baseBlob && !diffBlob) {
-    return blobToImage(baseBlob);
-  }
-  if (!baseBlob && diffBlob) {
-    return blobToImage(diffBlob);
-  }
-  return mergeArchiveTileBlobs(baseBlob, diffBlob);
+  const png = await decodeArchiveTile(version, await blob.arrayBuffer());
+  return blobToImage(new Blob([png], { type: 'image/png' }));
 };
 
 export function downloadTile(tx, ty, options = {}) {

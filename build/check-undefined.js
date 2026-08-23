@@ -40,8 +40,22 @@ const GLOBALS = new Set([
 
 let failures = 0;
 
-for (const file of fs.readdirSync(SRC).filter((f) => f.endsWith('.js') && !f.endsWith('.orig'))) {
-  const full = path.join(SRC, file);
+/** src/*.js plus src/exp/*.js (the private experimental modules), when present. */
+const collectSources = () => {
+  const files = fs.readdirSync(SRC)
+    .filter((f) => f.endsWith('.js') && !f.endsWith('.orig'))
+    .map((f) => path.join(SRC, f));
+  const expDir = path.join(SRC, 'exp');
+  if (fs.existsSync(expDir)) {
+    for (const f of fs.readdirSync(expDir)) {
+      if (f.endsWith('.js')) files.push(path.join(expDir, f));
+    }
+  }
+  return files;
+};
+
+for (const full of collectSources()) {
+  const file = path.relative(SRC, full);
   const code = fs.readFileSync(full, 'utf8');
   let ast;
   try {

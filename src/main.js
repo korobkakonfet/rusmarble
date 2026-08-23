@@ -20,10 +20,44 @@ import { createArchiveTemplateUi } from './archiveTemplateUi.js';
 import { CUSTOM_LAYOUT_THEME, CUSTOM_THEME_DRAG_BG_VAR, buildCustomThemeCssVars, buildCustomThemeSiteVars, customThemeColorToCss, getDefaultCustomTheme } from './customTheme.js';
 import { createCustomThemeUi } from './customThemeUi.js';
 import { initOverlayDodge } from './overlayDodge.js';
+// Extension points. No-ops in this build; see src/extensionPoints.js.
+import * as ext from './extensionPoints.js';
+
+/** The curated slice of main.js that extension points are allowed to reach.
+ *
+ * Hooks receive this instead of importing from main.js (which is the bundle entry point and
+ * exports nothing). Keeping it to one explicit object means an extension depends on a named,
+ * reviewable surface: renaming something here is a visible break rather than a silent one.
+ *
+ * Getters, not values — several of these are module-level `const`s initialized far below, and
+ * every read happens at runtime from inside a hook, well after initialization.
+ */
+const hostContext = {
+  get t() { return t; },
+  get templateManager() { return templateManager; },
+  get templateSync() { return templateSync; },
+  get apiManager() { return apiManager; },
+  get overlayMain() { return overlayMain; },
+  get NEXT_TEMPLATE_PIXEL_ZOOM_LEVEL() { return NEXT_TEMPLATE_PIXEL_ZOOM_LEVEL; },
+  applyIntegerZoomLevel: (...args) => applyIntegerZoomLevel(...args),
+  normalizeTilePixelCoords: (...args) => normalizeTilePixelCoords(...args),
+  normalizeTemplateRemoteStream: (...args) => normalizeTemplateRemoteStream(...args),
+  clickElementLikeUser: (...args) => clickElementLikeUser(...args),
+  getNormalizedElementText: (...args) => getNormalizedElementText(...args),
+  getPaintPaletteRoot: (...args) => getPaintPaletteRoot(...args),
+  isElementActuallyVisible: (...args) => isElementActuallyVisible(...args),
+  schedulePixelInfoCloseBurst: (...args) => schedulePixelInfoCloseBurst(...args),
+  observeBlack: (...args) => observeBlack(...args),
+  isMapMoving: (...args) => isMapMoving(...args),
+  teleportToTileCoords: (...args) => teleportToTileCoords(...args),
+  consoleWarn: (...args) => consoleWarn(...args),
+  /** Set from buildOverlayMain, which owns this one. */
+  findTemplatesByNames: null,
+};
 import { layoutLanguageOptions, normalizeLayoutLanguage, translateLayout, getLayoutThemeLabel as getLocalizedLayoutThemeLabel, getTemplateDisplayLabel as getLocalizedTemplateDisplayLabel, getTemplateCreateModeLabel, getChatBanTypeLabel, getColorSortLabel } from './layoutI18n.js';
 import { encodeChunkSampleBytes } from './templateChunkUtils.js';
 import { consoleLog, consoleWarn, consoleError, isDebugLoggingEnabled, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels, initMobileLayout, isMobileLayout, makePanelDraggable, registerFloatingPanel } from './utils.js';
-import { getCenterGeoCoords, getPixelPerWplacePixel, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getZoom, getCurrentTileSize, getMountedTemplateCanvasSourceIDs, setForcedTileRefreshSuppressed, applyArchiveBgLayerToMap, getArchiveBgDiag, loadArchiveTile, setTemplateSortIDLayersOpacity, registerBmCanvasRestoreOnStyleChange, projectGeoToScreen, unprojectScreenToGeo, getMapCanvasElement} from './utilsMaptiler.js';
+import { getCenterGeoCoords, getPixelPerWplacePixel, isMapMoving, getMapBounds, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getZoom, getCurrentTileSize, getMountedTemplateCanvasSourceIDs, setForcedTileRefreshSuppressed, applyArchiveBgLayerToMap, getArchiveBgDiag, loadArchiveTile, setTemplateSortIDLayersOpacity, registerBmCanvasRestoreOnStyleChange, projectGeoToScreen, unprojectScreenToGeo, getMapCanvasElement} from './utilsMaptiler.js';
 // import { getCenterGeoCoords, addTemplate } from './utilsMaptiler.js';
 
 const name = GM_info.script.name.toString(); // Name of userscript
@@ -341,8 +375,10 @@ const convertTemplateImageFileToPaletteBlob = async (sourceFile, options = {}) =
   canvas = null;
   return {
     blob,
-    options: conversion.options || normalizedOptions,
-    stats: conversion.stats || null,
+    // `conversion` was a pre-worker local that no longer exists; the worker returns only
+    // { pixelData, stats }, and the options are the normalized ones we sent it.
+    options: normalizedOptions,
+    stats: workerResult?.stats ?? null,
   };
 };
 const TEMPLATE_TEXT_FONT_DEFAULT_KEY = 'segoe-bold';
@@ -4656,6 +4692,7 @@ readBootStorageValue('bmTemplates', '{}').then(async storageTemplatesValue => {
       'hideCompletedColors': false,
       'sortBy': 'total-desc',
       'transparentEraseColor': '#ff0000',
+      ...ext.defaultUserSettings(),
       'memorySavingMode': false,
       'onlyCurrentColorShown': false,
       'themeOverridden': false,
@@ -4686,6 +4723,7 @@ readBootStorageValue('bmTemplates', '{}').then(async storageTemplatesValue => {
     templateManager.setUserSettings(userSettings);
   }
   const _qp = new URLSearchParams(window.location.search);
+  ext.onUserSettingsLoaded({ templateManager, searchParams: _qp });
 
   currentLayoutLanguage = normalizeLayoutLanguage(templateManager.getLayoutLanguage?.());
   setMapCommentsEnabled(templateManager.isMapCommentsEnabled());
@@ -4930,6 +4968,7 @@ function observeBlack() {
   const hasObservedControls = () => {
     if (!document.getElementById('BM-zoom-1x')) return false;
     if (!document.getElementById('bm-button-move')) return false;
+    if (!ext.hasPanelControls(hostContext)) return false;
     return true;
   };
   const isRelevantObserveBlackNode = (node) => (
@@ -5000,6 +5039,14 @@ function observeBlack() {
         paintPixel.parentNode.appendChild(move); // Adds the move button
       }
 
+      ext.onPanelSync({
+        black,
+        requeue: queueObserveBlackSync,
+        getAnchorRetries: () => anchorRetries,
+        setAnchorRetries: (value) => { anchorRetries = value; },
+        main: hostContext,
+      });
+
 
       // Hook color change to force refresh
       Array.from(black.parentNode.parentNode.getElementsByTagName('button')).forEach((button) => {
@@ -5062,6 +5109,7 @@ function stopObserveBlack() {
   document.querySelectorAll('[data-bm-palette-shift-observed]')
     .forEach((element) => { delete element.dataset.bmPaletteShiftObserved; });
   updateOverlayPaletteShift(null); // safe mode / teardown must not leave the overlay nudged
+  ext.onPanelClosed();
 }
 
 function normalizeTilePixelCoords(rawCoords) {
@@ -6678,6 +6726,7 @@ const applyLayoutLanguage = (value = null) => {
   }
   overlayMain.setStatusLabels({ status: t('status.label'), error: t('error.label') });
   syncOverlayBrandLanguage();
+  ext.onLanguageChanged({ language: currentLayoutLanguage, host: hostContext });
 
   setSummaryText('bm-checkbox-container', t('settings.section'));
   const languageLabel = document.getElementById('bm-layout-language-label');
@@ -7178,6 +7227,7 @@ async function buildOverlayMain() {
         .addDiv({'id': 'bm-distance-output', 'textContent': ''}).buildElement()
       .buildElement();
 
+    ext.onSettingsSectionBuild({ host: hostContext });
     buildUserSettingsSection({
       overlay: overlayMain,
       templateManager,
@@ -7483,6 +7533,7 @@ async function buildOverlayMain() {
                     convertOptions: paletteConversionOptions,
                   }
                 );
+                ext.onTemplateCreated({ template: createdTemplate, host: hostContext });
 
                 if (sourceIsUploadedImage && !createWithPaletteConversion && !preConversionPromptShown) {
                   const createdOtherPixels = Number(createdTemplate?.colorPalette?.other?.count) || 0;
@@ -7783,6 +7834,8 @@ async function buildOverlayMain() {
     } catch (_) {};
   };
   window.syncToggleList = syncToggleList;
+  // apiManager owns the pixel-info DOM but not the template data, so it calls back in here.
+  window.bmOpenNearbyTemplates = (anchor, coords) => ext.openNearbyTemplates(anchor, coords);
   let templatePositionEditStorageKey = null;
   const getOverlayCoordinateInputs = () => ({
     tx: document.querySelector('#bm-input-tx'),
@@ -8900,6 +8953,7 @@ async function buildOverlayMain() {
   let armedDeleteDisarm = null;
 
   const buildTemplateFilterList = (progressSnapshot = null) => {
+    ext.onTemplateListBuild({ progressSnapshot, host: hostContext });
     armedDeleteDisarm?.();
     const listContainer = document.querySelector('#bm-templatefilter-list');
     consoleLog(templateManager);
@@ -9403,6 +9457,7 @@ async function buildOverlayMain() {
     return null;
   };
 
+  // Exposed through hostContext; buildOverlayMain owns this closure.
   const findTemplatesByNames = (templateNames) => {
     const safeNames = Array.isArray(templateNames) ? templateNames : [];
     const uniqueNames = [...new Set(
@@ -9434,6 +9489,7 @@ async function buildOverlayMain() {
     });
     return { matches, missing };
   };
+  hostContext.findTemplatesByNames = findTemplatesByNames;
 
   const getRusMarbleColorEntries = (progressSnapshot = null, options = {}) => {
     const visibleOnly = options?.visibleOnly === true;
@@ -9801,7 +9857,8 @@ async function buildOverlayMain() {
           label: info.label ?? 'Open extended palette',
         };
       default:
-        return null;
+        // An extension may add its own action kinds.
+        return ext.controlActions.parse(info, hostContext);
     }
   };
 
@@ -9915,7 +9972,7 @@ async function buildOverlayMain() {
         return statusMessage;
       }
       default:
-        throw new Error('Unsupported RusMarble control action.');
+        return await ext.controlActions.execute(controlAction, hostContext);
     }
   };
 
@@ -10011,7 +10068,7 @@ async function buildOverlayMain() {
         const requestEventName = ${JSON.stringify(BM_CONSOLE_REQUEST_EVENT)};
         const responseEventName = ${JSON.stringify(BM_CONSOLE_RESPONSE_EVENT)};
         let sequence = 0;
-        const sendRusMarbleCommand = (command, payload) => new Promise((resolve, reject) => {
+        const sendRusMarbleCommand = (command, payload, timeoutMs = 15000) => new Promise((resolve, reject) => {
           const requestId = 'bm-console-' + Date.now() + '-' + (++sequence);
           let settled = false;
           let timeoutId = null;
@@ -10038,7 +10095,7 @@ async function buildOverlayMain() {
             settled = true;
             cleanup();
             reject(new Error('RusMarble did not respond to the console command.'));
-          }, 15000);
+          }, timeoutMs);
           document.dispatchEvent(new CustomEvent(requestEventName, {
             detail: {
               requestId,
@@ -10047,7 +10104,13 @@ async function buildOverlayMain() {
             },
           }));
         });
-        window.bmControl = (payload) => sendRusMarbleCommand('control', payload);
+        // A long-running command can outlast the default window, so callers may widen it.
+        // (No backticks in this comment: the block is injected as a template literal.)
+        window.bmControl = (payload) => sendRusMarbleCommand(
+          'control',
+          payload,
+          Number(payload?.timeoutMs) > 0 ? Number(payload.timeoutMs) : 15000,
+        );
         window.buildTemplateFilterList = () => sendRusMarbleCommand('build-template-filter-list');
         window.getTemplateList = () => sendRusMarbleCommand('get-template-list');
         window.getColorList = () => sendRusMarbleCommand('get-color-list');
@@ -10135,5 +10198,6 @@ async function buildOverlayMain() {
     } catch (_) {}
   }, 0);
 
-
+  doAfterMapFound(() => { ext.onMapReady({ host: hostContext }); });
+  ext.onOverlayReady({ templateManager, host: hostContext });
 }
