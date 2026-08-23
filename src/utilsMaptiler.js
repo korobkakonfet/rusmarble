@@ -1,5 +1,6 @@
 import { consoleLog, consoleError, consoleWarn } from "./utils.js";
 import { profiler } from './profiler.js';
+import { archiveTileUrl, decodeArchiveTile } from './archiveTileCodec.js';
 
 let suppressForcedTileRefresh = false;
 let hoverGhostLayerAdded = false;
@@ -1215,60 +1216,31 @@ function fetchArchiveTileBuffer(url) {
   });
 }
 
-/** Composite a sparse diff tile over its base tile, mirroring the archive viewer's
- * `merged://` protocol. Archive versions like `v82.025` only ship changed tiles, so the
- * base version (`v82`) must supply everything else.
- * @since 0.87.70
+/** The archive has no z10 pyramid level — the viewer rejects those requests outright
+ * rather than letting MapLibre retry them.
+ * @since 0.87.81
  */
-async function mergeArchiveTiles(baseBuffer, diffBuffer) {
-  const toBitmap = (buffer) => createImageBitmap(new Blob([buffer], { type: 'image/png' }));
-  const [baseBitmap, diffBitmap] = await Promise.all([toBitmap(baseBuffer), toBitmap(diffBuffer)]);
-  try {
-    const canvas = new OffscreenCanvas(
-      Math.max(baseBitmap.width, diffBitmap.width),
-      Math.max(baseBitmap.height, diffBitmap.height)
-    );
-    const context = canvas.getContext('2d');
-    context.imageSmoothingEnabled = false;
-    context.drawImage(baseBitmap, 0, 0);
-    context.drawImage(diffBitmap, 0, 0); // diff wins
-    const blob = await canvas.convertToBlob({ type: 'image/png' });
-    return await blob.arrayBuffer();
-  } finally {
-    baseBitmap.close?.();
-    diffBitmap.close?.();
-  }
-}
+const ARCHIVE_MISSING_ZOOM = 10;
 
-/** Resolve one archive tile URL, merging base + diff versions when needed.
+/** Resolve one archive tile, as PNG bytes.
  *
  * Used by both tile paths: the MapLibre protocol handler (when `addProtocol` is reachable)
- * and the GM_xmlhttpRequest proxy in main.js that serves the plain-https fallback. Archive
- * versions like `v82.097` ship only changed pixels, so skipping this merge renders a nearly
- * empty canvas.
+ * and the GM_xmlhttpRequest proxy in main.js that serves the plain-https fallback. The
+ * incoming URL still looks like `.../tiles/<version>/<z>/<x>/<y>.png` — that is the shape
+ * the map source and the fetch hooks are keyed on — but no such file exists any more, so
+ * it is only an address here: the bytes come from the weekly `.zst` bundle and are decoded
+ * for `<version>` locally.
  * @since 0.87.70
  */
 export async function loadArchiveTile(url) {
-  // .../tiles/<version>/<z>/<x>/<y>.png — a version containing a dot is a diff on its base.
-  const match = url.match(/\/tiles\/([^/]+)\/\d+\/\d+\/\d+\.png/);
-  const version = match?.[1] || '';
-  const baseVersion = version.includes('.') ? version.split('.')[0] : null;
+  const match = url.match(/^(https?:\/\/[^/]+)\/tiles\/([^/]+)\/(\d+)\/(\d+)\/(\d+)\.png/);
+  if (!match) throw new Error(`unrecognized archive tile url: ${url}`);
+  const [, origin, version, z, x, y] = match;
+  if (Number(z) === ARCHIVE_MISSING_ZOOM) throw new Error('archive stores no z10 tiles');
 
-  if (!baseVersion) {
-    const buffer = await fetchArchiveTileBuffer(url);
-    if (!buffer) throw new Error('archive tile unavailable');
-    return buffer;
-  }
-
-  const baseUrl = url.replace(`/tiles/${version}/`, `/tiles/${baseVersion}/`);
-  const [baseBuffer, diffBuffer] = await Promise.all([
-    fetchArchiveTileBuffer(baseUrl),
-    fetchArchiveTileBuffer(url),
-  ]);
-  if (!baseBuffer && !diffBuffer) throw new Error('archive tile unavailable');
-  if (!diffBuffer) return baseBuffer;
-  if (!baseBuffer) return diffBuffer;
-  return await mergeArchiveTiles(baseBuffer, diffBuffer);
+  const container = await fetchArchiveTileBuffer(archiveTileUrl(origin, version, z, x, y));
+  if (!container) throw new Error('archive tile unavailable');
+  return await decodeArchiveTile(version, container);
 }
 
 /** Resolve the layer the archive background must be inserted before, so it renders *above*

@@ -139,9 +139,35 @@ if (!workerBundleJS?.text?.trim()) {
   process.exit(1);
 }
 
+// A private build can supply its own implementation of the extension points. Unset for the
+// normal build, which bundles src/extensionPoints.js (all no-ops) as written.
+const extensionsModule = process.env.EXTENSIONS_MODULE;
+if (extensionsModule) {
+  console.log(`Extension points: src/extensionPoints.js -> ${extensionsModule}`);
+}
+
+/** Redirects the extension-point module to an alternate implementation.
+ * esbuild's `alias` option only matches bare package names, so the swap happens in a resolver
+ * plugin: it intercepts the './extensionPoints.js' specifier and points it at the path in
+ * EXTENSIONS_MODULE (relative to the repo root).
+ */
+function extensionsPlugin(target) {
+  const resolved = path.resolve(target);
+  return {
+    name: 'extension-points-swap',
+    setup(build) {
+      build.onResolve({ filter: /(^|\/)extensionPoints\.js$/ }, (args) => {
+        if (args.importer.includes(`${path.sep}exp${path.sep}`)) return null; // don't self-redirect
+        return { path: resolved };
+      });
+    },
+  };
+}
+
 const resultEsbuild = await esbuild.build({
   entryPoints: ['src/main.js'], // "Infect" the files from this point (it spreads from this "patient 0")
   bundle: true, // Should the code be bundled?
+  ...(extensionsModule ? { plugins: [extensionsPlugin(extensionsModule)] } : {}),
   outfile: 'dist/RusMarble.user.js', // The file the bundled code is exported to
   define: {
     __CSS_BM_FILE__: JSON.stringify(cssBmFile),

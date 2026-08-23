@@ -17,8 +17,11 @@ import { execSync } from 'child_process';
 import { consoleStyle } from './utils.js';
 
 const PATCH_FILE = process.env.PATCH_FILE ?? 'experimental.local.patch';
+// main.js is deliberately NOT here any more. Everything the exp build needs from it now goes
+// through the committed hook API in src/extensionPoints.js, which this build aliases to the private
+// implementation in src/exp/. That removed ~1100 patched lines and, with them, the hunks that
+// broke on every mainline edit to the repo's busiest file.
 const PATCHED_FILES = [
-  'src/main.js',
   'src/templateManager.js',
   'src/hqTemplate.js',
   'src/apiManager.js',
@@ -35,11 +38,21 @@ const SMART_DOWNLOAD_URL = 'https://wplace.zaebal.me/wplacebot/RusMarble.exp.use
 const SMART_UPDATE_URL = 'https://wplace.zaebal.me/wplacebot/RusMarble.exp.meta.js';
 const buildFlags = process.argv.slice(2).join(' ');
 
-const run = (cmd) => execSync(cmd, { stdio: 'inherit' });
+const EXTENSIONS_MODULE = 'src/exp/expHooks.local.js';
+const EXP_HOOKS_PATH = 'src/exp/expHooks.local.js';
+
+const run = (cmd) => execSync(cmd, {
+  stdio: 'inherit',
+  env: { ...process.env, EXTENSIONS_MODULE },
+});
 const fail = (msg, err) => {
   console.error(`${consoleStyle.RED + consoleStyle.BOLD}${msg}${consoleStyle.RESET}`, err ?? '');
   process.exit(1);
 };
+
+if (!fs.existsSync(EXP_HOOKS_PATH)) {
+  fail(`Experimental hooks not found: ${EXP_HOOKS_PATH}. (Private/gitignored — restore src/exp/ locally.)`);
+}
 
 if (!fs.existsSync(PATCH_FILE)) {
   fail(`Patch file not found: ${PATCH_FILE}. (It is private/gitignored — restore it locally.)`);

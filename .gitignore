@@ -409,3 +409,4 @@ FodyWeavers.xsd
 # Experimental build — deployed via nginx (wplace.zaebal.me), not committed
 dist/RusMarble.exp.user.js
 dist/RusMarble.exp.meta.js
+src/exp/
