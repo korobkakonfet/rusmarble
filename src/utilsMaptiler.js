@@ -9,9 +9,35 @@ export function setForcedTileRefreshSuppressed(value) {
   suppressForcedTileRefresh = Boolean(value);
 }
 
+/** Selector for the wplace map control buttons whose Svelte click closure captures the map.
+ * Wplace dropped the `.right-3` wrapper around the control column, so probe the current markup too.
+ * @since 0.87.81
+ */
+export const MAP_HANDLE_BUTTON_SELECTOR = ".right-3>button, .flex.flex-col.items-center>button.btn.btn-square";
+
+/** Finds a map control button, preferring one that already carries a `__click` payload.
+ * @returns {HTMLElement | null}
+ * @since 0.87.81
+ */
+export function findMapHandleButton() {
+  const candidates = document.querySelectorAll(MAP_HANDLE_BUTTON_SELECTOR);
+  for (const candidate of candidates) {
+    if (candidate["__click"] !== undefined) { return candidate; }
+  }
+  return candidates[0] ?? null;
+}
+
 export function isMapTilerLoaded() {
   if (isMapFound) return true;
-  const myLocationButton = document.querySelector(".right-3>button");
+  // The cached map handle installed by the Map.prototype hook is authoritative. Check it before
+  // the DOM probe, otherwise a wplace layout change that drops the control button makes this
+  // report "no map" even though we are holding one.
+  if (document.head["__bmmap"] !== undefined) {
+    isMapFound = true;
+    mapFoundHandlers.forEach(handler => handler());
+    return true;
+  }
+  const myLocationButton = findMapHandleButton();
   if ( myLocationButton === null ) {
     return false;
   }
@@ -30,7 +56,9 @@ export function isMapTilerLoaded() {
         return;
       }
       try {
-        const mapAddSource = document.querySelector(".right-3>button")["__click"][3]["v"]["addSource"];
+        const mapAddSource = [...document.querySelectorAll("__BM_MAP_BTN_SELECTOR__")]
+          .map(button => button["__click"]?.[3]?.["v"]?.["addSource"])
+          .find(addSource => addSource !== undefined);
         if (mapAddSource !== undefined) {
           script.setAttribute('bm-result', 'true');
         } else {
@@ -43,7 +71,7 @@ export function isMapTilerLoaded() {
       }
     }
     const script = document.createElement('script');
-    script.textContent = `(${injector})();`;
+    script.textContent = `(${String(injector).replace('"__BM_MAP_BTN_SELECTOR__"', JSON.stringify(MAP_HANDLE_BUTTON_SELECTOR))})();`;
     document.documentElement?.appendChild(script);
     const result = script.getAttribute('bm-result') === 'true';
     script.remove();
@@ -123,14 +151,16 @@ function controlMapTiler(func, ...args) {
     const map = document.head["__bmmap"];
     return func(map, ...args);
   }
-  const myLocationButton = document.querySelector(".right-3>button");
+  const myLocationButton = findMapHandleButton();
   if ( myLocationButton !== null ) {
     if (myLocationButton["__click"]) {
       const map = myLocationButton["__click"][3]["v"];
       return func(map, ...args);
     } else {
       const getMap = () => {
-          return document.head["__bmmap"] || document.querySelector(".right-3>button")["__click"][3]["v"];
+          return document.head["__bmmap"] || [...document.querySelectorAll("__BM_MAP_BTN_SELECTOR__")]
+            .map(button => button["__click"]?.[3]?.["v"])
+            .find(map => map?.["addSource"] !== undefined);
       };
       const injector = result => {
           const script = document.currentScript;
@@ -138,7 +168,7 @@ function controlMapTiler(func, ...args) {
       }
       const passArgs = args.map(arg => JSON.stringify(arg)).join(',');
       const script = document.createElement('script');
-      script.textContent = `(${injector})((${func})((${getMap})(), ${passArgs}));`;
+      script.textContent = `(${injector})((${func})((${String(getMap).replace('"__BM_MAP_BTN_SELECTOR__"', JSON.stringify(MAP_HANDLE_BUTTON_SELECTOR))})(), ${passArgs}));`;
       document.documentElement?.appendChild(script);
       const result = JSON.parse(script.getAttribute('bm-result'));
       script.remove();
@@ -1044,7 +1074,9 @@ export async function teleportToGeoCoords(lat, lng, options = null) {
     }
   } else {
     const randomTeleportBtn = document.querySelector(".mb-2>.btn-ghost");
-    if (randomTeleportBtn !== undefined) {
+    // querySelector yields null, not undefined - the old `!== undefined` guard let a missing
+    // button through and threw on .click(), swallowing the URL fallback below.
+    if (randomTeleportBtn) {
       // Notice that it teleports to the .0 point instead of .5 (center) of the pixel, so we do not need to add an extra 0.5
       overrideRandom["data"] = coordsGeoCoordsToTileCoords(lat, lng, false);
       randomTeleportBtn.click();

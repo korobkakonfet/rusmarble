@@ -1,4 +1,4 @@
-import { coordsTileCoordsToGeoCoords, doAfterMapFound } from './utilsMaptiler.js';
+import { coordsTileCoordsToGeoCoords, doAfterMapFound, findMapHandleButton } from './utilsMaptiler.js';
 
 const WORLD_TILE_SIZE = 1000;
 const WORLD_TILE_COUNT = 2048;
@@ -283,7 +283,7 @@ class MapCommentManagerImpl {
   resolveMapInstance() {
     const direct = document.head?.['__bmmap'];
     if (direct && typeof direct['project'] === 'function') return direct;
-    const myLocationButton = document.querySelector('.right-3>button');
+    const myLocationButton = findMapHandleButton();
     const fallback = myLocationButton?.['__click']?.[3]?.['v'];
     if (fallback && typeof fallback['project'] === 'function') return fallback;
     return null;
