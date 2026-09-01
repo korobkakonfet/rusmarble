@@ -57,7 +57,7 @@ const hostContext = {
 import { layoutLanguageOptions, normalizeLayoutLanguage, translateLayout, getLayoutThemeLabel as getLocalizedLayoutThemeLabel, getTemplateDisplayLabel as getLocalizedTemplateDisplayLabel, getTemplateCreateModeLabel, getChatBanTypeLabel, getColorSortLabel } from './layoutI18n.js';
 import { encodeChunkSampleBytes } from './templateChunkUtils.js';
 import { consoleLog, consoleWarn, consoleError, isDebugLoggingEnabled, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels, initMobileLayout, isMobileLayout, makePanelDraggable, registerFloatingPanel } from './utils.js';
-import { getCenterGeoCoords, getPixelPerWplacePixel, isMapMoving, getMapBounds, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getZoom, getCurrentTileSize, getMountedTemplateCanvasSourceIDs, setForcedTileRefreshSuppressed, applyArchiveBgLayerToMap, getArchiveBgDiag, loadArchiveTile, setTemplateSortIDLayersOpacity, registerBmCanvasRestoreOnStyleChange, projectGeoToScreen, unprojectScreenToGeo, getMapCanvasElement} from './utilsMaptiler.js';
+import { getCenterGeoCoords, getPixelPerWplacePixel, isMapMoving, getMapBounds, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getZoom, getCurrentTileSize, getMountedTemplateCanvasSourceIDs, setForcedTileRefreshSuppressed, applyArchiveBgLayerToMap, getArchiveBgDiag, loadArchiveTile, setTemplateSortIDLayersOpacity, registerBmCanvasRestoreOnStyleChange, projectGeoToScreen, unprojectScreenToGeo, getMapCanvasElement, findMapHandleButton} from './utilsMaptiler.js';
 // import { getCenterGeoCoords, addTemplate } from './utilsMaptiler.js';
 
 const name = GM_info.script.name.toString(); // Name of userscript
@@ -4358,7 +4358,7 @@ function isSafeModeActive() {
 function resolveTemplateOverlayMapInstance() {
   const direct = document.head?.['__bmmap'];
   if (direct && typeof direct['on'] === 'function') return direct;
-  const fallback = document.querySelector('.right-3>button')?.['__click']?.[3]?.['v'];
+  const fallback = findMapHandleButton()?.['__click']?.[3]?.['v'];
   if (fallback && typeof fallback['on'] === 'function') return fallback;
   return null;
 }
@@ -5923,7 +5923,7 @@ async function jumpToNextUnpaintedTemplatePixel(options = null) {
 function resolveDistanceMapInstance() {
   const direct = document.head?.['__bmmap'];
   if (direct && typeof direct['project'] === 'function') return direct;
-  const myLocationButton = document.querySelector('.right-3>button');
+  const myLocationButton = findMapHandleButton();
   const fallback = myLocationButton?.['__click']?.[3]?.['v'];
   if (fallback && typeof fallback['project'] === 'function') return fallback;
   return null;

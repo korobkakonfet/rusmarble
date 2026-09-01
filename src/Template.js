@@ -527,9 +527,15 @@ export default class Template {
     const persistChunkSamples = options?.persistChunkSamples !== false;
     const keepChunkSamplesInMemory = options?.keepChunkSamplesInMemory !== false;
     const lazyPersistChunkSamples = options?.lazyPersistChunkSamples === true;
-    let bitmap = this.file instanceof ImageBitmap ? this.file : await createBitmapPreservingPixels(this.file); // Create efficient bitmap from uploaded file
+    // Creation was the one hot path with no timings at all, so "why is this template slow"
+    // could not be answered from a profile. The phases below are the ones that actually scale
+    // with image size.
+    profiler.start('create:total');
+    let bitmap = this.file instanceof ImageBitmap
+      ? this.file
+      : await profiler.measureAsync('create:decodeBitmap', () => createBitmapPreservingPixels(this.file)); // Create efficient bitmap from uploaded file
     if (this.forcePaletteConversion) {
-      bitmap = await this.convertBitmapToWplacePalette(bitmap);
+      bitmap = await profiler.measureAsync('create:paletteConvert', () => this.convertBitmapToWplacePalette(bitmap));
     }
     const imageWidth = bitmap.width;
     const imageHeight = bitmap.height;
@@ -569,7 +575,10 @@ export default class Template {
       sourceContext.imageSmoothingEnabled = false;
       sourceContext.clearRect(0, 0, imageWidth, imageHeight);
       sourceContext.drawImage(bitmap, 0, 0);
-      const sourceImageData = sourceContext.getImageData(0, 0, imageWidth, imageHeight);
+      const sourceImageData = profiler.measure(
+        'create:readSource',
+        () => sourceContext.getImageData(0, 0, imageWidth, imageHeight),
+      );
       if (this.sampleNormalizeToPalette) {
         await this.normalizeSourceImageDataForSamples(sourceImageData);
       }
@@ -641,12 +650,11 @@ export default class Template {
           .toString()
           .padStart(3, '0')
         }`;
-        templateTileKeys.push(templateTileName);
 
         const sourceX = pixelX - this.coords[2];
         const sourceY = pixelY - this.coords[3];
-        // Record tile prefix for fast lookup later
-        this.tilePrefixes.add(templateTileName.split(',').slice(0,2).join(','));
+        // The tile key and prefix are registered after the empty-chunk filter below, so a tile
+        // the template does not actually cover never enters the lookup structures.
         chunkDescriptors.push({
           tileKey: templateTileName,
           sourceX,
@@ -662,6 +670,49 @@ export default class Template {
 
       pixelY += drawSizeY;
     }
+    // Drop chunks the template does not actually cover.
+    //
+    // The descriptors above tile the image's bounding box, but a shape that only occupies a
+    // thin band of that box — a diagonal road is the extreme case — leaves most of those tiles
+    // fully transparent. Each one still cost a worker round trip, a sample buffer, and (with
+    // bitmap tiles) a chunkWidth*shreadSize squared canvas to render nothing into.
+    //
+    // Skipping them is exact rather than approximate: buildChunkSampleDataFromSource ignores
+    // every pixel with `alpha === 0`, so an all-zero-alpha chunk produces an empty sample,
+    // contributes nothing to the palette stats, and renders a fully transparent bitmap. The
+    // test below uses the same `alpha > 0` predicate, so a chunk is dropped only when the
+    // builder would have produced nothing from it.
+    if (sourceData) {
+      const rowStride = imageWidth * 4;
+      const hasContent = (chunk) => {
+        const endY = chunk.sourceY + chunk.drawSizeY;
+        const endX = chunk.sourceX + chunk.drawSizeX;
+        for (let y = chunk.sourceY; y < endY; y++) {
+          // Alpha only, and bail on the first hit: a covered chunk costs a few reads, and an
+          // empty one is a linear scan we were about to pay for many times over anyway.
+          for (let idx = y * rowStride + chunk.sourceX * 4 + 3; idx < y * rowStride + endX * 4; idx += 4) {
+            if (sourceData[idx] > 0) return true;
+          }
+        }
+        return false;
+      };
+      const covered = chunkDescriptors.filter(hasContent);
+      // A fully transparent image would otherwise produce a template with no tiles at all;
+      // keep one so every template still has a chunk downstream can look up.
+      const kept = covered.length ? covered : chunkDescriptors.slice(0, 1);
+      profiler.record('create:emptyTilesSkipped', chunkDescriptors.length - kept.length);
+      // Rewritten in place rather than spread back in: a spread of every kept descriptor is
+      // one argument per tile, which a large template can push past the call-argument limit.
+      chunkDescriptors.length = 0;
+      for (const chunk of kept) chunkDescriptors.push(chunk);
+    }
+
+    for (const chunk of chunkDescriptors) {
+      templateTileKeys.push(chunk.tileKey);
+      // Record tile prefix for fast lookup later
+      this.tilePrefixes.add(chunk.tileKey.split(',').slice(0, 2).join(','));
+    }
+
     let workerChunkBuildFailed = false;
     if (useWorkerChunkBuild) {
       const batches = [];
@@ -670,32 +721,67 @@ export default class Template {
       }
 
       const dispatchBatch = (batchChunks) => {
+        profiler.start('create:bandCopy');
         const serializedMaskRowSpans = cloneMaskRowSpans(templateMaskRowSpans);
 
-        // Send only the rows this batch actually reads. Copying the whole image per batch meant
-        // a full RGBA duplicate of the source for every 8 chunks — on a 3000x3000 template that
-        // is 36MB copied and transferred, repeated for each batch. Chunks are generated
-        // row-major, so a batch maps to a contiguous band and the total copied across all
-        // batches is now roughly one image rather than one per batch.
+        // Send only the rectangle this batch actually reads. Copying the whole image per batch
+        // meant a full RGBA duplicate of the source for every 8 chunks — on a 3000x3000
+        // template that is 36MB copied and transferred, repeated for each batch.
+        //
+        // Chunks are generated row-major, so a batch is a contiguous run of tiles: bounding it
+        // in Y alone is enough only while 8 chunks still span the whole width. Past that — a
+        // template wider than 8 tiles, i.e. the long banners and roads — each row's band was
+        // re-copied at FULL image width once per batch, so the cost grew with
+        // ceil(tilesPerRow / 8) instead of staying at one image. Bounding X as well keeps the
+        // total at roughly one image whatever the aspect ratio.
         let bandStartY = imageHeight;
         let bandEndY = 0;
+        let bandStartX = imageWidth;
+        let bandEndX = 0;
         for (const chunk of batchChunks) {
           if (chunk.sourceY < bandStartY) bandStartY = chunk.sourceY;
           const chunkEndY = chunk.sourceY + chunk.drawSizeY;
           if (chunkEndY > bandEndY) bandEndY = chunkEndY;
+          if (chunk.sourceX < bandStartX) bandStartX = chunk.sourceX;
+          const chunkEndX = chunk.sourceX + chunk.drawSizeX;
+          if (chunkEndX > bandEndX) bandEndX = chunkEndX;
         }
         bandStartY = Math.max(0, Math.min(bandStartY, imageHeight));
         bandEndY = Math.max(bandStartY, Math.min(bandEndY, imageHeight));
+        bandStartX = Math.max(0, Math.min(bandStartX, imageWidth));
+        bandEndX = Math.max(bandStartX, Math.min(bandEndX, imageWidth));
         const rowStride = imageWidth * 4;
-        const workerSourceData = sourceData.slice(bandStartY * rowStride, bandEndY * rowStride);
+        const bandWidth = bandEndX - bandStartX;
+        const bandHeight = bandEndY - bandStartY;
+        let workerSourceData;
+        if (bandWidth === imageWidth) {
+          // Full-width band: one contiguous range, so let slice() do it in one memcpy.
+          workerSourceData = sourceData.slice(bandStartY * rowStride, bandEndY * rowStride);
+        } else {
+          // Partial width: the rows are strided in the source, so copy them one by one into a
+          // tightly packed buffer. This still moves far less than the full-width slice did.
+          const bandRowStride = bandWidth * 4;
+          workerSourceData = new Uint8ClampedArray(bandRowStride * bandHeight);
+          for (let row = 0; row < bandHeight; row++) {
+            const sourceStart = (bandStartY + row) * rowStride + bandStartX * 4;
+            workerSourceData.set(
+              sourceData.subarray(sourceStart, sourceStart + bandRowStride),
+              row * bandRowStride,
+            );
+          }
+        }
+
+        profiler.record('create:bandBytes', workerSourceData.length);
+        profiler.end('create:bandCopy');
 
         return templateWorkerManager.runTask('buildTemplateChunkBatch', {
           sourceData: workerSourceData,
-          imageWidth,
+          // The worker indexes the buffer it was given, so the band's own width is the stride.
+          imageWidth: bandWidth,
           chunks: batchChunks.map((chunk) => ({
             tileKey: chunk.tileKey,
-            sourceX: chunk.sourceX,
-            // Rebase onto the band we sent; the worker indexes rows from 0.
+            // Rebase onto the band we sent; the worker indexes from its top-left corner.
+            sourceX: chunk.sourceX - bandStartX,
             sourceY: chunk.sourceY - bandStartY,
             drawSizeX: chunk.drawSizeX,
             drawSizeY: chunk.drawSizeY,
@@ -740,7 +826,10 @@ export default class Template {
 
       for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
         fillDispatchWindow();
-        const workerResult = await inFlight.get(batchIndex);
+        const workerResult = await profiler.measureAsync(
+          'create:chunkBatchWait',
+          () => inFlight.get(batchIndex),
+        );
         inFlight.delete(batchIndex);
         if (!workerResult) {
           workerChunkBuildFailed = true;
@@ -928,6 +1017,10 @@ export default class Template {
       cleanUpCanvas(canvas);
       canvas = null;
     }
+
+    profiler.record('create:tiles', templateTileKeys.length);
+    profiler.record('create:pixels', imageWidth * imageHeight);
+    profiler.end('create:total');
 
     return {
       templateTiles,
