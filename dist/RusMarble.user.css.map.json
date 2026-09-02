@@ -431,5 +431,9 @@
   "bm-template-position-dpad-hint": "bm-7b",
   "bm-template-position-joystick-": "bm-7h",
   "bm-template-position-dpad": "bm-8p",
-  "bm-palette-shift-observed": "bm-8r"
+  "bm-palette-shift-observed": "bm-8r",
+  "bm-show-deface-crossed": "bm-9f",
+  "bm-deface-display-label": "bm-8Z",
+  "bm-deface-display": "bm-b1",
+  "bm-deface-hole": "bm-bR"
 }

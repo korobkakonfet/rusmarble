@@ -888,11 +888,30 @@ export default class ApiManager {
           let tileCoordsTile = data['endpoint'].split('/');
           tileCoordsTile = [parseInt(tileCoordsTile[tileCoordsTile.length - 2]), parseInt(tileCoordsTile[tileCoordsTile.length - 1].replace('.png', ''))];
           const involvedTemplates = this.templateManager.getInvolvedTemplates(tileCoordsTile);
+
+          const blobData = data['blobData'];
+          // In 'hole' mode the injected fetch hook is holding this tile's response open, waiting
+          // for us. Answer before anything else can `break` out of this case: an unanswered tile
+          // only unblocks on the hook's timeout, which would stall rendering for 3s per tile.
+          const tileBlobID = data['blobID'];
+          if (tileBlobID) {
+            let outgoingBlob = blobData;
+            if (involvedTemplates.length > 0) {
+              outgoingBlob = await this.templateManager
+                .punchDefaceHolesInTile(blobData, tileCoordsTile)
+                .catch(() => blobData);
+            }
+            window.postMessage({
+              source: 'blue-marble',
+              blobID: tileBlobID,
+              blobData: outgoingBlob
+            });
+          }
+
           if (involvedTemplates.length === 0) {
             break;
           }
-          
-          const blobData = data['blobData'];
+
           const tileKey = tileCoordsTile[0].toString().padStart(4, '0') + ',' + tileCoordsTile[1].toString().padStart(4, '0');
           const lastModified = data["lastModified"];
           // We need the list of enabled colors to generate the unpainted list
