@@ -292,6 +292,13 @@ export default class TemplateManager {
     this._activeOverlayGenerationId = null;
     this._overlayRasterCache = new Map();
     this._livePixelsFetcher = null;
+    // Freshest tile PNGs as the page itself received them, keyed "0000,0000". The overlay reads
+    // erase pixels against these instead of re-requesting the tile URL, which the browser cache
+    // and wplace's own service worker both answer with a stale copy.
+    this._latestTileBlobs = new Map();
+    // Bumped whenever any tile PNG arrives. Templates with erase pixels are rendered against live
+    // canvas state, so this is the only thing that can tell their cached render apart.
+    this._tileBlobEpoch = 0;
   }
 
   /** Retrieves the pixel art canvas.
@@ -2116,9 +2123,10 @@ export default class TemplateManager {
     const globalSignature = [drawMultResult, displayMode, displayedColorsHash, (this.isBackgroundModeEnabled() && !!this._livePixelsFetcher) ? 1 : 0].join('||');
     for (const result of phase12Results) {
       if (!result?.template) continue;
-      // A template with erase pixels is rendered against the live canvas, and no signature can
-      // capture that. Never report it as fresh, or an erased pixel would keep its marker until
-      // something else forced a redraw.
+      // A template with erase pixels is rendered against the live canvas, which the normal
+      // signature cannot represent. Keying it on the tile-blob epoch re-renders exactly when new
+      // tile data arrived -- Date.now() here forced a full rebuild on every single overlay pass,
+      // which is both wasteful and a lot more churn during painting.
       let hasDefaceChunk = false;
       for (const flag of (result.template._chunkDefaceFlags?.values() ?? [])) {
         if (flag) { hasDefaceChunk = true; break; }
@@ -2126,7 +2134,7 @@ export default class TemplateManager {
       this._overlayRenderSignatures.set(
         String(result.template.sortID),
         hasDefaceChunk
-          ? `${globalSignature}||deface-live||${Date.now()}`
+          ? `${globalSignature}||deface-live||${this._tileBlobEpoch}`
           : `${globalSignature}||${this._getTemplateRenderSignaturePart(result.template)}`
       );
     }
@@ -3359,6 +3367,28 @@ export default class TemplateManager {
   async setBackgroundModeEnabled(value) {
     this.userSettings.backgroundMode = Boolean(value);
     await this.storeUserSettings();
+  }
+
+  /** Records the tile PNG the page just received, for the overlay's live-canvas comparison.
+   * @param {string} tileKey - Padded "tileX,tileY".
+   * @param {Blob} blob - The tile PNG.
+   * @param {string|null} lastModified - The response's Last-Modified, used as the decode cache tag.
+   * @since 0.87.83
+   */
+  setLatestTileBlob(tileKey, blob, lastModified = null) {
+    if (!tileKey || !blob) return;
+    // Small and strictly bounded: only the tiles currently on screen are ever asked for.
+    this._tileBlobEpoch++;
+    if (this._latestTileBlobs.has(tileKey)) this._latestTileBlobs.delete(tileKey);
+    this._latestTileBlobs.set(tileKey, { blob, lastModified, time: Date.now() });
+    while (this._latestTileBlobs.size > 24) {
+      this._latestTileBlobs.delete(this._latestTileBlobs.keys().next().value);
+    }
+  }
+
+  /** @returns {{blob: Blob, lastModified: string|null}|null} The last tile PNG seen for that tile. */
+  getLatestTileBlob(tileKey) {
+    return this._latestTileBlobs.get(tileKey) ?? null;
   }
 
   setLivePixelsFetcher(fn) {

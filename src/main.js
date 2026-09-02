@@ -5739,8 +5739,24 @@ function findNearestCachedTemplatePixel(originPoint, displayedColorSet, excluded
   return bestCandidate;
 }
 
+/** Decoded live tiles, keyed by tile plus the blob identity they came from. */
+const liveTilePixelCache = new Map();
+
 async function getLiveTilePixels(tileX, tileY) {
-  const tileImage = await downloadTile(tileX, tileY);
+  const tileKey = `${String(tileX).padStart(4, '0')},${String(tileY).padStart(4, '0')}`;
+  const latest = templateManager.getLatestTileBlob?.(tileKey) ?? null;
+  const cacheTag = latest ? `${tileKey}||${latest.lastModified ?? ''}||${latest.time}` : null;
+  if (cacheTag) {
+    const cached = liveTilePixelCache.get(cacheTag);
+    if (cached) return cached;
+  }
+
+  // Prefer the tile the page itself just received. Re-requesting the URL goes through the browser
+  // image cache and wplace's service worker, both of which keep serving the pre-erase tile for a
+  // while -- which is why an erased pixel could keep its marker while painting.
+  const tileImage = latest
+    ? await createBitmapPreservingPixels(latest.blob).catch(() => null) ?? await downloadTile(tileX, tileY)
+    : await downloadTile(tileX, tileY);
   let canvas = new OffscreenCanvas(TEMPLATE_TILE_SIZE, TEMPLATE_TILE_SIZE);
   const context = canvas.getContext('2d', { willReadFrequently: true });
   if (!context) {
@@ -5754,6 +5770,12 @@ async function getLiveTilePixels(tileX, tileY) {
   const imageData = context.getImageData(0, 0, TEMPLATE_TILE_SIZE, TEMPLATE_TILE_SIZE).data;
   cleanUpCanvas(canvas);
   canvas = null;
+  if (cacheTag) {
+    liveTilePixelCache.set(cacheTag, imageData);
+    while (liveTilePixelCache.size > 24) {
+      liveTilePixelCache.delete(liveTilePixelCache.keys().next().value);
+    }
+  }
   return imageData;
 }
 

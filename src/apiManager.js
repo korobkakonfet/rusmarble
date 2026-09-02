@@ -896,6 +896,9 @@ export default class ApiManager {
 
           const tileKey = tileCoordsTile[0].toString().padStart(4, '0') + ',' + tileCoordsTile[1].toString().padStart(4, '0');
           const lastModified = data["lastModified"];
+          // Hand the page's own copy to the overlay: re-fetching this URL goes through the browser
+          // cache and wplace's service worker, which serve the pre-erase tile for a while.
+          this.templateManager.setLatestTileBlob?.(tileKey, blobData, lastModified);
           // We need the list of enabled colors to generate the unpainted list
           const fullKey = this.templateManager.getTileCacheKey(tileCoordsTile);
           const errorMap = +this.templateManager.isErrorMapShown();
