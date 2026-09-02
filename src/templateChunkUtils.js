@@ -292,7 +292,7 @@ export const renderSampleDataToImage = ({
   maskPoints = null,
   maskRowSpans,
   displayedColorSet = null,
-  includeDefaceCheckerboard = false,
+  defaceRender = 'color',
   enforceTransparentAsDeface = false,
   transparentEraseColor = null,
 }) => {
@@ -316,8 +316,12 @@ export const renderSampleDataToImage = ({
   const spanCount = spans ? spans.length : 0;
   const solid = plan.solid;
 
-  const checkerDark = packRgbaUint32(0, 0, 0, 32);
-  const checkerLight = packRgbaUint32(255, 255, 255, 32);
+  // The erase marker is drawn as a hollow cross: only the two diagonals of the block get pixels,
+  // everything between the arms stays fully transparent so the live map shows through. Alternating
+  // black and white along the arms keeps it readable over both light and dark canvas colours.
+  const crossDark = packRgbaUint32(0, 0, 0, 200);
+  const crossLight = packRgbaUint32(255, 255, 255, 200);
+  const crossClear = 0;
 
   const logicalWidth = sampleData.width | 0;
   const logicalHeight = sampleData.height | 0;
@@ -367,21 +371,38 @@ export const renderSampleDataToImage = ({
     const green = sampleData.g[index];
     const blue = sampleData.b[index];
 
-    let packedColor;
-    if ((sampleData.flags[index] & TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) === TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) {
-      if (includeDefaceCheckerboard) {
-        for (let offsetY = 0; offsetY < safeDrawSize; offsetY++) {
-          const rowOffset = baseOffset + offsetY * safeResultWidth;
-          const parity = offsetY & 1;
-          for (let offsetX = 0; offsetX < safeDrawSize; offsetX++) {
-            pixelData32[rowOffset + offsetX] = ((offsetX + parity) & 1) === 0 ? checkerDark : checkerLight;
-          }
-        }
-        continue;
-      }
+    // #deface pixels (rgb 222,250,206 = the in-game Transparent colour) are drawn in that colour,
+    // so an erase area reads as itself on the overlay. They are not members of
+    // template.colorPalette -- the palette stats count them separately, as `deface` -- so there is
+    // no colour-list entry that could toggle them, and the filter below must not hide them either.
+    // With defaceCrossed on they get the crossed (checkerboard) marking instead of a flat colour.
+    const isDeface = (sampleData.flags[index] & TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) !== 0;
+    // 'off' leaves erase pixels to wplace, which already draws them punched out while painting.
+    // Anything we paint there is opaque and simply hides that.
+    if (isDeface && defaceRender === 'off') {
       if (!clearSkipped) continue;
-      packedColor = 0;
-    } else if (displayedColorSet && !displayedColorSet.has(getPaletteKeyForRgb(red, green, blue))) {
+      for (let offsetY = 0; offsetY < safeDrawSize; offsetY++) {
+        const rowOffset = baseOffset + offsetY * safeResultWidth;
+        pixelData32.fill(0, rowOffset, rowOffset + safeDrawSize);
+      }
+      continue;
+    }
+    if (isDeface && defaceRender === 'crossed') {
+      const lastOffset = safeDrawSize - 1;
+      for (let offsetY = 0; offsetY < safeDrawSize; offsetY++) {
+        const rowOffset = baseOffset + offsetY * safeResultWidth;
+        for (let offsetX = 0; offsetX < safeDrawSize; offsetX++) {
+          // Both diagonals of the block, so the mark reads as an X with open gaps.
+          const onCross = offsetX === offsetY || offsetX + offsetY === lastOffset;
+          pixelData32[rowOffset + offsetX] = onCross
+            ? (((offsetX + offsetY) & 1) === 0 ? crossDark : crossLight)
+            : crossClear;
+        }
+      }
+      continue;
+    }
+    let packedColor;
+    if (!isDeface && displayedColorSet && !displayedColorSet.has(getPaletteKeyForRgb(red, green, blue))) {
       if (!clearSkipped) continue;
       packedColor = 0;
     } else {
@@ -935,9 +956,9 @@ export const TEMPLATE_DEFACE_COLOR_KEY = TEMPLATE_DEFACE_RGB.join(',');
  *
  * The progress scan proper skips #deface pixels outright (JS at the `isDefacePixel` guard, WASM at
  * collectProgress.wat's "Skip deface pixels"), so nothing downstream ever learned that an erase
- * pixel needs work -- Smart Place among them. This adds only examples and a `missing` tally under
- * the Transparent key; requiredCount, paintedCount and wrongCount are left alone, so overall
- * progress percentages are unchanged.
+ * pixel needs work. This adds only examples and a `missing` tally under the Transparent key --
+ * requiredCount, paintedCount and wrongCount are deliberately left alone, so overall progress
+ * percentages are unchanged and only the Transparent entry gains something to act on.
  * @since 0.87.83
  */
 const collectDefaceExamplesFromSamples = ({

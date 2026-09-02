@@ -202,6 +202,24 @@ export function buildUserSettingsSection({
             };
           });
         }).buildElement()
+        .addDiv({'className': 'bm-setting-row'})
+          .addSpan({'id': 'bm-deface-display-label', 'textContent': t('settings.defaceDisplay.label')}).buildElement()
+          .addSelect({'id': 'bm-deface-display'}, (instance, select) => {
+            const currentMode = templateManager.getDefaceDisplayMode();
+            ['off', 'color', 'crossed'].forEach((value) => {
+              const option = document.createElement('option');
+              option.value = value;
+              option.textContent = t(`settings.defaceDisplay.${value}`);
+              if (value === currentMode) { option.selected = true; }
+              select.appendChild(option);
+            });
+            select.addEventListener('change', async () => {
+              await templateManager.setDefaceDisplayMode(select.value);
+              await templateManager.createOverlayOnMapVisibleOnly(null, { skipExisting: false });
+              instance.handleDisplayStatus(`Transparent pixels: ${t(`settings.defaceDisplay.${select.value}`)}.`);
+            });
+          }).buildElement()
+        .buildElement()
         .addCheckbox({'id': 'bm-enable-keybinds', 'textContent': t('settings.enableKeybinds'), 'checked': templateManager.areKeybindsEnabled()}, (instance, label, checkbox) => {
           checkbox.addEventListener('change', () => {
             templateManager.setKeybindsEnabled(checkbox.checked);
