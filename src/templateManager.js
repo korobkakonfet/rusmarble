@@ -437,7 +437,9 @@ export default class TemplateManager {
     }
     template.chunkedBuffer = templateTilesBuffers;
     template.chunkedSamples = createTileOptions.keepChunkSamplesInMemory === false ? {} : templateChunkSamples;
-    template.chunkedSamplesBuffer = createTileOptions.persistChunkSamples === false ? {} : templateChunkSampleBuffers;
+    // Not dropped when persistChunkSamples is off: createTemplateTiles still fills this for chunks
+    // holding #deface pixels, whose flag cannot be recovered from a bitmap tile.
+    template.chunkedSamplesBuffer = templateChunkSampleBuffers;
     template.persistBitmapTiles = createTileOptions.persistBitmapTiles === true;
     template.persistChunkSamples = createTileOptions.persistChunkSamples === true;
     const storedTileBuffers = createTileOptions.persistBitmapTiles ? templateTilesBuffers : {};
@@ -454,7 +456,7 @@ export default class TemplateManager {
       "height": Number.isFinite(template.imageHeight) ? template.imageHeight : null,
       "enabled": templateEnabled,
       "tiles": storedTileBuffers,
-      "samples": createTileOptions.persistChunkSamples && createTileOptions.lazyPersistChunkSamples !== true ? templateChunkSampleBuffers : {},
+      "samples": createTileOptions.lazyPersistChunkSamples === true ? {} : templateChunkSampleBuffers,
       "tileKeys": templateTileKeys,
       "palette": template.colorPalette, // Persist palette and enabled flags
       // #deface pixels are counted apart from the palette, so nothing in "palette" implies them.
