@@ -4708,7 +4708,7 @@ readBootStorageValue('bmTemplates', '{}').then(async storageTemplatesValue => {
       'showErrorMap': false,
       'showOnlyEnabledColorsErrorMap': false, // Hidden in settings
       'showIntegerZoom': false,
-      'defaceDisplayMode': 'color',
+      'defaceDisplayMode': 'off',
       'enableKeybinds': false,
       'enableNextTemplatePixelShortcut': true,
       'ruspixelFlagEnabled': true,
@@ -6775,7 +6775,7 @@ const applyLayoutLanguage = (value = null) => {
   const defaceDisplaySelect = document.getElementById('bm-deface-display');
   replaceSelectOptions(
     defaceDisplaySelect,
-    ['color', 'crossed'].map((value) => [value, t(`settings.defaceDisplay.${value}`)]),
+    ['off', 'color', 'crossed'].map((value) => [value, t(`settings.defaceDisplay.${value}`)]),
     templateManager.getDefaceDisplayMode()
   );
   setCheckboxLabelText('bm-enable-keybinds', t('settings.enableKeybinds'));

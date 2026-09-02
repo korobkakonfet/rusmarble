@@ -377,6 +377,16 @@ export const renderSampleDataToImage = ({
     // no colour-list entry that could toggle them, and the filter below must not hide them either.
     // With defaceCrossed on they get the crossed (checkerboard) marking instead of a flat colour.
     const isDeface = (sampleData.flags[index] & TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) !== 0;
+    // 'off' leaves erase pixels to wplace, which already draws them punched out while painting.
+    // Anything we paint there is opaque and simply hides that.
+    if (isDeface && defaceRender === 'off') {
+      if (!clearSkipped) continue;
+      for (let offsetY = 0; offsetY < safeDrawSize; offsetY++) {
+        const rowOffset = baseOffset + offsetY * safeResultWidth;
+        pixelData32.fill(0, rowOffset, rowOffset + safeDrawSize);
+      }
+      continue;
+    }
     if (isDeface && defaceRender === 'crossed') {
       const lastOffset = safeDrawSize - 1;
       for (let offsetY = 0; offsetY < safeDrawSize; offsetY++) {

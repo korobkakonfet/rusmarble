@@ -206,7 +206,7 @@ export function buildUserSettingsSection({
           .addSpan({'id': 'bm-deface-display-label', 'textContent': t('settings.defaceDisplay.label')}).buildElement()
           .addSelect({'id': 'bm-deface-display'}, (instance, select) => {
             const currentMode = templateManager.getDefaceDisplayMode();
-            ['color', 'crossed'].forEach((value) => {
+            ['off', 'color', 'crossed'].forEach((value) => {
               const option = document.createElement('option');
               option.value = value;
               option.textContent = t(`settings.defaceDisplay.${value}`);
