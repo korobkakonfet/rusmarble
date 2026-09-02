@@ -7,6 +7,10 @@ const clampUnit = (value) => Math.max(0, Math.min(1, Number(value) || 0));
 const normalizeDistanceMode = (value) => String(value || '').toLowerCase() === 'euclidean' ? 'euclidean' : 'weighted';
 const normalizeDitherMode = (value) => String(value || '').toLowerCase() === 'floyd-steinberg' ? 'floyd-steinberg' : 'none';
 const packRgb = (r, g, b) => ((r << 16) | (g << 8) | b) >>> 0;
+// rgb(222,250,206) is the #deface marker for the in-game Transparent colour. It is not a
+// paintable palette entry (templatePaletteColors drops "transparent" below), so without an
+// explicit carve-out the nearest-colour search snaps it to a real colour - light yellow.
+const PACKED_DEFACE_RGB = packRgb(222, 250, 206);
 
 const templatePaletteColors = (() => {
   const options = [];
@@ -237,8 +241,12 @@ export function convertImageDataToWplacePalette(imageData, options = {}) {
   // repeat the pack + Set.has that used to run a second time per pixel.
   const FLAG_ALPHA = 1;
   const FLAG_IN_PALETTE = 2;
+  const FLAG_DEFACE = 4;
   const pixelFlags = new Uint8Array(pixelCount);
   const nonPalettePackedColors = new Set();
+  // Offsets of the #deface pixels, so the opaque WASM path and anti-dither -- neither of which can
+  // be told to leave a colour alone -- can be undone for exactly those pixels afterwards.
+  const defaceOffsets = [];
 
   let nonPalettePixels = 0;
   for (let i = 0; i < pixelCount; i++) {
@@ -248,6 +256,11 @@ export function convertImageDataToWplacePalette(imageData, options = {}) {
       continue;
     }
     const packed = packRgb(data[base], data[base + 1], data[base + 2]);
+    if (packed === PACKED_DEFACE_RGB) {
+      pixelFlags[i] = FLAG_ALPHA | FLAG_IN_PALETTE | FLAG_DEFACE;
+      defaceOffsets.push(base);
+      continue;
+    }
     if (templatePalettePackedSet.has(packed)) {
       pixelFlags[i] = FLAG_ALPHA | FLAG_IN_PALETTE;
       continue;
@@ -371,6 +384,13 @@ export function convertImageDataToWplacePalette(imageData, options = {}) {
     applyAntiDither(data, width, height, normalizedOptions);
   }
 
+  for (let index = 0; index < defaceOffsets.length; index++) {
+    const base = defaceOffsets[index];
+    data[base] = 222;
+    data[base + 1] = 250;
+    data[base + 2] = 206;
+  }
+
   let convertedPixels;
   let convertedColorCount;
   let remainingOtherPixels;
@@ -381,6 +401,7 @@ export function convertImageDataToWplacePalette(imageData, options = {}) {
     for (let i = 0; i < pixelCount; i++) {
       const base = i * 4;
       if (data[base + 3] === 0) continue;
+      if ((pixelFlags[i] & FLAG_DEFACE) !== 0) continue;
       const outputPacked = packRgb(data[base], data[base + 1], data[base + 2]);
       if (!templatePalettePackedSet.has(outputPacked)) {
         remainingOtherPixels++;

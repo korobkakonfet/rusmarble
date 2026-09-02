@@ -22,6 +22,7 @@
 import { convertImageDataToWplacePalette } from './templatePaletteConversion.js';
 import { consoleLog, consoleWarn, consoleError } from './utils.js';
 import { getTemplateMaskPoints, getMaskDrawSize } from './templateMaskPoints.js';
+import { isDefaceRgb } from './templateChunkUtils.js';
 
 const STORAGE_KEY = 'bmHqTemplates';
 /** Above this many overlay sub-pixels a masked mode falls back to 1x, to keep
@@ -805,6 +806,20 @@ export function createHqTemplateManager({ getLanguage = () => 'en', remote = nul
 
     const swatches = readPalette();
     if (!swatches.length) return false; // No paint session open — leave middle-drag panning alone.
+
+    // #deface (222,250,206) marks an erase pixel, whose palette entry is Transparent — id 0. Its
+    // swatch has no background colour of its own, so readPalette() never collects it; go by id.
+    if (isDefaceRgb(color.r, color.g, color.b)) {
+      const root = dom.stage?.closest('.modal-box') || document;
+      const transparentSwatch = root.querySelector('#color-0');
+      if (!(transparentSwatch instanceof HTMLElement)) {
+        setMessage(t('pickUnknown'));
+        return true;
+      }
+      setMessage('');
+      transparentSwatch.click();
+      return true;
+    }
 
     const swatch = swatches.find((entry) => entry.rgb[0] === color.r && entry.rgb[1] === color.g && entry.rgb[2] === color.b);
     if (!swatch) {

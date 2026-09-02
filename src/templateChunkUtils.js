@@ -292,7 +292,7 @@ export const renderSampleDataToImage = ({
   maskPoints = null,
   maskRowSpans,
   displayedColorSet = null,
-  includeDefaceCheckerboard = false,
+  defaceRender = 'color',
   enforceTransparentAsDeface = false,
   transparentEraseColor = null,
 }) => {
@@ -316,8 +316,12 @@ export const renderSampleDataToImage = ({
   const spanCount = spans ? spans.length : 0;
   const solid = plan.solid;
 
-  const checkerDark = packRgbaUint32(0, 0, 0, 32);
-  const checkerLight = packRgbaUint32(255, 255, 255, 32);
+  // The erase marker is drawn as a hollow cross: only the two diagonals of the block get pixels,
+  // everything between the arms stays fully transparent so the live map shows through. Alternating
+  // black and white along the arms keeps it readable over both light and dark canvas colours.
+  const crossDark = packRgbaUint32(0, 0, 0, 200);
+  const crossLight = packRgbaUint32(255, 255, 255, 200);
+  const crossClear = 0;
 
   const logicalWidth = sampleData.width | 0;
   const logicalHeight = sampleData.height | 0;
@@ -367,21 +371,33 @@ export const renderSampleDataToImage = ({
     const green = sampleData.g[index];
     const blue = sampleData.b[index];
 
-    let packedColor;
-    if ((sampleData.flags[index] & TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) === TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) {
-      if (includeDefaceCheckerboard) {
-        for (let offsetY = 0; offsetY < safeDrawSize; offsetY++) {
-          const rowOffset = baseOffset + offsetY * safeResultWidth;
-          const parity = offsetY & 1;
-          for (let offsetX = 0; offsetX < safeDrawSize; offsetX++) {
-            pixelData32[rowOffset + offsetX] = ((offsetX + parity) & 1) === 0 ? checkerDark : checkerLight;
-          }
+    // #deface pixels (rgb 222,250,206 = the in-game Transparent colour) are drawn in that colour,
+    // so an erase area reads as itself on the overlay. They are not members of
+    // template.colorPalette -- the palette stats count them separately, as `deface` -- so there is
+    // no colour-list entry that could toggle them, and the filter below must not hide them either.
+    // With defaceCrossed on they get the crossed (checkerboard) marking instead of a flat colour.
+    const isDeface = (sampleData.flags[index] & TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) !== 0;
+    if (isDeface && defaceRender === 'crossed') {
+      const lastOffset = safeDrawSize - 1;
+      for (let offsetY = 0; offsetY < safeDrawSize; offsetY++) {
+        const rowOffset = baseOffset + offsetY * safeResultWidth;
+        for (let offsetX = 0; offsetX < safeDrawSize; offsetX++) {
+          // Both diagonals of the block, so the mark reads as an X with open gaps.
+          const onCross = offsetX === offsetY || offsetX + offsetY === lastOffset;
+          pixelData32[rowOffset + offsetX] = onCross
+            ? (((offsetX + offsetY) & 1) === 0 ? crossDark : crossLight)
+            : crossClear;
         }
-        continue;
       }
+      continue;
+    }
+    let packedColor;
+    // 'hole' punches the erase area out of wplace's own tile instead (see
+    // templateManager.punchDefaceHolesInTile), so the overlay must draw nothing over it.
+    if (isDeface && defaceRender === 'hole') {
       if (!clearSkipped) continue;
       packedColor = 0;
-    } else if (displayedColorSet && !displayedColorSet.has(getPaletteKeyForRgb(red, green, blue))) {
+    } else if (!isDeface && displayedColorSet && !displayedColorSet.has(getPaletteKeyForRgb(red, green, blue))) {
       if (!clearSkipped) continue;
       packedColor = 0;
     } else {
