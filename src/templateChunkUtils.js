@@ -404,7 +404,9 @@ export const renderSampleDataToImage = ({
       continue;
     }
     let packedColor;
-    if (!isDeface && displayedColorSet && !displayedColorSet.has(getPaletteKeyForRgb(red, green, blue))) {
+    // Erase pixels follow the Transparent entry in the colour list like any other colour; their
+    // palette key is the deface colour itself, so no special case is needed here.
+    if (displayedColorSet && !displayedColorSet.has(getPaletteKeyForRgb(red, green, blue))) {
       if (!clearSkipped) continue;
       packedColor = 0;
     } else {

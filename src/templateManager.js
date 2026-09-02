@@ -2867,6 +2867,16 @@ export default class TemplateManager {
       const total = Math.max(defaceTotal, entry.missing);
       if (total > 0) {
         paletteSum[TEMPLATE_DEFACE_COLOR_KEY] = total;
+        // The colour toggle writes template.colorPalette[key].enabled and skips keys with no
+        // entry, so without one the Transparent switch in the list did nothing. Count stays 0:
+        // the real total is assigned above, and everything summing colorPalette counts (the
+        // restored requiredPixelCount among them) must not change.
+        for (const template of (this.templatesArray ?? [])) {
+          if (!template?.colorPalette) continue;
+          if (template.colorPalette[TEMPLATE_DEFACE_COLOR_KEY] === undefined) {
+            template.colorPalette[TEMPLATE_DEFACE_COLOR_KEY] = { count: 0, enabled: true };
+          }
+        }
         const done = Math.max(0, total - entry.missing);
         entry.painted = done;
         entry.paintedAndEnabled = done;
@@ -3471,6 +3481,43 @@ export default class TemplateManager {
     while (this._latestTileBlobs.size > 24) {
       this._latestTileBlobs.delete(this._latestTileBlobs.keys().next().value);
     }
+    this._requestDefaceOverlayRefresh(tileKey);
+  }
+
+  /** Redraws the erase markers on a tile whose canvas just changed.
+   *
+   * Nothing else asks for this. The overlay is rebuilt on map movement, template toggles and
+   * palette changes, and erasing a pixel is none of those -- which is why the markers only
+   * corrected themselves after toggling the template off and on. Scoped to the one tile, and to
+   * templates actually holding erase pixels there, so it costs nothing for everyone else.
+   * @param {string} tileKey - Padded "tileX,tileY".
+   * @since 0.87.96
+   */
+  _requestDefaceOverlayRefresh(tileKey) {
+    if (this.getDefaceDisplayMode() === 'off') return;
+    const prefix = `${tileKey},`;
+    const affected = (this.templatesArray ?? []).some((template) => {
+      if (!(template?.enabled ?? true)) return false;
+      const flags = template._chunkDefaceFlags;
+      if (!flags) return false;
+      for (const [chunkKey, holdsDeface] of flags) {
+        if (holdsDeface && chunkKey.startsWith(prefix)) return true;
+      }
+      return false;
+    });
+    if (!affected) return;
+
+    // Tiles arrive in bursts while panning, so coalesce into one redraw.
+    this._pendingDefaceRefreshTiles ??= new Set();
+    this._pendingDefaceRefreshTiles.add(tileKey);
+    if (this._defaceRefreshTimer) return;
+    this._defaceRefreshTimer = setTimeout(() => {
+      this._defaceRefreshTimer = null;
+      const tilePrefixes = this._pendingDefaceRefreshTiles;
+      this._pendingDefaceRefreshTiles = new Set();
+      if (!tilePrefixes.size) return;
+      this.createOverlayOnMap?.(null, { tilePrefixes, immediate: true });
+    }, 150);
   }
 
   /** @returns {{blob: Blob, lastModified: string|null}|null} The last tile PNG seen for that tile. */
