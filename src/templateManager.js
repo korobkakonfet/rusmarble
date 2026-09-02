@@ -3302,24 +3302,25 @@ export default class TemplateManager {
   }
 
   /** How #deface (erase) pixels are shown.
+   *   'off'     - nothing at all, leaving wplace's own punched-out rendering visible
    *   'color'   - their own colour, rgb(222,250,206)
    *   'crossed' - a hollow cross drawn over wplace's pixels
-   * @returns {'color'|'crossed'}
+   * @returns {'off'|'color'|'crossed'}
    * @since 0.87.83
    */
   getDefaceDisplayMode() {
     const stored = this.userSettings?.defaceDisplayMode;
-    if (stored === 'crossed' || stored === 'color') return stored;
-    // Migrates the boolean this setting shipped as before the third mode existed.
-    return this.userSettings?.showDefaceCrossed === true ? 'crossed' : 'color';
+    if (stored === 'crossed' || stored === 'color' || stored === 'off') return stored;
+    // Migrates the boolean this setting shipped as before the mode existed.
+    return this.userSettings?.showDefaceCrossed === true ? 'crossed' : 'off';
   }
 
   /** Sets how #deface pixels are shown.
-   * @param {'color'|'crossed'} value - The mode
+   * @param {'off'|'color'|'crossed'} value - The mode
    * @since 0.87.83
    */
   async setDefaceDisplayMode(value) {
-    const mode = value === 'crossed' ? 'crossed' : 'color';
+    const mode = (value === 'crossed' || value === 'color') ? value : 'off';
     this.userSettings.defaceDisplayMode = mode;
     delete this.userSettings.showDefaceCrossed;
     await this.storeUserSettings();
