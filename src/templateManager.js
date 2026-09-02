@@ -1819,13 +1819,15 @@ export default class TemplateManager {
               const liveTileY = tileKeyParts[1];
               const tileOffsetX = tileKeyParts[2] || 0;
               const tileOffsetY = tileKeyParts[3] || 0;
-              // Background mode keeps the fetcher it always used. The erase-pixel filter reads
-              // only the already-loaded tile, so it never adds a request of its own.
-              const livePixels = backgroundMode
-                ? await this._livePixelsFetcher(liveTileX, liveTileY)
-                : await this.getCachedTilePixels(
-                  `${String(liveTileX).padStart(4, '0')},${String(liveTileY).padStart(4, '0')}`
-                );
+              // The copy the page already loaded first, for background mode too: its fetcher
+              // downloads the tile once per chunk per overlay pass, and the erase-pixel redraw
+              // made those passes far more frequent. Falls back to the fetcher only when we have
+              // not seen the tile at all, and never fetches outside background mode.
+              const paddedTileKey = `${String(liveTileX).padStart(4, '0')},${String(liveTileY).padStart(4, '0')}`;
+              let livePixels = await this.getCachedTilePixels(paddedTileKey);
+              if (!livePixels && backgroundMode) {
+                livePixels = await this._livePixelsFetcher(liveTileX, liveTileY);
+              }
               if (!(livePixels instanceof Uint8ClampedArray) || livePixels.length < 4) diag.noLivePixels++;
               if (livePixels instanceof Uint8ClampedArray && livePixels.length >= 4) {
                 const liveTileSize = Math.round(Math.sqrt(livePixels.length / 4));
