@@ -1923,7 +1923,12 @@ export default class TemplateManager {
             // are already erased out of the bitmap itself; without this a chunk that fell back to
             // its bitmap showed every erase marker, done or not.
             if (defaceNeedsLiveCheck && templateTileBitmap) {
-              templateTileBitmap = await this._filterDefaceFromBitmap(templateTileBitmap, tileKey, template.shreadSize);
+              const filtered = await this._filterDefaceFromBitmap(templateTileBitmap, tileKey, template.shreadSize);
+              templateTileBitmap = filtered.bitmap;
+              // Without this the bitmap path never marks the chunk as holding erase pixels, so the
+              // "already mounted, skip it" and "signature unchanged, still fresh" shortcuts both
+              // apply again and the overlay is never rebuilt after the canvas changes.
+              if (filtered.hasDeface) chunkDefaceFlags.set(tileKey, true);
             }
             const safeW = Math.max(1, Math.round((templateTileBitmap?.width || 0) / template.shreadSize));
             const safeH = Math.max(1, Math.round((templateTileBitmap?.height || 0) / template.shreadSize));
@@ -3481,7 +3486,7 @@ export default class TemplateManager {
    * @param {ImageBitmap} bitmap - The stored tile bitmap.
    * @param {string} tileKey - "tileX,tileY,pixelX,pixelY".
    * @param {number} shreadSize - Pixels per template pixel in the bitmap.
-   * @returns {Promise<ImageBitmap>}
+   * @returns {Promise<{bitmap: ImageBitmap, hasDeface: boolean}>}
    * @since 0.87.93
    */
   async _filterDefaceFromBitmap(bitmap, tileKey, shreadSize) {
@@ -3489,7 +3494,7 @@ export default class TemplateManager {
     const livePixels = await this.getCachedTilePixels(
       `${String(parts[0]).padStart(4, '0')},${String(parts[1]).padStart(4, '0')}`
     );
-    if (!(livePixels instanceof Uint8ClampedArray) || livePixels.length < 4) return bitmap;
+    if (!(livePixels instanceof Uint8ClampedArray) || livePixels.length < 4) return { bitmap, hasDeface: false };
 
     const liveTileSize = Math.round(Math.sqrt(livePixels.length / 4));
     const offsetX = parts[2] || 0;
@@ -3506,6 +3511,7 @@ export default class TemplateManager {
       const data = image.data;
 
       let cleared = 0;
+      let hasDeface = false;
       const logicalWidth = Math.max(1, Math.round(bitmap.width / step));
       const logicalHeight = Math.max(1, Math.round(bitmap.height / step));
       for (let ly = 0; ly < logicalHeight; ly++) {
@@ -3514,6 +3520,7 @@ export default class TemplateManager {
           const centre = ((ly * step + (step >> 1)) * bitmap.width + (lx * step + (step >> 1))) * 4;
           if (data[centre + 3] === 0) continue;
           if (!isDefaceRgb(data[centre], data[centre + 1], data[centre + 2])) continue;
+          hasDeface = true;
           const liveX = offsetX + lx;
           const liveY = offsetY + ly;
           if (liveX < 0 || liveY < 0 || liveX >= liveTileSize || liveY >= liveTileSize) continue;
@@ -3525,14 +3532,14 @@ export default class TemplateManager {
           cleared++;
         }
       }
-      if (cleared === 0) return bitmap;
+      if (cleared === 0) return { bitmap, hasDeface };
       context.putImageData(image, 0, 0);
       const filtered = await createImageBitmap(canvas);
       bitmap.close?.();
-      return filtered;
+      return { bitmap: filtered, hasDeface };
     } catch (exception) {
       consoleWarn('[deface] Could not filter the bitmap tile; drawing it unchanged.', exception);
-      return bitmap;
+      return { bitmap, hasDeface: false };
     } finally {
       if (canvas) cleanUpCanvas(canvas);
       canvas = null;
