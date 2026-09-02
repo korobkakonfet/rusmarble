@@ -1793,6 +1793,12 @@ export default class TemplateManager {
           const defaceFilter = !backgroundMode && chunkHasDeface && !!this._livePixelsFetcher;
 
           if (sampleData && (backgroundMode || defaceFilter)) {
+            // Diagnostic, because the catch below is silent by design and a failure here looks
+            // exactly like "the filter does nothing". Read it as `bmDefaceDiag` in the console.
+            const diag = (globalThis.bmDefaceDiag ??= {
+              runs: 0, deface: 0, dropped: 0, kept: 0, noLivePixels: 0, errors: 0, lastError: null,
+            });
+            diag.runs++;
             try {
               const tileKeyParts = String(tileKey).split(',').map(Number);
               const liveTileX = tileKeyParts[0];
@@ -1800,6 +1806,7 @@ export default class TemplateManager {
               const tileOffsetX = tileKeyParts[2] || 0;
               const tileOffsetY = tileKeyParts[3] || 0;
               const livePixels = await this._livePixelsFetcher(liveTileX, liveTileY);
+              if (!(livePixels instanceof Uint8ClampedArray) || livePixels.length < 4) diag.noLivePixels++;
               if (livePixels instanceof Uint8ClampedArray && livePixels.length >= 4) {
                 const liveTileSize = Math.round(Math.sqrt(livePixels.length / 4));
                 const filteredSample = {
@@ -1841,6 +1848,10 @@ export default class TemplateManager {
                   const keepSample = isDefaceSample
                     ? liveAlpha >= 1
                     : (backgroundMode ? liveAlpha < 1 : true);
+                  if (isDefaceSample) {
+                    diag.deface++;
+                    if (keepSample) diag.kept++; else diag.dropped++;
+                  }
                   if (keepSample) {
                     const wi = filteredSample.count++;
                     filteredSample.x[wi] = sampleData.x[i];
@@ -1854,7 +1865,13 @@ export default class TemplateManager {
                 }
                 sampleData = filteredSample;
               }
-            } catch (_) {}
+            } catch (exception) {
+              // Was `catch (_) {}`: a throw here (a tainted-canvas read in getLiveTilePixels, for
+              // one) silently left every erase marker in place, which is indistinguishable from
+              // the filter simply not working.
+              diag.errors++;
+              diag.lastError = String(exception?.message || exception);
+            }
           }
 
           return { tileKey, sourceID, sampleData, defaceFilter };
