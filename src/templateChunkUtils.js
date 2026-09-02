@@ -392,12 +392,7 @@ export const renderSampleDataToImage = ({
       continue;
     }
     let packedColor;
-    // 'hole' punches the erase area out of wplace's own tile instead (see
-    // templateManager.punchDefaceHolesInTile), so the overlay must draw nothing over it.
-    if (isDeface && defaceRender === 'hole') {
-      if (!clearSkipped) continue;
-      packedColor = 0;
-    } else if (!isDeface && displayedColorSet && !displayedColorSet.has(getPaletteKeyForRgb(red, green, blue))) {
+    if (!isDeface && displayedColorSet && !displayedColorSet.has(getPaletteKeyForRgb(red, green, blue))) {
       if (!clearSkipped) continue;
       packedColor = 0;
     } else {
@@ -944,6 +939,46 @@ export const mergeTemplateExampleReservoir = (target, incoming, exampleMax, rand
   }
 };
 
+/** Palette key of the in-game Transparent colour, which is what a #deface pixel asks for. */
+export const TEMPLATE_DEFACE_COLOR_KEY = TEMPLATE_DEFACE_RGB.join(',');
+
+/** Records the erase pixels that still carry paint, as examples under the Transparent key.
+ *
+ * The progress scan proper skips #deface pixels outright (JS at the `isDefacePixel` guard, WASM at
+ * collectProgress.wat's "Skip deface pixels"), so nothing downstream ever learned that an erase
+ * pixel needs work. This adds only examples and a `missing` tally under the Transparent key --
+ * requiredCount, paintedCount and wrongCount are deliberately left alone, so overall progress
+ * percentages are unchanged and only the Transparent entry gains something to act on.
+ * @since 0.87.83
+ */
+const collectDefaceExamplesFromSamples = ({
+  sampleData, tilePixels, tileSize, offsetX, offsetY, tileCoords,
+  templateEnabled, paletteStats, exampleMax, randomFn,
+}) => {
+  if (templateEnabled === false || !(exampleMax > 0)) return;
+  if (!(tilePixels instanceof Uint8ClampedArray)) return;
+  const safeTileSize = Math.max(1, Math.trunc(Number(tileSize) || 0));
+  let entry = null;
+  for (let index = 0; index < sampleData.count; index++) {
+    if ((sampleData.flags[index] & TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) === 0) continue;
+    if (sampleData.a[index] < 64) continue;
+    const pixelX = offsetX + sampleData.x[index];
+    const pixelY = offsetY + sampleData.y[index];
+    if (pixelX < 0 || pixelY < 0 || pixelX >= safeTileSize || pixelY >= safeTileSize) continue;
+    // An erase pixel is "done" exactly when the canvas there is already empty.
+    if (tilePixels[(pixelY * safeTileSize + pixelX) * 4 + 3] < 1) continue;
+    if (entry === null) {
+      entry = paletteStats[TEMPLATE_DEFACE_COLOR_KEY];
+      if (entry === undefined) {
+        entry = { painted: 0, paintedAndEnabled: 0, missing: 0, examplesEnabled: [] };
+        paletteStats[TEMPLATE_DEFACE_COLOR_KEY] = entry;
+      }
+    }
+    entry.missing += 1;
+    addPixelExampleToReservoir(entry, tileCoords, pixelX, pixelY, exampleMax, randomFn);
+  }
+};
+
 export const collectTemplateProgressFromSamples = ({
   sampleData,
   tilePixels,
@@ -967,6 +1002,12 @@ export const collectTemplateProgressFromSamples = ({
   if (!sampleData || !tilePixels || !Number.isFinite(tileSize)) {
     return { paintedCount: 0, wrongCount: 0, requiredCount: 0 };
   }
+
+  // Independent of which path below runs: both skip #deface pixels entirely.
+  collectDefaceExamplesFromSamples({
+    sampleData, tilePixels, tileSize, offsetX, offsetY, tileCoords,
+    templateEnabled, paletteStats, exampleMax, randomFn,
+  });
 
   // --- WASM fast path ---
   if (useWasm && isCollectProgressWasmAvailable() && tilePixels instanceof Uint8ClampedArray) {

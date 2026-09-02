@@ -15,15 +15,9 @@ import {
   decodeChunkSampleBuffer,
   readChunkSampleHeader,
   renderSampleDataToImage,
-  TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE,
 } from './templateChunkUtils.js';
 import { templateWorkerManager } from './templateWorkerManager.js';
 import { canUseTemplateBufferDb, readTemplateBuffers, writeTemplateBuffers, deleteTemplateBuffers, listTemplateBufferKeys, reportTemplateBufferBytes, estimateStorageQuota } from './templateBufferStore.js';
-
-/** Upscale factor used when re-serving a tile with erase crosses cut out of it. 3 is the smallest
- * factor whose sub-grid can hold a cross (two diagonals of 3x3) and still leave the four corners
- * showing the pixel's own colour. */
-const DEFACE_HOLE_SCALE = 3;
 
 const DEFAULT_TEMPLATE_SYNC_STREAM = 'root';
 const DEFAULT_TEMPLATE_EXAMPLE_LIMIT = 32;
@@ -3254,24 +3248,22 @@ export default class TemplateManager {
   /** How #deface (erase) pixels are shown.
    *   'color'   - their own colour, rgb(222,250,206)
    *   'crossed' - a hollow cross drawn over wplace's pixels
-   *   'hole'    - punched out of wplace's own tile, so the base map shows through
-   * @returns {'color'|'crossed'|'hole'}
+   * @returns {'color'|'crossed'}
    * @since 0.87.83
    */
   getDefaceDisplayMode() {
     const stored = this.userSettings?.defaceDisplayMode;
-    if (stored === 'crossed' || stored === 'hole' || stored === 'color') return stored;
+    if (stored === 'crossed' || stored === 'color') return stored;
     // Migrates the boolean this setting shipped as before the third mode existed.
     return this.userSettings?.showDefaceCrossed === true ? 'crossed' : 'color';
   }
 
   /** Sets how #deface pixels are shown.
-   * @param {'color'|'crossed'|'hole'} value - The mode
+   * @param {'color'|'crossed'} value - The mode
    * @since 0.87.83
    */
   async setDefaceDisplayMode(value) {
-    const previous = this.getDefaceDisplayMode();
-    const mode = (value === 'crossed' || value === 'hole') ? value : 'color';
+    const mode = value === 'crossed' ? 'crossed' : 'color';
     this.userSettings.defaceDisplayMode = mode;
     delete this.userSettings.showDefaceCrossed;
     await this.storeUserSettings();
@@ -3279,101 +3271,8 @@ export default class TemplateManager {
     // raster cache key, so drop the cached rasters and the signatures that would skip the redraw.
     this._overlayRasterCache?.clear();
     this._overlayRenderSignatures?.clear?.();
-    // Entering or leaving 'hole' changes wplace's own tiles, which are only rewritten as they are
-    // fetched -- the caller has to re-request them for the change to become visible.
-    return { modeChanged: previous !== mode, tileRewriteChanged: (previous === 'hole') !== (mode === 'hole') };
   }
 
-  /** Punches the template's #deface pixels out of a wplace tile.
-   *
-   * The overlay is a maplibre layer above wplace's pixel layer, so it can only ever draw on top --
-   * it cannot subtract what wplace already painted. Making an erase area actually read as empty
-   * means handing wplace a modified tile, which the injected fetch hook holds the response open
-   * for. Returns the original blob untouched whenever there is nothing to punch, so the common
-   * case costs one lookup and no re-encode.
-   * @param {Blob} tileBlob - The tile PNG as fetched.
-   * @param {number[]} tileCoords - [tileX, tileY].
-   * @returns {Promise<Blob>} The rewritten tile, or `tileBlob` when unchanged.
-   * @since 0.87.83
-   */
-  async punchDefaceHolesInTile(tileBlob, tileCoords) {
-    if (this.getDefaceDisplayMode() !== 'hole') return tileBlob;
-    if (!tileBlob || !Array.isArray(tileCoords) || tileCoords.length < 2) return tileBlob;
-
-    const tileCoordsPadded = tileCoords[0].toString().padStart(4, '0') + ',' + tileCoords[1].toString().padStart(4, '0');
-    // Deliberately not filtered by defacePixelCount: importJSON never restores that field, so for
-    // every template loaded from storage it is still 0 and the filter dropped all of them. The
-    // sample scan below is the authority, and it costs nothing when there is nothing to punch.
-    const involvedTemplates = this.getInvolvedTemplates(tileCoords)
-      .filter((template) => (template?.enabled ?? true));
-    if (!involvedTemplates.length) return tileBlob;
-
-    const chunks = involvedTemplates.flatMap((template) => (
-      (this._getTileKeysByPrefixMap(template).get(tileCoordsPadded) ?? []).map((tileKey) => {
-        const parts = tileKey.split(',');
-        return { template, tileKey, offsetX: +parts[2], offsetY: +parts[3] };
-      })
-    ));
-    if (!chunks.length) return tileBlob;
-
-    const tileSize = this.tileSize;
-    const memorySaving = this.isMemorySavingModeOn();
-
-    // Collect the holes before touching the PNG: a tile whose templates have no erase pixels is
-    // the common case, and it must not pay for a decode + re-encode.
-    const holes = [];
-    for (const chunk of chunks) {
-      const sampleData = await chunk.template.getChunkSamples(chunk.tileKey, { memorySaving })
-        .catch(() => null);
-      if (!sampleData) continue;
-      for (let index = 0; index < sampleData.count; index++) {
-        if ((sampleData.flags[index] & TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) === 0) continue;
-        const pixelX = chunk.offsetX + sampleData.x[index];
-        const pixelY = chunk.offsetY + sampleData.y[index];
-        if (pixelX < 0 || pixelY < 0 || pixelX >= tileSize || pixelY >= tileSize) continue;
-        holes.push(pixelX, pixelY);
-      }
-    }
-    if (!holes.length) return tileBlob;
-
-    try {
-      // One wplace pixel is one pixel of the tile PNG, so a shape cannot be cut inside it at the
-      // source resolution. The tile is re-served upscaled (nearest-neighbour, so the colours stay
-      // exact) purely to create the sub-pixel grid the cross is cut out of. Only tiles that
-      // actually carry erase pixels reach this point, so untouched tiles keep their original size.
-      const scale = DEFACE_HOLE_SCALE;
-      const scaledSize = tileSize * scale;
-      const tileBitmap = await createBitmapPreservingPixels(tileBlob);
-      const canvas = new OffscreenCanvas(scaledSize, scaledSize);
-      const context = canvas.getContext('2d', { willReadFrequently: true });
-      context.imageSmoothingEnabled = false;
-      context.clearRect(0, 0, scaledSize, scaledSize);
-      context.drawImage(tileBitmap, 0, 0, scaledSize, scaledSize);
-      tileBitmap.close();
-
-      const image = context.getImageData(0, 0, scaledSize, scaledSize);
-      const data = image.data;
-      const lastCell = scale - 1;
-      for (let index = 0; index < holes.length; index += 2) {
-        const baseX = holes[index] * scale;
-        const baseY = holes[index + 1] * scale;
-        // Both diagonals of the pixel's own sub-grid: the colour survives in the corners between
-        // the arms, so the pixel still reads as painted while the cross shows the map through it.
-        for (let cellY = 0; cellY < scale; cellY++) {
-          const rowOffset = (baseY + cellY) * scaledSize + baseX;
-          for (let cellX = 0; cellX < scale; cellX++) {
-            if (cellX !== cellY && cellX + cellY !== lastCell) continue;
-            data[(rowOffset + cellX) * 4 + 3] = 0;
-          }
-        }
-      }
-      context.putImageData(image, 0, 0);
-      return await canvas.convertToBlob({ type: 'image/png' });
-    } catch (exception) {
-      consoleWarn('[deface] Failed to punch erase holes into tile; serving it unchanged.', exception);
-      return tileBlob;
-    }
-  }
 
   /** Sets the showIntegerZoom to a value.
    * @param {boolean} value - The value

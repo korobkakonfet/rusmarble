@@ -890,24 +890,6 @@ export default class ApiManager {
           const involvedTemplates = this.templateManager.getInvolvedTemplates(tileCoordsTile);
 
           const blobData = data['blobData'];
-          // In 'hole' mode the injected fetch hook is holding this tile's response open, waiting
-          // for us. Answer before anything else can `break` out of this case: an unanswered tile
-          // only unblocks on the hook's timeout, which would stall rendering for 3s per tile.
-          const tileBlobID = data['blobID'];
-          if (tileBlobID) {
-            let outgoingBlob = blobData;
-            if (involvedTemplates.length > 0) {
-              outgoingBlob = await this.templateManager
-                .punchDefaceHolesInTile(blobData, tileCoordsTile)
-                .catch(() => blobData);
-            }
-            window.postMessage({
-              source: 'blue-marble',
-              blobID: tileBlobID,
-              blobData: outgoingBlob
-            });
-          }
-
           if (involvedTemplates.length === 0) {
             break;
           }
