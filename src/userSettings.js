@@ -20,8 +20,6 @@ import { CUSTOM_LAYOUT_THEME } from './customTheme.js';
  * @param {() => void} deps.buildColorFilterList - Rebuilds the color filter list.
  * @param {() => void} deps.buildTemplateFilterList - Rebuilds the template filter list.
  * @param {(value?: boolean) => void} deps.forceRefreshTiles - Forces map tile refresh.
- * @param {(enabled: boolean) => void} deps.setInjectedDefaceHoleState - Tells the injected fetch
- *   hook whether tile responses must wait for a rewritten PNG.
  * @param {(layer: string) => void} deps.removeLayer - Removes map layer by id.
  * @param {(enabled: boolean) => void} deps.setMapCommentsEnabled - Enables/disables map comments on the map layer.
  * @param {(enabled: boolean) => void} deps.applyArchiveBackground - Enables/disables archive background raster layer.
@@ -49,7 +47,6 @@ export function buildUserSettingsSection({
   buildColorFilterList,
   buildTemplateFilterList,
   forceRefreshTiles,
-  setInjectedDefaceHoleState,
   removeLayer,
   setMapCommentsEnabled,
   applyArchiveBackground,
@@ -209,7 +206,7 @@ export function buildUserSettingsSection({
           .addSpan({'id': 'bm-deface-display-label', 'textContent': t('settings.defaceDisplay.label')}).buildElement()
           .addSelect({'id': 'bm-deface-display'}, (instance, select) => {
             const currentMode = templateManager.getDefaceDisplayMode();
-            ['color', 'crossed', 'hole'].forEach((value) => {
+            ['color', 'crossed'].forEach((value) => {
               const option = document.createElement('option');
               option.value = value;
               option.textContent = t(`settings.defaceDisplay.${value}`);
@@ -217,14 +214,8 @@ export function buildUserSettingsSection({
               select.appendChild(option);
             });
             select.addEventListener('change', async () => {
-              const result = await templateManager.setDefaceDisplayMode(select.value);
-              // The injected hook only holds tile responses open while it knows 'hole' is active,
-              // and it lives in page scope -- without this it never starts waiting for us.
-              setInjectedDefaceHoleState?.(templateManager.getDefaceDisplayMode() === 'hole');
+              await templateManager.setDefaceDisplayMode(select.value);
               await templateManager.createOverlayOnMapVisibleOnly(null, { skipExisting: false });
-              // 'hole' rewrites wplace's own tiles, and only as they are fetched -- the ones
-              // already on screen keep the previous look until they are re-requested.
-              if (result?.tileRewriteChanged) { forceRefreshTiles(); }
               instance.handleDisplayStatus(`Transparent pixels: ${t(`settings.defaceDisplay.${select.value}`)}.`);
             });
           }).buildElement()

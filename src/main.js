@@ -80,7 +80,6 @@ const CHAT_MAX_USER_LEN = 15;
 const CHAT_MAX_TEXT_LEN = 300;
 const REPORT_REQUEST_EVENT_TYPE = 'bm-report-request';
 const SAFE_MODE_MESSAGE_TYPE = 'bm-safe-mode';
-const DEFACE_HOLE_MESSAGE_TYPE = 'bm-deface-hole';
 const INJECTED_SAFE_MODE_STORAGE_KEY = 'bmSafeModeEnabled';
 const INJECTED_SAFE_MODE_ATTR = 'data-bm-safe-mode';
 const REPORT_CLICK_FALLBACK_MS = 5000;
@@ -1635,37 +1634,6 @@ function setInjectedSafeModeState(enabled, { broadcast = true } = {}) {
   }
 }
 
-const INJECTED_DEFACE_HOLE_STORAGE_KEY = 'bmDefaceHole';
-
-/** Reads the 'hole' flag for the injected hook before user settings have loaded.
- * inject() runs long before GM storage resolves, so the value is mirrored into localStorage by
- * setInjectedDefaceHoleState and read back from there on the next page load.
- * @returns {string} 'true' or 'false'.
- * @since 0.87.83
- */
-function readInjectedDefaceHoleBootstrap() {
-  try {
-    return window.localStorage?.getItem(INJECTED_DEFACE_HOLE_STORAGE_KEY) === '1' ? 'true' : 'false';
-  } catch (_) {
-    return 'false';
-  }
-}
-
-/** Tells the injected fetch hook whether it must wait for rewritten tiles.
- * @param {boolean} enabled - Whether 'hole' mode is active.
- * @since 0.87.83
- */
-function setInjectedDefaceHoleState(enabled) {
-  try {
-    window.localStorage?.setItem(INJECTED_DEFACE_HOLE_STORAGE_KEY, enabled ? '1' : '0');
-  } catch (_) {}
-  window.postMessage({
-    source: 'blue-marble',
-    type: DEFACE_HOLE_MESSAGE_TYPE,
-    enabled: enabled === true
-  }, '*');
-}
-
 /** Injects code into the client
  * This code will execute outside of TamperMonkey's sandbox
  * @param {*} callback - The code to execute
@@ -1677,7 +1645,6 @@ function inject(callback) {
     script.setAttribute('bm-cStyle', consoleStyle); // Passes in the console style value
     script.setAttribute('bm-safe-mode', readInjectedSafeModeBootstrap());
     script.setAttribute('bm-safe-mode-storage-key', INJECTED_SAFE_MODE_STORAGE_KEY);
-    script.setAttribute('bm-deface-hole', readInjectedDefaceHoleBootstrap());
     script.textContent = `(${callback})();`;
     // script.textContent = `setTimeout(${callback}, 1000);`; // For debugging the case when there is delay when starting the script
     document.documentElement?.appendChild(script);
@@ -3875,13 +3842,7 @@ inject(() => {
   const fetchedBlobQueue = new Map(); // Blobs being processed
   const REPORT_EVENT_TYPE = 'bm-report-request';
   const SAFE_MODE_EVENT_TYPE = 'bm-safe-mode';
-  const DEFACE_HOLE_EVENT_TYPE = 'bm-deface-hole';
   const SAFE_MODE_ATTR = 'data-bm-safe-mode';
-  // Mirrors templateManager.getDefaceDisplayMode() === 'hole'. Only while this is on does the tile
-  // fetch below wait for the userscript to hand back a rewritten PNG; otherwise it stays a
-  // fire-and-forget notification and the original response is returned untouched.
-  let defaceHoleEnabled = script?.getAttribute('bm-deface-hole') === 'true';
-  const TILE_REWRITE_TIMEOUT_MS = 3000;
   const safeModeStorageKey = script?.getAttribute('bm-safe-mode-storage-key') || 'bmSafeModeEnabled';
   let debugLoggingEnabled = script?.getAttribute('bm-debug') === 'true';
   let safeModeEnabled = false;
@@ -3942,10 +3903,6 @@ inject(() => {
     const { source, endpoint, blobID, blobData, blink } = event.data ?? {};
     if (source === 'blue-marble' && event?.data?.type === SAFE_MODE_EVENT_TYPE) {
       syncSafeModeEnabled(event?.data?.enabled === true);
-      return;
-    }
-    if (source === 'blue-marble' && event?.data?.type === DEFACE_HOLE_EVENT_TYPE) {
-      defaceHoleEnabled = event?.data?.enabled === true;
       return;
     }
     if (source === 'blue-marble' && event?.data?.type === 'bm-debug-logging') {
@@ -4249,40 +4206,6 @@ inject(() => {
 
       if (isDebugLoggingEnabledInjected()) {
         console.log(`%c${name}%c: ${fetchedBlobQueue.size} Sending IMAGE message about endpoint "${endpointName}"`, consoleStyle, '');
-      }
-
-      // In 'hole' mode the userscript rewrites the tile so wplace paints the erase area as empty,
-      // so the response has to wait for it. Every other image stays fire-and-forget.
-      if (defaceHoleEnabled && endpointName.includes('/tiles/')) {
-        return new Promise((resolve) => {
-          const blobUUID = crypto.randomUUID();
-          let settled = false;
-          // Resolving with the original response is always safe: worst case the tile is drawn the
-          // way wplace sent it. Never leaving the promise pending is what actually matters -- a
-          // missed reply would otherwise stall that tile forever.
-          const finish = (processed) => {
-            if (settled) return;
-            settled = true;
-            fetchedBlobQueue.delete(blobUUID);
-            resolve(processed
-              ? new Response(processed, {
-                headers: cloned.headers,
-                status: cloned.status,
-                statusText: cloned.statusText
-              })
-              : response);
-          };
-          fetchedBlobQueue.set(blobUUID, finish);
-          setTimeout(() => finish(null), TILE_REWRITE_TIMEOUT_MS);
-          window.postMessage({
-            source: 'blue-marble',
-            endpoint: endpointName,
-            blobID: blobUUID,
-            lastModified: cloned.headers.get("Last-Modified"),
-            blobData: blob,
-            blink: blink
-          });
-        });
       }
 
       // Send the received blob
@@ -4804,9 +4727,6 @@ readBootStorageValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   ext.onUserSettingsLoaded({ templateManager, searchParams: _qp });
 
   currentLayoutLanguage = normalizeLayoutLanguage(templateManager.getLayoutLanguage?.());
-  // Re-assert the flag the injected hook bootstrapped from localStorage, now that the real setting
-  // is known -- it is what decides whether tile responses wait for a rewrite.
-  setInjectedDefaceHoleState(templateManager.getDefaceDisplayMode?.() === 'hole');
   setMapCommentsEnabled(templateManager.isMapCommentsEnabled());
   ensureHqTemplateManager();
   if (templateManager.isArchiveBackgroundEnabled()) applyArchiveBackground(true);
@@ -6833,7 +6753,7 @@ const applyLayoutLanguage = (value = null) => {
   const defaceDisplaySelect = document.getElementById('bm-deface-display');
   replaceSelectOptions(
     defaceDisplaySelect,
-    ['color', 'crossed', 'hole'].map((value) => [value, t(`settings.defaceDisplay.${value}`)]),
+    ['color', 'crossed'].map((value) => [value, t(`settings.defaceDisplay.${value}`)]),
     templateManager.getDefaceDisplayMode()
   );
   setCheckboxLabelText('bm-enable-keybinds', t('settings.enableKeybinds'));
@@ -7335,7 +7255,6 @@ async function buildOverlayMain() {
       buildColorFilterList: () => buildColorFilterList(),
       buildTemplateFilterList: () => buildTemplateFilterList(),
       forceRefreshTiles,
-      setInjectedDefaceHoleState,
       removeLayer,
       setMapCommentsEnabled: (enabled) => setMapCommentsEnabled(enabled),
       applyArchiveBackground: (enabled) => applyArchiveBackground(enabled),
