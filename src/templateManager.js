@@ -15,6 +15,7 @@ import {
   decodeChunkSampleBuffer,
   readChunkSampleHeader,
   renderSampleDataToImage,
+  TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE,
 } from './templateChunkUtils.js';
 import { templateWorkerManager } from './templateWorkerManager.js';
 import { canUseTemplateBufferDb, readTemplateBuffers, writeTemplateBuffers, deleteTemplateBuffers, listTemplateBufferKeys, reportTemplateBufferBytes, estimateStorageQuota } from './templateBufferStore.js';
@@ -291,6 +292,13 @@ export default class TemplateManager {
     this._activeOverlayGenerationId = null;
     this._overlayRasterCache = new Map();
     this._livePixelsFetcher = null;
+    // Freshest tile PNGs as the page itself received them, keyed "0000,0000". The overlay reads
+    // erase pixels against these instead of re-requesting the tile URL, which the browser cache
+    // and wplace's own service worker both answer with a stale copy.
+    this._latestTileBlobs = new Map();
+    // Bumped whenever any tile PNG arrives. Templates with erase pixels are rendered against live
+    // canvas state, so this is the only thing that can tell their cached render apart.
+    this._tileBlobEpoch = 0;
   }
 
   /** Retrieves the pixel art canvas.
@@ -449,6 +457,10 @@ export default class TemplateManager {
       "samples": createTileOptions.persistChunkSamples && createTileOptions.lazyPersistChunkSamples !== true ? templateChunkSampleBuffers : {},
       "tileKeys": templateTileKeys,
       "palette": template.colorPalette, // Persist palette and enabled flags
+      // #deface pixels are counted apart from the palette, so nothing in "palette" implies them.
+      // Without this the count is 0 for every template restored from storage, and the overlay
+      // cannot tell which templates need their erase pixels checked against the live canvas.
+      "deface": Math.max(0, Number(template.defacePixelCount) || 0),
       "shreadSize": template.shreadSize // Record shread size of the created template
     };
     if (timeArchiveMeta) {
@@ -1701,8 +1713,14 @@ export default class TemplateManager {
 
       const drawMultTemplate = template.shreadSize;
       const drawMultCenterTemplate = (template.shreadSize - 1) >> 1;
-      const useCheckerboardRender = !hasColorDisabled && drawMultTemplate === drawMultResult && displayMode !== 'fill';
+      const useUnfilteredRender = !hasColorDisabled && drawMultTemplate === drawMultResult && displayMode !== 'fill';
       const backgroundMode = this.isBackgroundModeEnabled() && !!this._livePixelsFetcher;
+      const chunkDefaceFlags = (template._chunkDefaceFlags ??= new Map());
+      // Comparing erase pixels against the live canvas only matters when we actually draw them.
+      // It costs a tile read per pass, and those reads go to wplace's service worker -- the same
+      // one that composes the punched-out pixels while painting -- so in 'off' mode, where nothing
+      // is drawn for them anyway, none of that machinery may run.
+      const defaceNeedsLiveCheck = this.getDefaceDisplayMode() !== 'off';
 
       // Phase 1: categorize tiles into cached / sample / bitmap buckets
       const yieldUi = createUiWorkScheduler(); // independent scheduler per template
@@ -1722,7 +1740,14 @@ export default class TemplateManager {
         const sourceID = `BM-overlay-${tileKey}-${template.sortID}`;
         if (skipExisting && mountedOverlaySourceIDs?.has(sourceID)) { skippedMountedTiles = true; continue; }
 
-        const rawBuffer = !backgroundMode ? template.getRawChunkBuffer(tileKey) : null;
+        // A chunk with #deface pixels has to be re-checked against the live canvas on every pass,
+        // so it cannot take the raw-buffer fast path or come out of the raster cache. Which chunks
+        // those are is learned on the first decode below and remembered per chunk, so a template
+        // without erase pixels pays one slow pass per chunk and then behaves exactly as before.
+        const chunkKnownWithoutDeface = !defaceNeedsLiveCheck || chunkDefaceFlags.get(tileKey) === false;
+        const rawBuffer = (!backgroundMode && chunkKnownWithoutDeface)
+          ? template.getRawChunkBuffer(tileKey)
+          : null;
         if (rawBuffer) {
           const header = readChunkSampleHeader(rawBuffer);
           if (header) {
@@ -1756,7 +1781,18 @@ export default class TemplateManager {
         const slowResults = await Promise.all(slowTiles.map(async ({ tileKey, sourceID }) => {
           let sampleData = await template.getChunkSamples(tileKey, { memorySaving: currentMemorySavingMode });
 
-          if (sampleData && backgroundMode) {
+          let chunkHasDeface = false;
+          if (sampleData && defaceNeedsLiveCheck) {
+            for (let i = 0; i < sampleData.count; i++) {
+              if ((sampleData.flags[i] & TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) !== 0) { chunkHasDeface = true; break; }
+            }
+            chunkDefaceFlags.set(tileKey, chunkHasDeface);
+          }
+          // Erase pixels are filtered whatever the mode: a #deface pixel sitting on an already
+          // empty canvas pixel is in its correct state, so it must not be marked at all.
+          const defaceFilter = !backgroundMode && chunkHasDeface && !!this._livePixelsFetcher;
+
+          if (sampleData && (backgroundMode || defaceFilter)) {
             try {
               const tileKeyParts = String(tileKey).split(',').map(Number);
               const liveTileX = tileKeyParts[0];
@@ -1794,7 +1830,18 @@ export default class TemplateManager {
                     continue;
                   }
                   const liveAlpha = livePixels[(ly * liveTileSize + lx) * 4 + 3];
-                  if (liveAlpha < 1) {
+                  // Background mode shows what is left to do, and for a #deface pixel that is the
+                  // opposite test: it asks for the canvas to be EMPTY, so it is done once the live
+                  // pixel is gone and still outstanding while paint is there. Sharing the
+                  // `liveAlpha < 1` rule marked every finished erase pixel and hid every pending
+                  // one -- exactly inverted.
+                  const isDefaceSample = (sampleData.flags[i] & TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) !== 0;
+                  // Background mode keeps only what is left to do. Outside it, nothing is dropped
+                  // except erase pixels that are already erased.
+                  const keepSample = isDefaceSample
+                    ? liveAlpha >= 1
+                    : (backgroundMode ? liveAlpha < 1 : true);
+                  if (keepSample) {
                     const wi = filteredSample.count++;
                     filteredSample.x[wi] = sampleData.x[i];
                     filteredSample.y[wi] = sampleData.y[i];
@@ -1810,19 +1857,22 @@ export default class TemplateManager {
             } catch (_) {}
           }
 
-          return { tileKey, sourceID, sampleData };
+          return { tileKey, sourceID, sampleData, defaceFilter };
         }));
 
         if (this._activeOverlayGenerationId !== overlayGenerationId) return null;
 
-        for (const { tileKey, sourceID, sampleData } of slowResults) {
+        for (const { tileKey, sourceID, sampleData, defaceFilter } of slowResults) {
           if (sampleData) {
             const safeW = Math.max(1, Math.round(Number(sampleData.width) || 0));
             const safeH = Math.max(1, Math.round(Number(sampleData.height) || 0));
             const resultWidth = safeW * drawMultResult;
             const resultHeight = safeH * drawMultResult;
-            const overlayCacheKey = this.getOverlayRasterCacheKey(tileKey, template.sortID, drawMultResult, displayMode, displayedColorsHash);
-            const cachedRaster = backgroundMode ? null : this.getOverlayRasterCacheEntry(overlayCacheKey);
+            // A null key both skips the lookup and makes setOverlayRasterCacheEntry a no-op.
+            const overlayCacheKey = (backgroundMode || defaceFilter)
+              ? null
+              : this.getOverlayRasterCacheKey(tileKey, template.sortID, drawMultResult, displayMode, displayedColorsHash);
+            const cachedRaster = overlayCacheKey ? this.getOverlayRasterCacheEntry(overlayCacheKey) : null;
             if (cachedRaster?.pixels instanceof Uint8ClampedArray) {
               cachedTiles.push({ tileKey, sourceID, pixels: cachedRaster.pixels.slice(), resultWidth, resultHeight, safeW, safeH });
             } else {
@@ -1896,8 +1946,8 @@ export default class TemplateManager {
           drawSize: drawMultResult,
           maskPoints,
           maskRowSpans: serializedMaskRowSpans,
-          displayedColors: useCheckerboardRender ? null : displayedColors,
-          includeDefaceCheckerboard: useCheckerboardRender,
+          displayedColors: useUnfilteredRender ? null : displayedColors,
+          defaceRender: this.getDefaceDisplayMode(),
           enforceTransparentAsDeface: template.enforceTransparentAsDeface === true,
           transparentEraseColor: this.getTransparentEraseColor(),
         }, { generation: overlayGenerationId, transferList: mergeTransferList });
@@ -1924,8 +1974,8 @@ export default class TemplateManager {
           drawSize: drawMultResult,
           maskPoints,
           maskRowSpans: serializedMaskRowSpans,
-          displayedColors: useCheckerboardRender ? null : displayedColors,
-          includeDefaceCheckerboard: useCheckerboardRender,
+          displayedColors: useUnfilteredRender ? null : displayedColors,
+          defaceRender: this.getDefaceDisplayMode(),
           enforceTransparentAsDeface: template.enforceTransparentAsDeface === true,
           transparentEraseColor: this.getTransparentEraseColor(),
         }, { generation: overlayGenerationId, transferList: batchTransferList });
@@ -1939,7 +1989,7 @@ export default class TemplateManager {
       }
 
       return { template, cachedTiles, sampleTiles, bitmapTiles, workerPixelMap, mergedBitmap, canMerge,
-        useCheckerboardRender, drawMultTemplate, drawMultCenterTemplate };
+        useUnfilteredRender, drawMultTemplate, drawMultCenterTemplate };
     }));
     profiler.end('overlay:phase1');
 
@@ -1954,7 +2004,7 @@ export default class TemplateManager {
       if (!result) continue;
       if (this._activeOverlayGenerationId !== overlayGenerationId) return;
       const { template, cachedTiles, sampleTiles, bitmapTiles, workerPixelMap, mergedBitmap, canMerge,
-        useCheckerboardRender, drawMultTemplate, drawMultCenterTemplate } = result;
+        useUnfilteredRender, drawMultTemplate, drawMultCenterTemplate } = result;
 
       if (canMerge && mergedBitmap instanceof ImageBitmap) {
         // Worker has already composited all tiles — one MapTiler call suffices.
@@ -2009,10 +2059,10 @@ export default class TemplateManager {
           const image = new ImageData(t.resultWidth, t.resultHeight);
           const sampleDataForFallback = t.sampleData ??
             (t.rawBuffer instanceof Uint8Array ? decodeChunkSampleBuffer(t.rawBuffer) : null);
-          if (useCheckerboardRender) {
-            renderSampleDataToImage({ sampleData: sampleDataForFallback, imageData: image, resultWidth: t.resultWidth, drawSize: drawMultResult, maskPoints, maskRowSpans, includeDefaceCheckerboard: true, enforceTransparentAsDeface: template.enforceTransparentAsDeface === true, transparentEraseColor: this.getTransparentEraseColor() });
+          if (useUnfilteredRender) {
+            renderSampleDataToImage({ sampleData: sampleDataForFallback, imageData: image, resultWidth: t.resultWidth, drawSize: drawMultResult, maskPoints, maskRowSpans, defaceRender: this.getDefaceDisplayMode(), enforceTransparentAsDeface: template.enforceTransparentAsDeface === true, transparentEraseColor: this.getTransparentEraseColor() });
           } else if (!allColorsDisabled) {
-            renderSampleDataToImage({ sampleData: sampleDataForFallback, imageData: image, resultWidth: t.resultWidth, drawSize: drawMultResult, maskPoints, maskRowSpans, displayedColorSet, includeDefaceCheckerboard: false, enforceTransparentAsDeface: template.enforceTransparentAsDeface === true, transparentEraseColor: this.getTransparentEraseColor() });
+            renderSampleDataToImage({ sampleData: sampleDataForFallback, imageData: image, resultWidth: t.resultWidth, drawSize: drawMultResult, maskPoints, maskRowSpans, displayedColorSet, defaceRender: this.getDefaceDisplayMode(), enforceTransparentAsDeface: template.enforceTransparentAsDeface === true, transparentEraseColor: this.getTransparentEraseColor() });
           }
           resultImage = image;
         }
@@ -2078,9 +2128,19 @@ export default class TemplateManager {
     const globalSignature = [drawMultResult, displayMode, displayedColorsHash, (this.isBackgroundModeEnabled() && !!this._livePixelsFetcher) ? 1 : 0].join('||');
     for (const result of phase12Results) {
       if (!result?.template) continue;
+      // A template with erase pixels is rendered against the live canvas, which the normal
+      // signature cannot represent. Keying it on the tile-blob epoch re-renders exactly when new
+      // tile data arrived -- Date.now() here forced a full rebuild on every single overlay pass,
+      // which is both wasteful and a lot more churn during painting.
+      let hasDefaceChunk = false;
+      for (const flag of (this.getDefaceDisplayMode() === 'off' ? [] : result.template._chunkDefaceFlags?.values() ?? [])) {
+        if (flag) { hasDefaceChunk = true; break; }
+      }
       this._overlayRenderSignatures.set(
         String(result.template.sortID),
-        `${globalSignature}||${this._getTemplateRenderSignaturePart(result.template)}`
+        hasDefaceChunk
+          ? `${globalSignature}||deface-live||${this._tileBlobEpoch}`
+          : `${globalSignature}||${this._getTemplateRenderSignaturePart(result.template)}`
       );
     }
     profiler.end('overlay:phase3');
@@ -2248,6 +2308,7 @@ export default class TemplateManager {
           templates[templateKey].height = inferredImageHeight;
         }
         templateInstance.pixelCount = Math.max(0, (templateInstance.imageWidth || 0) * (templateInstance.imageHeight || 0));
+        templateInstance.defacePixelCount = Math.max(0, Number(templateValue.deface) || 0);
 
         if (hasPersistedPalette) {
           const paletteObj = {};
@@ -3245,6 +3306,36 @@ export default class TemplateManager {
     return this.userSettings?.showIntegerZoom ?? false;
   }
 
+  /** How #deface (erase) pixels are shown.
+   *   'off'     - nothing at all, leaving wplace's own punched-out rendering visible
+   *   'color'   - their own colour, rgb(222,250,206)
+   *   'crossed' - a hollow cross drawn over wplace's pixels
+   * @returns {'off'|'color'|'crossed'}
+   * @since 0.87.83
+   */
+  getDefaceDisplayMode() {
+    const stored = this.userSettings?.defaceDisplayMode;
+    if (stored === 'crossed' || stored === 'color' || stored === 'off') return stored;
+    // Migrates the boolean this setting shipped as before the mode existed.
+    return this.userSettings?.showDefaceCrossed === true ? 'crossed' : 'off';
+  }
+
+  /** Sets how #deface pixels are shown.
+   * @param {'off'|'color'|'crossed'} value - The mode
+   * @since 0.87.83
+   */
+  async setDefaceDisplayMode(value) {
+    const mode = (value === 'crossed' || value === 'color') ? value : 'off';
+    this.userSettings.defaceDisplayMode = mode;
+    delete this.userSettings.showDefaceCrossed;
+    await this.storeUserSettings();
+    // Every #deface pixel now rasterizes differently, and the mode is not part of the overlay
+    // raster cache key, so drop the cached rasters and the signatures that would skip the redraw.
+    this._overlayRasterCache?.clear();
+    this._overlayRenderSignatures?.clear?.();
+  }
+
+
   /** Sets the showIntegerZoom to a value.
    * @param {boolean} value - The value
    * @since 0.86.10
@@ -3282,6 +3373,28 @@ export default class TemplateManager {
   async setBackgroundModeEnabled(value) {
     this.userSettings.backgroundMode = Boolean(value);
     await this.storeUserSettings();
+  }
+
+  /** Records the tile PNG the page just received, for the overlay's live-canvas comparison.
+   * @param {string} tileKey - Padded "tileX,tileY".
+   * @param {Blob} blob - The tile PNG.
+   * @param {string|null} lastModified - The response's Last-Modified, used as the decode cache tag.
+   * @since 0.87.83
+   */
+  setLatestTileBlob(tileKey, blob, lastModified = null) {
+    if (!tileKey || !blob) return;
+    // Small and strictly bounded: only the tiles currently on screen are ever asked for.
+    this._tileBlobEpoch++;
+    if (this._latestTileBlobs.has(tileKey)) this._latestTileBlobs.delete(tileKey);
+    this._latestTileBlobs.set(tileKey, { blob, lastModified, time: Date.now() });
+    while (this._latestTileBlobs.size > 24) {
+      this._latestTileBlobs.delete(this._latestTileBlobs.keys().next().value);
+    }
+  }
+
+  /** @returns {{blob: Blob, lastModified: string|null}|null} The last tile PNG seen for that tile. */
+  getLatestTileBlob(tileKey) {
+    return this._latestTileBlobs.get(tileKey) ?? null;
   }
 
   setLivePixelsFetcher(fn) {
