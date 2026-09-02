@@ -1790,7 +1790,7 @@ export default class TemplateManager {
           }
           // Erase pixels are filtered whatever the mode: a #deface pixel sitting on an already
           // empty canvas pixel is in its correct state, so it must not be marked at all.
-          const defaceFilter = !backgroundMode && chunkHasDeface && !!this._livePixelsFetcher;
+          const defaceFilter = !backgroundMode && chunkHasDeface;
 
           if (sampleData && (backgroundMode || defaceFilter)) {
             // Diagnostic, because the catch below is silent by design and a failure here looks
@@ -1805,7 +1805,13 @@ export default class TemplateManager {
               const liveTileY = tileKeyParts[1];
               const tileOffsetX = tileKeyParts[2] || 0;
               const tileOffsetY = tileKeyParts[3] || 0;
-              const livePixels = await this._livePixelsFetcher(liveTileX, liveTileY);
+              // Background mode keeps the fetcher it always used. The erase-pixel filter reads
+              // only the already-loaded tile, so it never adds a request of its own.
+              const livePixels = backgroundMode
+                ? await this._livePixelsFetcher(liveTileX, liveTileY)
+                : await this.getCachedTilePixels(
+                  `${String(liveTileX).padStart(4, '0')},${String(liveTileY).padStart(4, '0')}`
+                );
               if (!(livePixels instanceof Uint8ClampedArray) || livePixels.length < 4) diag.noLivePixels++;
               if (livePixels instanceof Uint8ClampedArray && livePixels.length >= 4) {
                 const liveTileSize = Math.round(Math.sqrt(livePixels.length / 4));
@@ -3412,6 +3418,47 @@ export default class TemplateManager {
   /** @returns {{blob: Blob, lastModified: string|null}|null} The last tile PNG seen for that tile. */
   getLatestTileBlob(tileKey) {
     return this._latestTileBlobs.get(tileKey) ?? null;
+  }
+
+  /** Live canvas pixels for a tile, decoded from the copy the page already loaded.
+   *
+   * Deliberately never fetches: asking for the tile ourselves goes through wplace's service
+   * worker, which owns that URL and composes the pixels being painted, and the extra traffic was
+   * stalling tile loading during painting. No copy yet simply means no filtering this pass.
+   * @param {string} tileKey - Padded "tileX,tileY".
+   * @returns {Promise<Uint8ClampedArray|null>}
+   * @since 0.87.89
+   */
+  async getCachedTilePixels(tileKey) {
+    const latest = this._latestTileBlobs.get(tileKey);
+    if (!latest?.blob) return null;
+    if (latest.pixels) return latest.pixels;
+    if (latest.decoding) return latest.decoding;
+
+    const size = this.tileSize;
+    latest.decoding = (async () => {
+      let canvas = null;
+      try {
+        const bitmap = await createBitmapPreservingPixels(latest.blob);
+        canvas = new OffscreenCanvas(size, size);
+        const context = canvas.getContext('2d', { willReadFrequently: true });
+        context.imageSmoothingEnabled = false;
+        context.clearRect(0, 0, size, size);
+        context.drawImage(bitmap, 0, 0, size, size);
+        bitmap.close();
+        const pixels = context.getImageData(0, 0, size, size).data;
+        latest.pixels = pixels;
+        return pixels;
+      } catch (exception) {
+        consoleWarn('[deface] Could not decode the cached tile.', exception);
+        return null;
+      } finally {
+        latest.decoding = null;
+        if (canvas) cleanUpCanvas(canvas);
+        canvas = null;
+      }
+    })();
+    return latest.decoding;
   }
 
   setLivePixelsFetcher(fn) {
