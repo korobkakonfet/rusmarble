@@ -972,6 +972,20 @@ export default class Template {
         if (keepChunkSamplesInMemory && sampleData) {
           templateChunkSamples[chunk.tileKey] = sampleData;
         }
+        // A chunk holding #deface pixels is persisted even when this template stores bitmap tiles
+        // only (which is what remote templates do). The flag is recovered from the tile PNG by
+        // exact colour match, and anything that shifts the colour loses it for good -- after a
+        // reload those pixels would come back as ordinary template pixels. Only chunks that
+        // actually contain erase pixels are kept, so a template without them stores nothing extra.
+        let chunkHoldsDeface = false;
+        if (!persistChunkSamples && sampleData) {
+          for (let i = 0; i < sampleData.count; i++) {
+            if ((sampleData.flags[i] & TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) !== 0) { chunkHoldsDeface = true; break; }
+          }
+          if (chunkHoldsDeface) {
+            templateChunkSampleBuffers[chunk.tileKey] = encodeChunkSampleBytes(sampleData);
+          }
+        }
         if (persistChunkSamples && sampleData && !lazyPersistChunkSamples) {
           templateChunkSampleBuffers[chunk.tileKey] = encodeChunkSampleBytes(sampleData);
         }
