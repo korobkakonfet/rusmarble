@@ -16,6 +16,7 @@ import {
   readChunkSampleHeader,
   renderSampleDataToImage,
   TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE,
+  TEMPLATE_DEFACE_COLOR_KEY,
   isDefaceRgb,
 } from './templateChunkUtils.js';
 import { templateWorkerManager } from './templateWorkerManager.js';
@@ -2798,6 +2799,14 @@ export default class TemplateManager {
       }
     });
 
+    // #deface pixels are tallied apart from the palette and never land in colorPalette, so a
+    // template built out of them showed an empty colour list reading "all colours completed".
+    // rgbToMeta already names this key Transparent, so the row renders like any other colour.
+    const defaceTotal = (this.templatesArray ?? []).reduce(
+      (sum, t) => sum + (t?.enabled ? Math.max(0, Number(t.defacePixelCount) || 0) : 0),
+      0
+    );
+
     // counts: O(colors) from incremental running totals — no tile iteration needed
     const combinedProgress = {};
     for (const colorKey in this._runningPalette) {
@@ -2840,6 +2849,24 @@ export default class TemplateManager {
     for (const colorKey in this._runningExamples) {
       if (combinedProgress[colorKey]) {
         combinedProgress[colorKey].examplesEnabled = this._runningExamples[colorKey]?.examplesEnabled ?? [];
+      }
+    }
+
+    // Placed after the running totals are in: `missing` is what the tile scans counted as still
+    // painted, so the remaining figure is exact even when defacePixelCount is 0 for a template
+    // stored before it was persisted.
+    {
+      const entry = (combinedProgress[TEMPLATE_DEFACE_COLOR_KEY] ??= {
+        painted: 0, paintedAndEnabled: 0, missing: 0, examplesEnabled: [],
+      });
+      const total = Math.max(defaceTotal, entry.missing);
+      if (total > 0) {
+        paletteSum[TEMPLATE_DEFACE_COLOR_KEY] = total;
+        const done = Math.max(0, total - entry.missing);
+        entry.painted = done;
+        entry.paintedAndEnabled = done;
+      } else {
+        delete combinedProgress[TEMPLATE_DEFACE_COLOR_KEY];
       }
     }
 
