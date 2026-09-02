@@ -49,7 +49,7 @@ const renderChunkPixels = ({
   maskPoints,
   maskRowSpans,
   displayedColors,
-  defaceRender,
+  includeDefaceCheckerboard,
   enforceTransparentAsDeface,
   transparentEraseColor,
 }) => {
@@ -62,8 +62,8 @@ const renderChunkPixels = ({
     maskPoints,
     maskRowSpans: toUint16RowSpans(maskRowSpans),
     displayedColorSet: cloneDisplayedColorSet(displayedColors),
-    defaceRender,
-      enforceTransparentAsDeface,
+    includeDefaceCheckerboard,
+    enforceTransparentAsDeface,
     transparentEraseColor,
   });
   return pixels;
@@ -259,6 +259,7 @@ const handlers = {
       maskPoints: payload.maskPoints,
       maskRowSpans: payload.maskRowSpans,
       displayedColors: payload.displayedColors,
+      includeDefaceCheckerboard: payload.includeDefaceCheckerboard === true,
     });
     return {
       resultWidth: payload.resultWidth,
@@ -273,7 +274,7 @@ const handlers = {
       maskPoints: payload.maskPoints,
       maskRowSpans: toUint16RowSpans(payload.maskRowSpans),
       displayedColors: payload.displayedColors,
-      defaceRender: payload.defaceRender ?? 'color',
+      includeDefaceCheckerboard: payload.includeDefaceCheckerboard === true,
       enforceTransparentAsDeface: payload.enforceTransparentAsDeface === true,
       transparentEraseColor: payload.transparentEraseColor ?? null,
     };
@@ -305,7 +306,7 @@ const handlers = {
       maskPoints: payload.maskPoints,
       maskRowSpans: toUint16RowSpans(payload.maskRowSpans),
       displayedColors: payload.displayedColors,
-      defaceRender: payload.defaceRender ?? 'color',
+      includeDefaceCheckerboard: payload.includeDefaceCheckerboard === true,
       enforceTransparentAsDeface: payload.enforceTransparentAsDeface === true,
       transparentEraseColor: payload.transparentEraseColor ?? null,
     };
@@ -452,6 +453,7 @@ const handlers = {
           maskPoints: payload.maskPoints,
           maskRowSpans,
           displayedColors: null,
+          includeDefaceCheckerboard: true,
         });
         resultEntry.renderedWidth = renderedWidth;
         resultEntry.renderedHeight = renderedHeight;

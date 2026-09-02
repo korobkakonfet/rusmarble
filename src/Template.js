@@ -933,6 +933,7 @@ export default class Template {
               drawSize: shreadSize,
               maskPoints: templateMaskPoints,
               maskRowSpans: templateMaskRowSpans,
+              includeDefaceCheckerboard: true,
             });
             context.putImageData(chunkImage, 0, 0);
           } else {
@@ -952,8 +953,22 @@ export default class Template {
             for (let y = 0; y < canvasHeight; y++) {
               for (let x = 0; x < canvasWidth; x++) {
                 const pixelIndex = (y * canvasWidth + x) * 4;
-                // #deface keeps its own colour here too - it is masked like any other pixel.
-                if (!this.customMask(x, y, shreadSize)) {
+                if (
+                  imageData.data[pixelIndex] === 222 &&
+                  imageData.data[pixelIndex + 1] === 250 &&
+                  imageData.data[pixelIndex + 2] === 206
+                ) {
+                  if ((x + y) % 2 === 0) {
+                    imageData.data[pixelIndex] = 0;
+                    imageData.data[pixelIndex + 1] = 0;
+                    imageData.data[pixelIndex + 2] = 0;
+                  } else {
+                    imageData.data[pixelIndex] = 255;
+                    imageData.data[pixelIndex + 1] = 255;
+                    imageData.data[pixelIndex + 2] = 255;
+                  }
+                  imageData.data[pixelIndex + 3] = 32;
+                } else if (!this.customMask(x, y, shreadSize)) {
                   imageData.data[pixelIndex + 3] = 0;
                 }
               }
