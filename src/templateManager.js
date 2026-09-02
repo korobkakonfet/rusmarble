@@ -15,6 +15,7 @@ import {
   decodeChunkSampleBuffer,
   readChunkSampleHeader,
   renderSampleDataToImage,
+  TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE,
 } from './templateChunkUtils.js';
 import { templateWorkerManager } from './templateWorkerManager.js';
 import { canUseTemplateBufferDb, readTemplateBuffers, writeTemplateBuffers, deleteTemplateBuffers, listTemplateBufferKeys, reportTemplateBufferBytes, estimateStorageQuota } from './templateBufferStore.js';
@@ -1794,7 +1795,13 @@ export default class TemplateManager {
                     continue;
                   }
                   const liveAlpha = livePixels[(ly * liveTileSize + lx) * 4 + 3];
-                  if (liveAlpha < 1) {
+                  // Background mode shows what is left to do, and for a #deface pixel that is the
+                  // opposite test: it asks for the canvas to be EMPTY, so it is done once the live
+                  // pixel is gone and still outstanding while paint is there. Sharing the
+                  // `liveAlpha < 1` rule marked every finished erase pixel and hid every pending
+                  // one -- exactly inverted.
+                  const isDefaceSample = (sampleData.flags[i] & TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) !== 0;
+                  if (isDefaceSample ? liveAlpha >= 1 : liveAlpha < 1) {
                     const wi = filteredSample.count++;
                     filteredSample.x[wi] = sampleData.x[i];
                     filteredSample.y[wi] = sampleData.y[i];
