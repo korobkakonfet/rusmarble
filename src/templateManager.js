@@ -1716,6 +1716,11 @@ export default class TemplateManager {
       const useUnfilteredRender = !hasColorDisabled && drawMultTemplate === drawMultResult && displayMode !== 'fill';
       const backgroundMode = this.isBackgroundModeEnabled() && !!this._livePixelsFetcher;
       const chunkDefaceFlags = (template._chunkDefaceFlags ??= new Map());
+      // Comparing erase pixels against the live canvas only matters when we actually draw them.
+      // It costs a tile read per pass, and those reads go to wplace's service worker -- the same
+      // one that composes the punched-out pixels while painting -- so in 'off' mode, where nothing
+      // is drawn for them anyway, none of that machinery may run.
+      const defaceNeedsLiveCheck = this.getDefaceDisplayMode() !== 'off';
 
       // Phase 1: categorize tiles into cached / sample / bitmap buckets
       const yieldUi = createUiWorkScheduler(); // independent scheduler per template
@@ -1739,7 +1744,7 @@ export default class TemplateManager {
         // so it cannot take the raw-buffer fast path or come out of the raster cache. Which chunks
         // those are is learned on the first decode below and remembered per chunk, so a template
         // without erase pixels pays one slow pass per chunk and then behaves exactly as before.
-        const chunkKnownWithoutDeface = chunkDefaceFlags.get(tileKey) === false;
+        const chunkKnownWithoutDeface = !defaceNeedsLiveCheck || chunkDefaceFlags.get(tileKey) === false;
         const rawBuffer = (!backgroundMode && chunkKnownWithoutDeface)
           ? template.getRawChunkBuffer(tileKey)
           : null;
@@ -1777,7 +1782,7 @@ export default class TemplateManager {
           let sampleData = await template.getChunkSamples(tileKey, { memorySaving: currentMemorySavingMode });
 
           let chunkHasDeface = false;
-          if (sampleData) {
+          if (sampleData && defaceNeedsLiveCheck) {
             for (let i = 0; i < sampleData.count; i++) {
               if ((sampleData.flags[i] & TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) !== 0) { chunkHasDeface = true; break; }
             }
@@ -2128,7 +2133,7 @@ export default class TemplateManager {
       // tile data arrived -- Date.now() here forced a full rebuild on every single overlay pass,
       // which is both wasteful and a lot more churn during painting.
       let hasDefaceChunk = false;
-      for (const flag of (result.template._chunkDefaceFlags?.values() ?? [])) {
+      for (const flag of (this.getDefaceDisplayMode() === 'off' ? [] : result.template._chunkDefaceFlags?.values() ?? [])) {
         if (flag) { hasDefaceChunk = true; break; }
       }
       this._overlayRenderSignatures.set(
