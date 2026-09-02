@@ -1738,7 +1738,11 @@ export default class TemplateManager {
       let skippedMountedTiles = false;
       for (const tileKey of tileKeys) {
         const sourceID = `BM-overlay-${tileKey}-${template.sortID}`;
-        if (skipExisting && mountedOverlaySourceIDs?.has(sourceID)) { skippedMountedTiles = true; continue; }
+        // A chunk with erase pixels is rendered against the live canvas, so "its layer is already
+        // mounted" says nothing about whether it is still correct: the cross computed before the
+        // tile arrived would stay up forever.
+        const chunkHoldsDeface = defaceNeedsLiveCheck && chunkDefaceFlags.get(tileKey) === true;
+        if (skipExisting && !chunkHoldsDeface && mountedOverlaySourceIDs?.has(sourceID)) { skippedMountedTiles = true; continue; }
 
         // A chunk with #deface pixels has to be re-checked against the live canvas on every pass,
         // so it cannot take the raw-buffer fast path or come out of the raster cache. Which chunks
@@ -2159,11 +2163,16 @@ export default class TemplateManager {
       for (const flag of (this.getDefaceDisplayMode() === 'off' ? [] : result.template._chunkDefaceFlags?.values() ?? [])) {
         if (flag) { hasDefaceChunk = true; break; }
       }
+      if (hasDefaceChunk) {
+        // Keyed on the tile-blob epoch this used to look fresh whenever no new tile had arrived,
+        // which is exactly the case right after the canvas changed under a mounted layer. There is
+        // no signature that can stand in for live canvas state, so record none.
+        this._overlayRenderSignatures.delete(String(result.template.sortID));
+        continue;
+      }
       this._overlayRenderSignatures.set(
         String(result.template.sortID),
-        hasDefaceChunk
-          ? `${globalSignature}||deface-live||${this._tileBlobEpoch}`
-          : `${globalSignature}||${this._getTemplateRenderSignaturePart(result.template)}`
+        `${globalSignature}||${this._getTemplateRenderSignaturePart(result.template)}`
       );
     }
     profiler.end('overlay:phase3');
