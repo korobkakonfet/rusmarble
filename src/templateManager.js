@@ -16,6 +16,7 @@ import {
   readChunkSampleHeader,
   renderSampleDataToImage,
   TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE,
+  isDefaceRgb,
 } from './templateChunkUtils.js';
 import { templateWorkerManager } from './templateWorkerManager.js';
 import { canUseTemplateBufferDb, readTemplateBuffers, writeTemplateBuffers, deleteTemplateBuffers, listTemplateBufferKeys, reportTemplateBufferBytes, estimateStorageQuota } from './templateBufferStore.js';
@@ -1790,7 +1791,13 @@ export default class TemplateManager {
           let chunkHasDeface = false;
           if (sampleData && defaceNeedsLiveCheck) {
             for (let i = 0; i < sampleData.count; i++) {
-              if ((sampleData.flags[i] & TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) !== 0) { chunkHasDeface = true; break; }
+              // Colour, not just the flag. The flag is set once at build time and does not survive
+              // every path back out of storage (a remote template re-extracted from its bitmap
+              // tiles, for one), while rgb(222,250,206) is in the sample data either way.
+              if (
+                (sampleData.flags[i] & TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) !== 0
+                || isDefaceRgb(sampleData.r[i], sampleData.g[i], sampleData.b[i])
+              ) { chunkHasDeface = true; break; }
             }
             chunkDefaceFlags.set(tileKey, chunkHasDeface);
           }
@@ -1854,7 +1861,8 @@ export default class TemplateManager {
                   // pixel is gone and still outstanding while paint is there. Sharing the
                   // `liveAlpha < 1` rule marked every finished erase pixel and hid every pending
                   // one -- exactly inverted.
-                  const isDefaceSample = (sampleData.flags[i] & TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) !== 0;
+                  const isDefaceSample = (sampleData.flags[i] & TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) !== 0
+                    || isDefaceRgb(sampleData.r[i], sampleData.g[i], sampleData.b[i]);
                   // Background mode keeps only what is left to do. Outside it, nothing is dropped
                   // except erase pixels that are already erased.
                   const keepSample = isDefaceSample

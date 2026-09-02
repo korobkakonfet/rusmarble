@@ -376,7 +376,9 @@ export const renderSampleDataToImage = ({
     // template.colorPalette -- the palette stats count them separately, as `deface` -- so there is
     // no colour-list entry that could toggle them, and the filter below must not hide them either.
     // With defaceCrossed on they get the crossed (checkerboard) marking instead of a flat colour.
-    const isDeface = (sampleData.flags[index] & TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) !== 0;
+    // Colour as well as flag: the flag does not survive every route out of storage, the colour does.
+    const isDeface = (sampleData.flags[index] & TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) !== 0
+      || isDefaceRgb(red, green, blue);
     // 'off' leaves erase pixels to wplace, which already draws them punched out while painting.
     // Anything we paint there is opaque and simply hides that.
     if (isDeface && defaceRender === 'off') {
