@@ -1916,7 +1916,14 @@ export default class TemplateManager {
               sampleTiles.push({ tileKey, sourceID, sampleData, resultWidth, resultHeight, safeW, safeH, overlayCacheKey });
             }
           } else {
-            const templateTileBitmap = await template.getChunked(tileKey, currentMemorySavingMode);
+            let templateTileBitmap = await template.getChunked(tileKey, currentMemorySavingMode);
+            // This path renders the stored bitmap tile straight out, with no samples to filter, so
+            // an erase pixel here reaches the screen whatever the canvas says. Punch the ones that
+            // are already erased out of the bitmap itself; without this a chunk that fell back to
+            // its bitmap showed every erase marker, done or not.
+            if (defaceNeedsLiveCheck && templateTileBitmap) {
+              templateTileBitmap = await this._filterDefaceFromBitmap(templateTileBitmap, tileKey, template.shreadSize);
+            }
             const safeW = Math.max(1, Math.round((templateTileBitmap?.width || 0) / template.shreadSize));
             const safeH = Math.max(1, Math.round((templateTileBitmap?.height || 0) / template.shreadSize));
             const resultWidth = safeW * drawMultResult;
@@ -3437,6 +3444,72 @@ export default class TemplateManager {
   /** @returns {{blob: Blob, lastModified: string|null}|null} The last tile PNG seen for that tile. */
   getLatestTileBlob(tileKey) {
     return this._latestTileBlobs.get(tileKey) ?? null;
+  }
+
+  /** Clears the erase pixels that are already erased out of a stored template bitmap tile.
+   *
+   * The bitmap render path has no sample data to filter, so the check has to happen on the pixels.
+   * Returns the bitmap untouched whenever there is nothing to do -- no live tile yet, no erase
+   * colour in this chunk -- so a template without erase pixels never pays for the extra pass.
+   * @param {ImageBitmap} bitmap - The stored tile bitmap.
+   * @param {string} tileKey - "tileX,tileY,pixelX,pixelY".
+   * @param {number} shreadSize - Pixels per template pixel in the bitmap.
+   * @returns {Promise<ImageBitmap>}
+   * @since 0.87.93
+   */
+  async _filterDefaceFromBitmap(bitmap, tileKey, shreadSize) {
+    const parts = String(tileKey).split(',').map(Number);
+    const livePixels = await this.getCachedTilePixels(
+      `${String(parts[0]).padStart(4, '0')},${String(parts[1]).padStart(4, '0')}`
+    );
+    if (!(livePixels instanceof Uint8ClampedArray) || livePixels.length < 4) return bitmap;
+
+    const liveTileSize = Math.round(Math.sqrt(livePixels.length / 4));
+    const offsetX = parts[2] || 0;
+    const offsetY = parts[3] || 0;
+    const step = Math.max(1, Math.trunc(Number(shreadSize) || 1));
+    let canvas = null;
+    try {
+      canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      context.imageSmoothingEnabled = false;
+      context.clearRect(0, 0, bitmap.width, bitmap.height);
+      context.drawImage(bitmap, 0, 0);
+      const image = context.getImageData(0, 0, bitmap.width, bitmap.height);
+      const data = image.data;
+
+      let cleared = 0;
+      const logicalWidth = Math.max(1, Math.round(bitmap.width / step));
+      const logicalHeight = Math.max(1, Math.round(bitmap.height / step));
+      for (let ly = 0; ly < logicalHeight; ly++) {
+        for (let lx = 0; lx < logicalWidth; lx++) {
+          // The block's own colour, read where renderSampleDataToImage wrote it.
+          const centre = ((ly * step + (step >> 1)) * bitmap.width + (lx * step + (step >> 1))) * 4;
+          if (data[centre + 3] === 0) continue;
+          if (!isDefaceRgb(data[centre], data[centre + 1], data[centre + 2])) continue;
+          const liveX = offsetX + lx;
+          const liveY = offsetY + ly;
+          if (liveX < 0 || liveY < 0 || liveX >= liveTileSize || liveY >= liveTileSize) continue;
+          if (livePixels[(liveY * liveTileSize + liveX) * 4 + 3] >= 1) continue; // still painted
+          for (let by = 0; by < step; by++) {
+            const rowStart = ((ly * step + by) * bitmap.width + lx * step) * 4;
+            for (let bx = 0; bx < step; bx++) data[rowStart + bx * 4 + 3] = 0;
+          }
+          cleared++;
+        }
+      }
+      if (cleared === 0) return bitmap;
+      context.putImageData(image, 0, 0);
+      const filtered = await createImageBitmap(canvas);
+      bitmap.close?.();
+      return filtered;
+    } catch (exception) {
+      consoleWarn('[deface] Could not filter the bitmap tile; drawing it unchanged.', exception);
+      return bitmap;
+    } finally {
+      if (canvas) cleanUpCanvas(canvas);
+      canvas = null;
+    }
   }
 
   /** Live canvas pixels for a tile, decoded from the copy the page already loaded.
