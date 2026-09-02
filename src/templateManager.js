@@ -450,6 +450,10 @@ export default class TemplateManager {
       "samples": createTileOptions.persistChunkSamples && createTileOptions.lazyPersistChunkSamples !== true ? templateChunkSampleBuffers : {},
       "tileKeys": templateTileKeys,
       "palette": template.colorPalette, // Persist palette and enabled flags
+      // #deface pixels are counted apart from the palette, so nothing in "palette" implies them.
+      // Without this the count is 0 for every template restored from storage, and the overlay
+      // cannot tell which templates need their erase pixels checked against the live canvas.
+      "deface": Math.max(0, Number(template.defacePixelCount) || 0),
       "shreadSize": template.shreadSize // Record shread size of the created template
     };
     if (timeArchiveMeta) {
@@ -1704,6 +1708,7 @@ export default class TemplateManager {
       const drawMultCenterTemplate = (template.shreadSize - 1) >> 1;
       const useUnfilteredRender = !hasColorDisabled && drawMultTemplate === drawMultResult && displayMode !== 'fill';
       const backgroundMode = this.isBackgroundModeEnabled() && !!this._livePixelsFetcher;
+      const chunkDefaceFlags = (template._chunkDefaceFlags ??= new Map());
 
       // Phase 1: categorize tiles into cached / sample / bitmap buckets
       const yieldUi = createUiWorkScheduler(); // independent scheduler per template
@@ -1723,7 +1728,14 @@ export default class TemplateManager {
         const sourceID = `BM-overlay-${tileKey}-${template.sortID}`;
         if (skipExisting && mountedOverlaySourceIDs?.has(sourceID)) { skippedMountedTiles = true; continue; }
 
-        const rawBuffer = !backgroundMode ? template.getRawChunkBuffer(tileKey) : null;
+        // A chunk with #deface pixels has to be re-checked against the live canvas on every pass,
+        // so it cannot take the raw-buffer fast path or come out of the raster cache. Which chunks
+        // those are is learned on the first decode below and remembered per chunk, so a template
+        // without erase pixels pays one slow pass per chunk and then behaves exactly as before.
+        const chunkKnownWithoutDeface = chunkDefaceFlags.get(tileKey) === false;
+        const rawBuffer = (!backgroundMode && chunkKnownWithoutDeface)
+          ? template.getRawChunkBuffer(tileKey)
+          : null;
         if (rawBuffer) {
           const header = readChunkSampleHeader(rawBuffer);
           if (header) {
@@ -1757,7 +1769,18 @@ export default class TemplateManager {
         const slowResults = await Promise.all(slowTiles.map(async ({ tileKey, sourceID }) => {
           let sampleData = await template.getChunkSamples(tileKey, { memorySaving: currentMemorySavingMode });
 
-          if (sampleData && backgroundMode) {
+          let chunkHasDeface = false;
+          if (sampleData) {
+            for (let i = 0; i < sampleData.count; i++) {
+              if ((sampleData.flags[i] & TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) !== 0) { chunkHasDeface = true; break; }
+            }
+            chunkDefaceFlags.set(tileKey, chunkHasDeface);
+          }
+          // Erase pixels are filtered whatever the mode: a #deface pixel sitting on an already
+          // empty canvas pixel is in its correct state, so it must not be marked at all.
+          const defaceFilter = !backgroundMode && chunkHasDeface && !!this._livePixelsFetcher;
+
+          if (sampleData && (backgroundMode || defaceFilter)) {
             try {
               const tileKeyParts = String(tileKey).split(',').map(Number);
               const liveTileX = tileKeyParts[0];
@@ -1801,7 +1824,12 @@ export default class TemplateManager {
                   // `liveAlpha < 1` rule marked every finished erase pixel and hid every pending
                   // one -- exactly inverted.
                   const isDefaceSample = (sampleData.flags[i] & TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) !== 0;
-                  if (isDefaceSample ? liveAlpha >= 1 : liveAlpha < 1) {
+                  // Background mode keeps only what is left to do. Outside it, nothing is dropped
+                  // except erase pixels that are already erased.
+                  const keepSample = isDefaceSample
+                    ? liveAlpha >= 1
+                    : (backgroundMode ? liveAlpha < 1 : true);
+                  if (keepSample) {
                     const wi = filteredSample.count++;
                     filteredSample.x[wi] = sampleData.x[i];
                     filteredSample.y[wi] = sampleData.y[i];
@@ -1817,19 +1845,22 @@ export default class TemplateManager {
             } catch (_) {}
           }
 
-          return { tileKey, sourceID, sampleData };
+          return { tileKey, sourceID, sampleData, defaceFilter };
         }));
 
         if (this._activeOverlayGenerationId !== overlayGenerationId) return null;
 
-        for (const { tileKey, sourceID, sampleData } of slowResults) {
+        for (const { tileKey, sourceID, sampleData, defaceFilter } of slowResults) {
           if (sampleData) {
             const safeW = Math.max(1, Math.round(Number(sampleData.width) || 0));
             const safeH = Math.max(1, Math.round(Number(sampleData.height) || 0));
             const resultWidth = safeW * drawMultResult;
             const resultHeight = safeH * drawMultResult;
-            const overlayCacheKey = this.getOverlayRasterCacheKey(tileKey, template.sortID, drawMultResult, displayMode, displayedColorsHash);
-            const cachedRaster = backgroundMode ? null : this.getOverlayRasterCacheEntry(overlayCacheKey);
+            // A null key both skips the lookup and makes setOverlayRasterCacheEntry a no-op.
+            const overlayCacheKey = (backgroundMode || defaceFilter)
+              ? null
+              : this.getOverlayRasterCacheKey(tileKey, template.sortID, drawMultResult, displayMode, displayedColorsHash);
+            const cachedRaster = overlayCacheKey ? this.getOverlayRasterCacheEntry(overlayCacheKey) : null;
             if (cachedRaster?.pixels instanceof Uint8ClampedArray) {
               cachedTiles.push({ tileKey, sourceID, pixels: cachedRaster.pixels.slice(), resultWidth, resultHeight, safeW, safeH });
             } else {
@@ -2085,9 +2116,18 @@ export default class TemplateManager {
     const globalSignature = [drawMultResult, displayMode, displayedColorsHash, (this.isBackgroundModeEnabled() && !!this._livePixelsFetcher) ? 1 : 0].join('||');
     for (const result of phase12Results) {
       if (!result?.template) continue;
+      // A template with erase pixels is rendered against the live canvas, and no signature can
+      // capture that. Never report it as fresh, or an erased pixel would keep its marker until
+      // something else forced a redraw.
+      let hasDefaceChunk = false;
+      for (const flag of (result.template._chunkDefaceFlags?.values() ?? [])) {
+        if (flag) { hasDefaceChunk = true; break; }
+      }
       this._overlayRenderSignatures.set(
         String(result.template.sortID),
-        `${globalSignature}||${this._getTemplateRenderSignaturePart(result.template)}`
+        hasDefaceChunk
+          ? `${globalSignature}||deface-live||${Date.now()}`
+          : `${globalSignature}||${this._getTemplateRenderSignaturePart(result.template)}`
       );
     }
     profiler.end('overlay:phase3');
@@ -2255,6 +2295,7 @@ export default class TemplateManager {
           templates[templateKey].height = inferredImageHeight;
         }
         templateInstance.pixelCount = Math.max(0, (templateInstance.imageWidth || 0) * (templateInstance.imageHeight || 0));
+        templateInstance.defacePixelCount = Math.max(0, Number(templateValue.deface) || 0);
 
         if (hasPersistedPalette) {
           const paletteObj = {};
