@@ -56,7 +56,7 @@ const hostContext = {
 };
 import { layoutLanguageOptions, normalizeLayoutLanguage, translateLayout, getLayoutThemeLabel as getLocalizedLayoutThemeLabel, getTemplateDisplayLabel as getLocalizedTemplateDisplayLabel, getTemplateCreateModeLabel, getChatBanTypeLabel, getColorSortLabel } from './layoutI18n.js';
 import { encodeChunkSampleBytes } from './templateChunkUtils.js';
-import { consoleLog, consoleWarn, consoleError, isDebugLoggingEnabled, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels, initMobileLayout, isMobileLayout, makePanelDraggable, registerFloatingPanel } from './utils.js';
+import { consoleLog, consoleWarn, consoleError, isDebugLoggingEnabled, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels, initMobileLayout, isMobileLayout, makePanelDraggable, registerFloatingPanel, findPaintPanelHeading, insertIntoPaintPanelToolbar } from './utils.js';
 import { getCenterGeoCoords, getPixelPerWplacePixel, isMapMoving, getMapBounds, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getZoom, getCurrentTileSize, getMountedTemplateCanvasSourceIDs, setForcedTileRefreshSuppressed, applyArchiveBgLayerToMap, getArchiveBgDiag, loadArchiveTile, setTemplateSortIDLayersOpacity, registerBmCanvasRestoreOnStyleChange, projectGeoToScreen, unprojectScreenToGeo, getMapCanvasElement, findMapHandleButton} from './utilsMaptiler.js';
 // import { getCenterGeoCoords, addTemplate } from './utilsMaptiler.js';
 
@@ -4888,13 +4888,24 @@ readBootStorageValue('bmTemplates', '{}').then(async storageTemplatesValue => {
  * @since 0.86.15
  */
 function createZoomButtons() {
+  // The zoom buttons stack under wplace's own +/- map zoom controls on the left edge. That
+  // used to be the *last* `.gap-1 > .btn[title]` in the document, but the paint panel redesign
+  // added rows that match too (the pixel-info window's action row, most visibly), so the
+  // buttons ended up wherever that row happened to be. Pin the anchor to the +/- column.
+  const column = Array.from(document.querySelectorAll('div.flex-col.gap-1')).find((candidate) => {
+    const buttons = Array.from(candidate.children).filter((child) => child.matches('button.btn[title]'));
+    return buttons.length >= 2 && buttons.some((button) => button.textContent.trim() === '-');
+  });
+  if (!column) return;
+
   // If the 1x zoom button does not exist, we make new zoom level buttons
   const zoom1 = document.getElementById('BM-zoom-1x');
-  if (zoom1) return;
-  const ref = Array.from(document.querySelectorAll(".gap-1>.btn[title]")).slice(-1)[0];
-  if (!ref) return;
-  const container = ref.parentNode;
-  if (!container) return;
+  if (zoom1 && column.contains(zoom1)) return;
+  // Stale buttons from an earlier, wrong anchor: drop them so they are rebuilt in the column.
+  if (zoom1) document.querySelectorAll('.bm-zoom-btn').forEach(btn => btn.remove());
+
+  const ref = Array.from(column.children).filter((child) => child.matches('button.btn[title]')).slice(-1)[0];
+  const container = column;
 
   const isShown = templateManager.areIntegerZoomButtonsShown();
 
@@ -5026,7 +5037,7 @@ function observeBlack() {
         }
 
         // Attempts to find the "Paint Pixel" element for anchoring
-        const paintPixel = black.parentNode.parentNode.parentNode.parentNode.querySelector('h2');
+        const paintPixel = findPaintPanelHeading(black);
 
         // The <h2> is sometimes not rendered yet on the first open of the paint
         // panel. Bailing here without re-queuing used to leave the buttons missing
@@ -5037,7 +5048,7 @@ function observeBlack() {
         }
         anchorRetries = 0;
 
-        paintPixel.parentNode.appendChild(move); // Adds the move button
+        insertIntoPaintPanelToolbar(paintPixel, move); // Adds the move button
       }
 
       ext.onPanelSync({

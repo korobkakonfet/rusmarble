@@ -975,3 +975,40 @@ export function makePointerPannable(element, options) {
     dragState = null;
   };
 }
+
+/** Finds the paint panel's title `<h2>`, the anchor our injected buttons hang off.
+ *
+ * Anchoring used to be a fixed `parentNode` chain from the `#color-1` swatch, which broke
+ * whenever wplace added a wrapper around the palette (the collapsible paint card added one
+ * more level, so the chain landed below the heading and every injected button vanished).
+ * Walk up from the swatch instead and take the first ancestor that actually contains an h2.
+ *
+ * @param {Element|null|undefined} swatch - A palette colour swatch, typically `#color-1`.
+ * @returns {HTMLHeadingElement|null} The heading, or null while the panel is still rendering.
+ */
+export function findPaintPanelHeading(swatch) {
+  let node = swatch?.parentElement ?? null;
+  for (let depth = 0; node && depth < 10; depth++, node = node.parentElement) {
+    const heading = node.querySelector('h2');
+    if (heading?.parentNode) return heading;
+  }
+  return null;
+}
+
+/** Inserts our injected controls into the paint panel's title row, left of wplace's own buttons.
+ *
+ * The row ends with wplace's collapse and close buttons, which are pushed to the right edge by
+ * an `ml-auto` (`sm:ml-auto`) class. Appending to the row put our controls after them; insert
+ * ahead of that point instead so ours stay on the left and `-` / `x` stay on the right.
+ *
+ * @param {Element|null|undefined} heading - The paint panel heading from findPaintPanelHeading().
+ * @param {...Element} elements - Controls to insert, in the order they should appear.
+ */
+export function insertIntoPaintPanelToolbar(heading, ...elements) {
+  const row = heading?.parentNode;
+  if (!row) return;
+  const anchor = Array.from(row.children).find(
+    (child) => /(?:^|[\s:])ml-auto(?:\s|$)/.test(child.className || '')
+  ) ?? null;
+  for (const element of elements) row.insertBefore(element, anchor);
+}
