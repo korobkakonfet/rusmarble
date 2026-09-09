@@ -1539,6 +1539,11 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   /* crisp-edges first so pixelated wins where both are supported. */
   image-rendering: crisp-edges;
   image-rendering: pixelated;
+  /* wplace's Tailwind preflight sets `img { max-width: 100%; height: auto }`, which shrank the
+     ghost to the width of its clip box instead of leaving it at its natural size for the
+     transform to scale. */
+  max-width: none;
+  max-height: none;
   transform-origin: top left;
   will-change: transform;
 }
@@ -2798,4 +2803,9 @@ span.bm-templatename:hover, a.bm-templatename:focus {
     transform: none;
     top: calc(8px + env(safe-area-inset-top));
   }
+}
+
+/* Alliance HQ markers the user has hidden (bmHiddenAllianceHqIds). */
+.maplibregl-marker.bm-hidden-alliance-hq {
+  display: none !important;
 }

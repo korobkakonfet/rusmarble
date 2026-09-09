@@ -16,6 +16,7 @@ import { CUSTOM_LAYOUT_THEME } from './customTheme.js';
  * @param {(value: string) => string} deps.getTemplateDisplayLabel - Returns localized template display label.
  * @param {(value: string) => void} deps.applyLayoutLanguage - Applies layout language to DOM.
  * @param {(value: string) => void} deps.applyLayoutTheme - Applies layout theme to DOM.
+ * @param {(enabled: boolean) => void} deps.applyAllianceHqHidden - Applies the hidden alliance HQ setting to the map markers.
  * @param {() => void} deps.forceUpdateTheme - Forces template theme update.
  * @param {() => void} deps.buildColorFilterList - Rebuilds the color filter list.
  * @param {() => void} deps.buildTemplateFilterList - Rebuilds the template filter list.
@@ -43,6 +44,7 @@ export function buildUserSettingsSection({
   getTemplateDisplayLabel,
   applyLayoutLanguage,
   applyLayoutTheme,
+  applyAllianceHqHidden,
   forceUpdateTheme,
   buildColorFilterList,
   buildTemplateFilterList,
@@ -293,6 +295,14 @@ export function buildUserSettingsSection({
             await templateManager.setArchiveBackgroundEnabled(enabled);
             await applyArchiveBackground(enabled);
             instance.handleDisplayStatus(enabled ? 'Archive background enabled.' : 'Archive background disabled.');
+          });
+        }).buildElement()
+        .addCheckbox({'id': 'bm-hide-alliance-hq', 'textContent': 'Hide selected alliance HQ markers', 'checked': templateManager.isAllianceHqHidden()}, (instance, label, checkbox) => {
+          checkbox.addEventListener('change', async () => {
+            const enabled = checkbox.checked;
+            await templateManager.setAllianceHqHidden(enabled);
+            applyAllianceHqHidden?.(enabled);
+            instance.handleDisplayStatus(enabled ? 'Alliance HQ markers hidden.' : 'Alliance HQ markers restored.');
           });
         }).buildElement()
         .addCheckbox({'id': 'bm-hide-user-droplets', 'textContent': t('settings.hideDroplets'), 'checked': templateManager.isDropletsHidden()}, (instance, label, checkbox) => {

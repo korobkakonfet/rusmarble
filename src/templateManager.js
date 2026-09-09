@@ -93,6 +93,32 @@ const yieldToBrowser = () => (
     ? new Promise((resolve) => window.requestAnimationFrame(() => resolve()))
     : sleep(0)
 );
+/** How many templates are prepared (decode + worker render) at the same time.
+ * Fanning every template out at once floods the worker queue and holds every intermediate
+ * buffer alive simultaneously, which is what makes the first render after boot janky. Two keeps
+ * the worker fed while the main thread stays responsive.
+ */
+const OVERLAY_TEMPLATE_CONCURRENCY = 2;
+/** `Promise.all(items.map(fn))` with a ceiling on how many run at once. Results keep the input
+ * order, so callers can stay index-based.
+ * @param {Array<any>} items
+ * @param {number} limit
+ * @param {(item: any, index: number) => Promise<any>} fn
+ * @returns {Promise<Array<any>>}
+ */
+const mapWithConcurrency = async (items, limit, fn) => {
+  const results = new Array(items.length);
+  let next = 0;
+  const runners = new Array(Math.max(1, Math.min(limit, items.length))).fill(null).map(async () => {
+    while (true) {
+      const index = next++;
+      if (index >= items.length) return;
+      results[index] = await fn(items[index], index);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+};
 const createUiWorkScheduler = (sliceMs = UI_WORK_SLICE_MS) => {
   let lastYieldAt = getNowMs();
   return async (force = false) => {
@@ -293,6 +319,10 @@ export default class TemplateManager {
     this._overlayRenderGeneration = 0;
     this._activeOverlayGenerationId = null;
     this._overlayRasterCache = new Map();
+    // sortID -> the set of raster cache keys belonging to that template. Purely a secondary
+    // index: the cache itself stays one Map so its insertion order can keep serving as the LRU
+    // order, but invalidating a template no longer has to scan (and substring-match) every key.
+    this._overlayRasterCacheBySortID = new Map();
     this._livePixelsFetcher = null;
     // Freshest tile PNGs as the page itself received them, keyed "0000,0000". The overlay reads
     // erase pixels against these instead of re-requesting the tile URL, which the browser cache
@@ -1699,10 +1729,14 @@ export default class TemplateManager {
       return;
     }
 
-    // ── Phase 1+2: collect tile data and dispatch worker calls for ALL templates in parallel ──
-    // Each template gets its own yield scheduler so their rAF pauses interleave rather than stack.
-    profiler.start('overlay:phase1');
-    const phase12Results = await Promise.all(templates.map(async (template) => {
+    /** Phase 1+2 for a single template: gather its tile data, decode what is not cached and
+     * dispatch the worker render. Pulled out of the fan-out so the caller can hand each finished
+     * template straight to phase 3 instead of collecting them all first.
+     * @param {Template} template
+     * @returns {Promise<object|null>} What phase 3 needs to mount it, or `null` when there is
+     *   nothing to draw for this template.
+     */
+    const prepareOverlayTemplate = async (template) => {
       if (!template.enabled) return null;
       // If skipExisting and the merged full-canvas is already mounted, there is nothing to add —
       // this holds for scoped and unscoped renders alike, since one canvas covers every tile.
@@ -1766,7 +1800,10 @@ export default class TemplateManager {
             const overlayCacheKey = this.getOverlayRasterCacheKey(tileKey, template.sortID, drawMultResult, displayMode, displayedColorsHash);
             const cachedRaster = this.getOverlayRasterCacheEntry(overlayCacheKey);
             if (cachedRaster?.pixels instanceof Uint8ClampedArray) {
-              cachedTiles.push({ tileKey, sourceID, pixels: cachedRaster.pixels.slice(), resultWidth, resultHeight, safeW, safeH });
+              // No copy: the cached raster is only ever read from here on -- wrapped in an
+              // ImageData that putImageData copies out of, or structured-cloned (never
+              // transferred) into the merge worker. Copying it cost a full tile raster per tile.
+              cachedTiles.push({ tileKey, sourceID, pixels: cachedRaster.pixels, resultWidth, resultHeight, safeW, safeH });
             } else {
               sampleTiles.push({ tileKey, sourceID, rawBuffer, resultWidth, resultHeight, safeW, safeH, overlayCacheKey });
             }
@@ -1914,7 +1951,10 @@ export default class TemplateManager {
               : this.getOverlayRasterCacheKey(tileKey, template.sortID, drawMultResult, displayMode, displayedColorsHash);
             const cachedRaster = overlayCacheKey ? this.getOverlayRasterCacheEntry(overlayCacheKey) : null;
             if (cachedRaster?.pixels instanceof Uint8ClampedArray) {
-              cachedTiles.push({ tileKey, sourceID, pixels: cachedRaster.pixels.slice(), resultWidth, resultHeight, safeW, safeH });
+              // No copy: the cached raster is only ever read from here on -- wrapped in an
+              // ImageData that putImageData copies out of, or structured-cloned (never
+              // transferred) into the merge worker. Copying it cost a full tile raster per tile.
+              cachedTiles.push({ tileKey, sourceID, pixels: cachedRaster.pixels, resultWidth, resultHeight, safeW, safeH });
             } else {
               sampleTiles.push({ tileKey, sourceID, sampleData, resultWidth, resultHeight, safeW, safeH, overlayCacheKey });
             }
@@ -2042,19 +2082,20 @@ export default class TemplateManager {
 
       return { template, cachedTiles, sampleTiles, bitmapTiles, workerPixelMap, mergedBitmap, canMerge,
         useUnfilteredRender, drawMultTemplate, drawMultCenterTemplate };
-    }));
-    profiler.end('overlay:phase1');
+    };
 
-    if (this._activeOverlayGenerationId !== overlayGenerationId) return;
-
-    // ── Phase 3: register canvases with MapTiler (must stay on main thread) ──────────────────────
+    // ── Phase 3 (streamed): register canvases with MapTiler (must stay on main thread) ──────────
+    // This used to run only after phase 1+2 had finished for EVERY template, so nothing at all
+    // appeared until the slowest template was ready — the whole first load was one long blank
+    // wait. Mounting is now queued per template the moment its own phase 1+2 resolves, so
+    // templates light up one by one and the first one shows up almost immediately.
     // Merged path: 1 addTemplateFullCanvas call per template (bitmap already composited by worker).
     // Fallback path: per-tile addTemplateCanvas (large/bitmap templates).
-    profiler.start('overlay:phase3');
     const yieldUi = createUiWorkScheduler();
-    for (const result of phase12Results) {
-      if (!result) continue;
-      if (this._activeOverlayGenerationId !== overlayGenerationId) return;
+    // Set when a stale generation is detected mid-flight: the render is obsolete, so neither the
+    // remaining preparations nor the queued mounts should keep spending time on it.
+    let renderAborted = false;
+    const mountOverlayResult = async (result) => {
       const { template, cachedTiles, sampleTiles, bitmapTiles, workerPixelMap, mergedBitmap, canMerge,
         useUnfilteredRender, drawMultTemplate, drawMultCenterTemplate } = result;
 
@@ -2065,7 +2106,7 @@ export default class TemplateManager {
         mergedBitmap.close?.();
         this._pruneConflictingOverlayMounts(template.sortID, 'full');
         if (this.isErrorMapShown()) setUsageLayersOpacity("overlay", 0);
-        continue;
+        return;
       }
       if (canMerge) {
         // Merge was attempted but produced nothing; the per-tile fallback below has to cover it.
@@ -2078,7 +2119,7 @@ export default class TemplateManager {
       }
       for (const t of cachedTiles) {
         await yieldUi();
-        if (this._activeOverlayGenerationId !== overlayGenerationId) return;
+        if (this._activeOverlayGenerationId !== overlayGenerationId) { renderAborted = true; return; }
         // Hand the pixels over as ImageData. addTemplateCanvas putImageData's them straight into
         // the source canvas, so staging them through an OffscreenCanvas first would just be an
         // extra full-size allocation and blit per tile.
@@ -2094,16 +2135,18 @@ export default class TemplateManager {
 
       for (const t of sampleTiles) {
         await yieldUi();
-        if (this._activeOverlayGenerationId !== overlayGenerationId) return;
+        if (this._activeOverlayGenerationId !== overlayGenerationId) { renderAborted = true; return; }
         // Produce ImageData rather than a staging canvas — addTemplateCanvas writes it into the
         // source canvas directly, so an intermediate OffscreenCanvas is a wasted alloc + blit.
         let resultImage = null;
         const workerResult = workerPixelMap.get(t.tileKey);
         if (workerResult?.pixels instanceof Uint8ClampedArray) {
+          // Same array in the cache and in the ImageData below: putImageData reads it into the
+          // canvas and nothing writes to it afterwards, so the copy was pure allocation.
           this.setOverlayRasterCacheEntry(t.overlayCacheKey, {
             width: t.resultWidth,
             height: t.resultHeight,
-            pixels: workerResult.pixels.slice(),
+            pixels: workerResult.pixels,
           });
           resultImage = new ImageData(workerResult.pixels, t.resultWidth, t.resultHeight);
         }
@@ -2122,9 +2165,14 @@ export default class TemplateManager {
         if (this.isErrorMapShown()) setUsageLayersOpacity("overlay", 0);
       }
 
+      // Hoisted: it depends only on the render-wide palette, but sat inside the loop and was
+      // rebuilt and re-sorted for every single bitmap tile.
+      const displayedColorsSortedForBitmaps = bitmapTiles.length
+        ? Uint32Array.from(displayedColorPackedSet).sort()
+        : null;
       for (const t of bitmapTiles) {
         await yieldUi();
-        if (this._activeOverlayGenerationId !== overlayGenerationId) return;
+        if (this._activeOverlayGenerationId !== overlayGenerationId) { renderAborted = true; return; }
         let resultCanvas = null;
         let resultContext = null;
         try {
@@ -2141,7 +2189,8 @@ export default class TemplateManager {
             templateCtx.imageSmoothingEnabled = false;
             templateCtx.drawImage(t.bitmap, 0, 0);
             const templateData = templateCtx.getImageData(0, 0, templateWidth, templateHeight).data;
-            const displayedColorsSorted = Uint32Array.from(displayedColorPackedSet).sort();
+            // A transfer detaches the buffer, so each task needs its own copy of the hoisted list.
+            const displayedColorsSorted = displayedColorsSortedForBitmaps.slice();
             const filterResult = await templateWorkerManager.runTask('filterTemplateBitmap', {
               templateData, templateWidth, templateHeight,
               resultWidth: t.resultWidth, resultHeight: t.resultHeight,
@@ -2174,7 +2223,38 @@ export default class TemplateManager {
         cleanUpCanvas(resultCanvas);
         if (currentMemorySavingMode && t.bitmap) t.bitmap.close();
       }
-    }
+    };
+    // Mounts touch the map and yield to the browser internally, so two of them running at once
+    // would interleave their canvas registrations. The chain keeps them strictly one at a time
+    // (and in template order) while preparation continues in the background.
+    let mountChain = Promise.resolve();
+    const queueOverlayMount = (result) => {
+      mountChain = mountChain
+        .then(() => (renderAborted ? undefined : profiler.measureAsync('overlay:phase3', () => mountOverlayResult(result))))
+        .catch((exception) => {
+          // One template failing to mount must not take the rest of the queue down with it.
+          noteOverlayIssue('overlay mount threw', exception?.stack || exception?.message || String(exception));
+        });
+    };
+
+    // ── Phase 1+2: collect tile data and dispatch worker calls, a few templates at a time ──
+    // Each template gets its own yield scheduler so their rAF pauses interleave rather than stack.
+    // Timing is recorded per template rather than around the whole fan-out, because the fan-out
+    // now overlaps phase 3 and a single span across both would say nothing useful.
+    const phase12Results = await mapWithConcurrency(templates, OVERLAY_TEMPLATE_CONCURRENCY, async (template) => {
+      if (renderAborted) return null;
+      const preparedAt = getNowMs();
+      const result = await prepareOverlayTemplate(template);
+      profiler.record('overlay:phase1', getNowMs() - preparedAt);
+      // Mount it now instead of waiting for its siblings: this is what makes templates appear
+      // progressively instead of all at once at the end.
+      if (result) queueOverlayMount(result);
+      return result;
+    });
+    await mountChain; // every queued mount has to land before the signatures below are recorded
+
+    if (renderAborted || this._activeOverlayGenerationId !== overlayGenerationId) return;
+
     // Record what these layers were rendered with, so a later toggle-on can skip redoing them.
     if (!this._overlayRenderSignatures) this._overlayRenderSignatures = new Map();
     const globalSignature = [drawMultResult, displayMode, displayedColorsHash, (this.isBackgroundModeEnabled() && !!this._livePixelsFetcher) ? 1 : 0].join('||');
@@ -2200,7 +2280,6 @@ export default class TemplateManager {
         `${globalSignature}||${this._getTemplateRenderSignaturePart(result.template)}`
       );
     }
-    profiler.end('overlay:phase3');
   }
 
 
@@ -2670,6 +2749,17 @@ export default class TemplateManager {
     if (!prefixSet || prefixSet.size === 0) return keys;
     const prefixMap = this._getTileKeysByPrefixMap(template);
     const result = [];
+    // Intersect from whichever side is smaller. The visible-prefix set is the viewport (up to
+    // 6000 prefixes at low zoom), while most templates cover a handful of tiles, so walking the
+    // viewport per template did thousands of misses to find four hits. Walking the template's
+    // own prefixes instead makes this O(template chunks) rather than O(viewport).
+    if (prefixMap.size <= prefixSet.size) {
+      for (const [prefix, list] of prefixMap) {
+        if (!prefixSet.has(prefix) || !list.length) continue;
+        result.push(...list);
+      }
+      return result;
+    }
     for (const prefix of prefixSet) {
       const list = prefixMap.get(prefix);
       if (list && list.length) {
@@ -2679,8 +2769,27 @@ export default class TemplateManager {
     return result;
   }
 
+  /** A short digest of the displayed-colour list, used inside per-tile raster cache keys and
+   * render signatures. It used to be the colours joined with ';' — up to ~800 characters that
+   * were concatenated into a key string for EVERY tile of EVERY template on EVERY render, and
+   * then compared character by character on each Map lookup. Only identity matters here, so a
+   * 32-bit FNV-1a over the same list carries the same information in 8 characters. The count is
+   * kept in the digest as a cheap guard against a collision changing the effective palette size.
+   * @param {string[]} displayedColors
+   * @returns {string}
+   */
   getOverlayDisplayedColorsHash(displayedColors) {
-    return Array.isArray(displayedColors) ? displayedColors.join(';') : '';
+    if (!Array.isArray(displayedColors)) return '';
+    let hash = 0x811c9dc5;
+    for (const color of displayedColors) {
+      for (let i = 0; i < color.length; i++) {
+        hash ^= color.charCodeAt(i);
+        hash = Math.imul(hash, 0x01000193);
+      }
+      hash ^= 0x3b; // ';' — keeps ["ab","c"] distinct from ["a","bc"]
+      hash = Math.imul(hash, 0x01000193);
+    }
+    return `${displayedColors.length}:${(hash >>> 0).toString(36)}`;
   }
 
   /** A fingerprint of every global input that affects how overlay canvases are rasterized.
@@ -2725,6 +2834,7 @@ export default class TemplateManager {
     // Every template that enforces transparent-as-erase now rasterizes differently, so drop the
     // cached rasters and the freshness signatures that would otherwise skip the re-render.
     this._overlayRasterCache?.clear();
+    this._overlayRasterCacheBySortID?.clear();
     this._overlayRenderSignatures?.clear?.();
     return true;
   }
@@ -2752,11 +2862,49 @@ export default class TemplateManager {
   invalidateOverlayRasterCacheForTemplate(sortID) {
     this.invalidateOverlaySortIDSignature(sortID);
     const sortIDStr = String(sortID);
-    for (const key of this._overlayRasterCache.keys()) {
-      if (key.includes(`||${sortIDStr}||`)) {
-        this._overlayRasterCache.delete(key);
-      }
+    // Was a full scan of the cache with a substring test per key, which grew with the cache
+    // rather than with the template being invalidated. The index gives exactly this template's
+    // keys, so a template toggle costs what that template actually occupies.
+    const keys = this._overlayRasterCacheBySortID.get(sortIDStr);
+    if (!keys) return;
+    for (const key of keys) {
+      this._overlayRasterCache.delete(key);
     }
+    this._overlayRasterCacheBySortID.delete(sortIDStr);
+  }
+
+  /** The sortID a raster cache key belongs to. Keys are built by `getOverlayRasterCacheKey`, so
+   * the sortID is always the second '||' separated field.
+   * @param {string} cacheKey
+   * @returns {string|null}
+   */
+  _getRasterCacheKeySortID(cacheKey) {
+    const start = cacheKey.indexOf('||');
+    if (start < 0) return null;
+    const end = cacheKey.indexOf('||', start + 2);
+    return end < 0 ? cacheKey.slice(start + 2) : cacheKey.slice(start + 2, end);
+  }
+
+  /** Keep the sortID index in step with an entry being added to the cache. */
+  _indexRasterCacheKey(cacheKey) {
+    const sortIDStr = this._getRasterCacheKeySortID(cacheKey);
+    if (sortIDStr === null) return;
+    let keys = this._overlayRasterCacheBySortID.get(sortIDStr);
+    if (!keys) {
+      keys = new Set();
+      this._overlayRasterCacheBySortID.set(sortIDStr, keys);
+    }
+    keys.add(cacheKey);
+  }
+
+  /** Keep the sortID index in step with an entry leaving the cache (eviction). */
+  _unindexRasterCacheKey(cacheKey) {
+    const sortIDStr = this._getRasterCacheKeySortID(cacheKey);
+    if (sortIDStr === null) return;
+    const keys = this._overlayRasterCacheBySortID.get(sortIDStr);
+    if (!keys) return;
+    keys.delete(cacheKey);
+    if (keys.size === 0) this._overlayRasterCacheBySortID.delete(sortIDStr);
   }
 
   getOverlayRasterCacheKey(tileKey, sortID, drawSize, displayMode, displayedColorsHash) {
@@ -2777,10 +2925,14 @@ export default class TemplateManager {
       this._overlayRasterCache.delete(cacheKey);
     }
     this._overlayRasterCache.set(cacheKey, entry);
+    this._indexRasterCacheKey(cacheKey);
     while (this._overlayRasterCache.size > OVERLAY_RASTER_CACHE_MAX) {
       const oldestKey = this._overlayRasterCache.keys().next().value;
       if (oldestKey === undefined) break;
       this._overlayRasterCache.delete(oldestKey);
+      // An evicted key must leave the index too, or invalidation would later walk keys that are
+      // no longer in the cache and the index would grow without bound.
+      this._unindexRasterCacheKey(oldestKey);
     }
   }
 
@@ -3272,6 +3424,23 @@ export default class TemplateManager {
     await this.storeUserSettings();
   }
 
+  /** A utility to check whether the hidden alliance HQ markers are being hidden.
+   * @returns {boolean}
+   * @since 0.90.3
+   */
+  isAllianceHqHidden() {
+    return this.userSettings?.hideAllianceHq ?? true;
+  }
+
+  /** Sets the hideAllianceHq to a value.
+   * @param {boolean} value - The value
+   * @since 0.90.3
+   */
+  async setAllianceHqHidden(value) {
+    this.userSettings.hideAllianceHq = value;
+    await this.storeUserSettings();
+  }
+
   /** A utility to check if next level progress is hidden
    * @returns {boolean}
    * @since 0.90.0
@@ -3294,11 +3463,29 @@ export default class TemplateManager {
    * @since 0.90.0
    */
   getTemplateDisplayMode() {
+    // A transient override (Alt-hold peek) wins over the stored mode without persisting.
+    if (this._templateDisplayOverride) return this._templateDisplayOverride;
     const raw = String(this.userSettings?.templateDisplay ?? '').toLowerCase();
     if (raw === 'cross-z') return 'cross-z-9';
     if (raw === 'dot' || raw === 'fill' || raw === 'cross' || raw === 'cross-z-9' || raw === 'cross-z-11') return raw;
     const legacy = this.userSettings?.legacyDisplay ?? this.userSettings?.isLegacyDisplay ?? false;
     return legacy ? 'dot' : 'cross';
+  }
+
+  /** Temporarily render every template in another display mode without touching the stored
+   * setting. Passing `null` restores the user's own mode.
+   * @param {string|null} mode - The display mode to force, or `null` to clear.
+   * @returns {boolean} Whether the effective display mode changed.
+   * @since 0.90.3
+   */
+  setTemplateDisplayOverride(mode) {
+    const raw = String(mode ?? '').toLowerCase();
+    const next = (raw === 'dot' || raw === 'fill' || raw === 'cross' || raw === 'cross-z-9' || raw === 'cross-z-11')
+      ? raw
+      : null;
+    const before = this.getTemplateDisplayMode();
+    this._templateDisplayOverride = next;
+    return this.getTemplateDisplayMode() !== before;
   }
 
   /** Returns the draw size for the given template display mode.
@@ -3425,6 +3612,7 @@ export default class TemplateManager {
     // Every #deface pixel now rasterizes differently, and the mode is not part of the overlay
     // raster cache key, so drop the cached rasters and the signatures that would skip the redraw.
     this._overlayRasterCache?.clear();
+    this._overlayRasterCacheBySortID?.clear();
     this._overlayRenderSignatures?.clear?.();
   }
 
