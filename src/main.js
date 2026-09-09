@@ -110,6 +110,42 @@ const OVERLAY_PALETTE_SHIFT_GAP = 8;
  * is what outranks a stylesheet `!important`.
  * @since 0.87.79
  */
+/** Largest share of the viewport height a candidate may cover and still be treated as the
+ * palette sheet rather than one of wplace's full-screen positioning wrappers. */
+const PALETTE_PANEL_MAX_VIEWPORT_RATIO = 0.9;
+
+/** Resolves the paint palette's own bottom sheet, starting from one of its colour swatches.
+ *
+ * This used to be `swatch.closest('.absolute')`. wplace's palette markup changed and the nearest
+ * absolutely-positioned ancestor is now a full-screen wrapper, so its `top` sat at the top of the
+ * viewport and the overlay (in particular the minimized puck) was lifted the whole screen height
+ * instead of just clear of the palette.
+ *
+ * Walk up instead and keep the innermost ancestor that actually behaves like the sheet: it is
+ * anchored to the bottom of the viewport and does not cover most of it. `.rounded-t-box` — the
+ * class wplace puts on the sheet itself — wins outright when it satisfies those checks.
+ * @param {Element|null} anchor A palette colour swatch.
+ * @returns {HTMLElement|null} The palette sheet, or null when it cannot be resolved.
+ */
+function getPaletteShiftPanel(anchor) {
+  if (!(anchor instanceof Element)) return null;
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+  if (!viewportHeight) return null;
+
+  let fallback = null;
+  let node = anchor.parentElement;
+  for (let depth = 0; depth < 12 && node instanceof HTMLElement; depth++, node = node.parentElement) {
+    const rect = node.getBoundingClientRect();
+    if (!rect.width || !rect.height) continue;
+    // Bottom-anchored: the sheet sits flush with the bottom edge of the viewport.
+    if (rect.bottom < viewportHeight - 4) continue;
+    if (rect.height > viewportHeight * PALETTE_PANEL_MAX_VIEWPORT_RATIO) continue;
+    if (node.classList.contains('rounded-t-box')) return node;
+    if (!fallback) fallback = node;
+  }
+  return fallback;
+}
+
 function updateOverlayPaletteShift(paletteAnchor, diagnostics = null) {
   const report = (reason, extra = {}) => {
     if (diagnostics) Object.assign(diagnostics, { reason, ...extra });
@@ -129,7 +165,7 @@ function updateOverlayPaletteShift(paletteAnchor, diagnostics = null) {
   };
 
   // The palette lives inside wplace's rounded bottom sheet; walk up from a swatch to find it.
-  const panel = paletteAnchor?.closest?.('.absolute') ?? null;
+  const panel = getPaletteShiftPanel(paletteAnchor);
   if (!panel) { clear(); report('no-palette-panel'); return; }
 
   // Measure from the unshifted position so repeated runs cannot compound the offset.
@@ -5007,7 +5043,7 @@ function observeBlack() {
       updateOverlayPaletteShift(black);
 
       // Re-run the shift whenever the panel resizes, i.e. whenever the palette expands/collapses.
-      const palettePanel = black.closest?.('.absolute');
+      const palettePanel = getPaletteShiftPanel(black);
       if (palettePanel && typeof ResizeObserver === 'function' && !palettePanel.dataset.bmPaletteShiftObserved) {
         palettePanelResizeObserver?.disconnect();
         palettePanelResizeObserver = new ResizeObserver(() => updateOverlayPaletteShift(
