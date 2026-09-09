@@ -4782,6 +4782,8 @@ readBootStorageValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   await waitForBody();
   initMobileLayout(); // Mirrors the mobile flag onto <html> before any UI is built
   observeStaleSelectionPins();
+  await loadHiddenAllianceHqIds();
+  observeHiddenAllianceHqMarkers();
   observeWplaceTheme();
   await buildOverlayMain(); // Builds the main overlay
   applyLayoutLanguage(currentLayoutLanguage);
@@ -4904,6 +4906,44 @@ readBootStorageValue('bmTemplates', '{}').then(async storageTemplatesValue => {
     // The loop will stop itself on the next frame if no keys are pressed
   }, true);
 
+  // ------- Alt-hold: peek at the templates in fill mode -------
+  // Held long enough to not fire on the Alt of an Alt+key shortcut, and cleared on any focus
+  // loss because the browser swallows keyup when Alt moves focus to the menu bar.
+  const ALT_FILL_PEEK_DELAY_MS = 350;
+  let altFillPeekTimer = null;
+  let altFillPeekActive = false;
+  const startAltFillPeek = () => {
+    if (altFillPeekActive) return;
+    altFillPeekActive = true;
+    if (templateManager.setTemplateDisplayOverride('fill')) templateManager.createOverlayOnMap();
+  };
+  const endAltFillPeek = () => {
+    if (altFillPeekTimer !== null) { clearTimeout(altFillPeekTimer); altFillPeekTimer = null; }
+    if (!altFillPeekActive) return;
+    altFillPeekActive = false;
+    if (templateManager.setTemplateDisplayOverride(null)) templateManager.createOverlayOnMap();
+  };
+  document.addEventListener('keydown', (event) => {
+    // Alt plus anything else is a shortcut (Alt+P opens the profiler HUD, Alt+B toggles
+    // background mode), so it must not arm or keep the peek.
+    if (event.key !== 'Alt') { endAltFillPeek(); return; }
+    if (altFillPeekActive || altFillPeekTimer !== null) return;
+    if (
+      document.activeElement?.tagName === 'INPUT'
+      || document.activeElement?.tagName === 'TEXTAREA'
+      || document.activeElement?.isContentEditable
+    ) return;
+    altFillPeekTimer = setTimeout(() => {
+      altFillPeekTimer = null;
+      startAltFillPeek();
+    }, ALT_FILL_PEEK_DELAY_MS);
+  }, true);
+  document.addEventListener('keyup', (event) => {
+    // Any other key while Alt is down means this was a shortcut, not a peek.
+    if (event.key === 'Alt' || !event.altKey) endAltFillPeek();
+  }, true);
+  window.addEventListener('blur', endAltFillPeek);
+
   apiManager.spontaneousResponseListener(overlayMain); // Reads spontaneous fetch responces
 
   consoleLog(`%c${name}%c (${version}) userscript has loaded!`, 'color: cornflowerblue;', '');
@@ -5001,6 +5041,102 @@ function observeStaleSelectionPins() {
   };
   staleSelectionPinObserver = new MutationObserver(prune);
   staleSelectionPinObserver.observe(document.body, { childList: true, subtree: true });
+  prune();
+}
+
+/** Storage key holding the alliance ids whose HQ markers are hidden on the map.
+ * Comma separated, so it can be edited by hand from the Tampermonkey storage tab.
+ * @since 0.90.3
+ */
+const HIDDEN_ALLIANCE_HQ_STORAGE_KEY = 'bmHiddenAllianceHqIds';
+/** Alliance ids hidden until the stored list is read. */
+const HIDDEN_ALLIANCE_HQ_DEFAULT = '734624';
+let hiddenAllianceHqIds = new Set();
+let hiddenAllianceHqObserver = null;
+/** Re-applies the hidden-HQ setting to the markers already in the DOM. Set once the observer
+ * is installed; a no-op before that.
+ * @type {(enabled: boolean) => void}
+ */
+let applyHiddenAllianceHqMarkers = () => {};
+
+/** Load the hidden-HQ alliance ids from storage.
+ * @returns {Promise<void>}
+ * @since 0.90.3
+ */
+async function loadHiddenAllianceHqIds() {
+  let raw = HIDDEN_ALLIANCE_HQ_DEFAULT;
+  try {
+    raw = await GM.getValue(HIDDEN_ALLIANCE_HQ_STORAGE_KEY, HIDDEN_ALLIANCE_HQ_DEFAULT);
+  } catch (_) { /* storage unavailable: fall back to the default list */ }
+  hiddenAllianceHqIds = new Set(
+    String(raw ?? '')
+      .split(/[^0-9]+/)
+      .filter(Boolean)
+  );
+}
+
+/** Alliance id carried by a map marker, if any.
+ * The HQ marker itself has no dedicated attribute, so every url-ish attribute in its subtree
+ * is checked for an `/alliance(s)/<id>` segment, which is how both the link and the flag image
+ * address the alliance.
+ * @param {Element} marker
+ * @returns {string|null}
+ * @since 0.90.3
+ */
+function getMarkerAllianceId(marker) {
+  const nodes = [marker, ...marker.querySelectorAll('[href], [src], [data-alliance-id], [data-id]')];
+  for (const node of nodes) {
+    const direct = node.getAttribute?.('data-alliance-id') ?? node.getAttribute?.('data-id');
+    if (direct && /^\d+$/.test(direct.trim())) return direct.trim();
+    const url = node.getAttribute?.('href') || node.getAttribute?.('src') || '';
+    const match = /\/alliances?\/(\d+)/.exec(url);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+/** Hide the HQ markers of the alliances on the hidden list.
+ * They are plain MapLibre HTML markers, so the site re-creates them on every camera move and
+ * style reload; hiding is therefore re-applied from a `MutationObserver` rather than once.
+ * @since 0.90.3
+ */
+function observeHiddenAllianceHqMarkers() {
+  if (hiddenAllianceHqObserver) return;
+  const MARKER_SELECTOR = '.maplibregl-marker';
+  const HIDDEN_CLASS = 'bm-hidden-alliance-hq';
+  const prune = () => {
+    if (hiddenAllianceHqIds.size === 0 || !templateManager.isAllianceHqHidden()) return;
+    document.querySelectorAll(MARKER_SELECTOR).forEach((marker) => {
+      if (marker.classList.contains(HIDDEN_CLASS)) return;
+      const allianceId = getMarkerAllianceId(marker);
+      if (!allianceId || !hiddenAllianceHqIds.has(allianceId)) return;
+      marker.classList.add(HIDDEN_CLASS);
+    });
+  };
+  // Turning the setting off has to bring back the markers that are already tagged; the site
+  // only rebuilds them on the next camera move, so waiting for one would look like a no-op.
+  applyHiddenAllianceHqMarkers = (enabled) => {
+    if (enabled) { prune(); return; }
+    document.querySelectorAll(`.${HIDDEN_CLASS}`).forEach((marker) => marker.classList.remove(HIDDEN_CLASS));
+  };
+  // The map mutates `document.body` constantly while tiles and markers stream in, so pruning
+  // straight from the callback ran a full marker sweep hundreds of times during load. Coalesce
+  // into one sweep per frame, and only when a mutation actually touched a marker.
+  let pruneQueued = false;
+  const queuePrune = (records) => {
+    if (pruneQueued) return;
+    const touchesMarker = records.some((record) => (
+      (record.target instanceof Element && record.target.closest?.(MARKER_SELECTOR))
+      || Array.from(record.addedNodes).some((node) => (
+        node instanceof Element && (node.matches?.(MARKER_SELECTOR) || node.querySelector?.(MARKER_SELECTOR))
+      ))
+    ));
+    if (!touchesMarker) return;
+    pruneQueued = true;
+    requestAnimationFrame(() => { pruneQueued = false; prune(); });
+  };
+  hiddenAllianceHqObserver = new MutationObserver(queuePrune);
+  hiddenAllianceHqObserver.observe(document.body, { childList: true, subtree: true });
   prune();
 }
 
@@ -7298,6 +7434,7 @@ async function buildOverlayMain() {
       getTemplateDisplayLabel,
       applyLayoutLanguage: (value) => applyLayoutLanguage(value),
       applyLayoutTheme,
+      applyAllianceHqHidden: (enabled) => applyHiddenAllianceHqMarkers(enabled),
       forceUpdateTheme: () => forceUpdateTheme(),
       buildColorFilterList: () => buildColorFilterList(),
       buildTemplateFilterList: () => buildTemplateFilterList(),
@@ -8265,6 +8402,8 @@ async function buildOverlayMain() {
   // map. Dragging only moves that element, so no chunk rekeying, persistence or overlay
   // re-render happens until the user applies the position.
   const TEMPLATE_MAP_DRAG_MIN_HIT_PX = 14;
+  /** Relative change in scale that counts as a genuine zoom during a drag. */
+  const TEMPLATE_DRAG_SCALE_EPSILON = 1e-3;
   let templatePositionPreviewCoords = null;
   /** Slack around the viewport kept in the position preview's clip box, so the outline around
    * the template stays visible when an edge sits just off screen.
@@ -8306,16 +8445,45 @@ async function buildOverlayMain() {
     if (!coords || !size) return null;
     const pixelPerWplacePixel = Number(getPixelPerWplacePixel());
     if (!Number.isFinite(pixelPerWplacePixel) || pixelPerWplacePixel <= 0) return null;
-    const geo = coordsTileCoordsToGeoCoords(coords.slice(0, 2), coords.slice(2, 4), false);
+    const worldX = coords[0] * TEMPLATE_TILE_SIZE + coords[2];
+    const worldY = coords[1] * TEMPLATE_TILE_SIZE + coords[3];
+    // Tile [0, 0] plus an absolute world-pixel offset: the conversion only ever sums the two,
+    // so this addresses any point on the canvas without having to re-split it into a tile.
+    const geo = coordsTileCoordsToGeoCoords([0, 0], [worldX, worldY], false);
     const projected = projectGeoToScreen(geo[0], geo[1]);
     if (!projected) return null;
     const canvasRect = getMapCanvasElement()?.getBoundingClientRect();
+    // Measure the extent by projecting the far corner as well instead of multiplying by the
+    // camera scale: the two disagree at low zoom (MapLibre's own projection is what the map is
+    // actually drawn with), which left the ghost smaller than the area it covers.
+    const farGeo = coordsTileCoordsToGeoCoords(
+      [0, 0],
+      [worldX + size.width, worldY + size.height],
+      false,
+    );
+    const farProjected = projectGeoToScreen(farGeo[0], farGeo[1]);
+    const projectedWidth = farProjected ? farProjected.x - projected.x : NaN;
+    const projectedHeight = farProjected ? farProjected.y - projected.y : NaN;
+    // Crossing the antimeridian wraps the far corner behind the near one; fall back to the
+    // camera scale there rather than collapsing the ghost.
+    const usable = (value) => Number.isFinite(value) && value > 0;
     return {
       left: projected.x + (canvasRect?.left ?? 0),
       top: projected.y + (canvasRect?.top ?? 0),
-      width: size.width * pixelPerWplacePixel,
-      height: size.height * pixelPerWplacePixel,
+      width: usable(projectedWidth) ? projectedWidth : size.width * pixelPerWplacePixel,
+      height: usable(projectedHeight) ? projectedHeight : size.height * pixelPerWplacePixel,
     };
+  };
+  /** Screen pixels per wplace pixel, measured from the preview rectangle so it always matches
+   * what the map is drawn with; falls back to the camera scale before the preview exists.
+   * @returns {number}
+   * @since 0.90.3
+   */
+  const getPreviewPixelPerWplacePixel = () => {
+    const rect = getTemplatePreviewScreenRect();
+    const width = templatePositionGhostSize?.width;
+    if (rect && width > 0 && Number.isFinite(rect.width) && rect.width > 0) return rect.width / width;
+    return Number(getPixelPerWplacePixel());
   };
   const isPointOnTemplatePreview = (clientX, clientY) => {
     const rect = getTemplatePreviewScreenRect();
@@ -8461,6 +8629,9 @@ async function buildOverlayMain() {
     image.alt = '';
     image.width = size.width;
     image.height = size.height;
+    // Explicit px sizing as well: the attributes alone lose to any author rule on `img`.
+    image.style.width = `${size.width}px`;
+    image.style.height = `${size.height}px`;
     templatePositionGhostUrl = URL.createObjectURL(blob);
     image.src = templatePositionGhostUrl;
     clip.appendChild(image);
@@ -8506,7 +8677,7 @@ async function buildOverlayMain() {
     if (event.button !== 0 || event.isPrimary === false) return;
     if (!isMapSurfaceElement(event.target)) return;
     if (!isPointOnTemplatePreview(event.clientX, event.clientY)) return;
-    const pixelPerWplacePixel = Number(getPixelPerWplacePixel());
+    const pixelPerWplacePixel = Number(getPreviewPixelPerWplacePixel());
     if (!Number.isFinite(pixelPerWplacePixel) || pixelPerWplacePixel <= 0) return;
     templateMapDragState.active = true;
     templateMapDragState.pointerId = event.pointerId;
@@ -8528,8 +8699,13 @@ async function buildOverlayMain() {
     // captured at pointerdown in place and the template drifts away from the cursor. Re-anchor
     // the gesture when it changes, so the already-applied movement is not reinterpreted at the
     // new scale and made to jump.
-    const liveScale = Number(getPixelPerWplacePixel());
-    if (Number.isFinite(liveScale) && liveScale > 0 && liveScale !== templateMapDragState.pixelPerWplacePixel) {
+    // Only a real zoom counts as a change. The scale is measured from the projected preview
+    // rectangle, so it jitters by tiny amounts as the template moves; re-anchoring on that
+    // jitter threw away the sub-pixel remainder of every move and made dragging feel sticky.
+    const liveScale = Number(getPreviewPixelPerWplacePixel());
+    const scaleChanged = Number.isFinite(liveScale) && liveScale > 0
+      && Math.abs(liveScale / templateMapDragState.pixelPerWplacePixel - 1) > TEMPLATE_DRAG_SCALE_EPSILON;
+    if (scaleChanged) {
       templateMapDragState.pixelPerWplacePixel = liveScale;
       templateMapDragState.startClientX = event.clientX;
       templateMapDragState.startClientY = event.clientY;
