@@ -2038,11 +2038,18 @@ span.bm-templatename:hover, a.bm-templatename:focus {
 
 .bm-text-template-window-body {
   flex: 1;
-  overflow: hidden;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding: 10px;
+}
+
+/* The preview may shrink, but the action row must always stay reachable. */
+.bm-text-template-window-actions {
+  flex: 0 0 auto;
 }
 
 .bm-text-template-window-label {
