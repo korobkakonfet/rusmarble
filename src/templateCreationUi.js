@@ -2322,8 +2322,7 @@ export const createTemplateCreationUi = (deps = {}) => {
       panel.style.height = `${TEMPLATE_TEXT_WINDOW_DEFAULT_H}px`;
       panel.style.minWidth = `${TEMPLATE_TEXT_WINDOW_MIN_W}px`;
       panel.style.minHeight = `${TEMPLATE_TEXT_WINDOW_MIN_H}px`;
-      panel.style.right = '20px';
-      panel.style.bottom = '20px';
+      panel.style.visibility = 'hidden';
 
       const head = document.createElement('div');
       head.className = 'bm-text-template-window-head';
@@ -2967,6 +2966,12 @@ export const createTemplateCreationUi = (deps = {}) => {
       detachDrag = makePanelDraggable(head, panel);
 
       document.body.appendChild(panel);
+      // Center on screen using the rendered size, so the max-width/max-height
+      // clamps are taken into account.
+      const panelRect = panel.getBoundingClientRect();
+      panel.style.left = `${Math.max(8, Math.round((window.innerWidth - panelRect.width) / 2))}px`;
+      panel.style.top = `${Math.max(8, Math.round((window.innerHeight - panelRect.height) / 2))}px`;
+      panel.style.visibility = '';
       registerFloatingPanel(panel);
       textTemplateBuilderSession = { panel, close };
       applyTheme();

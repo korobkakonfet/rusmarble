@@ -58,6 +58,7 @@ import { layoutLanguageOptions, normalizeLayoutLanguage, translateLayout, getLay
 import { encodeChunkSampleBytes } from './templateChunkUtils.js';
 import { consoleLog, consoleWarn, consoleError, isDebugLoggingEnabled, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels, initMobileLayout, isMobileLayout, makePanelDraggable, registerFloatingPanel, findPaintPanelHeading, insertIntoPaintPanelToolbar } from './utils.js';
 import { getCenterGeoCoords, getPixelPerWplacePixel, isMapMoving, getMapBounds, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getZoom, getCurrentTileSize, getMountedTemplateCanvasSourceIDs, setForcedTileRefreshSuppressed, applyArchiveBgLayerToMap, getArchiveBgDiag, loadArchiveTile, setTemplateSortIDLayersOpacity, registerBmCanvasRestoreOnStyleChange, projectGeoToScreen, unprojectScreenToGeo, getMapCanvasElement, findMapHandleButton} from './utilsMaptiler.js';
+import { buildFontFaceCss } from './fonts.js';
 // import { getCenterGeoCoords, addTemplate } from './utilsMaptiler.js';
 
 const name = GM_info.script.name.toString(); // Name of userscript
@@ -253,7 +254,7 @@ const t = (key, params = {}) => translateLayout(currentLayoutLanguage, key, para
 const getLayoutThemeLabel = (value) => getLocalizedLayoutThemeLabel(currentLayoutLanguage, value);
 const getTemplateDisplayLabel = (value) => getLocalizedTemplateDisplayLabel(currentLayoutLanguage, value);
 const TEMPLATE_TEXT_MAX_CHARS = 120;
-const TEMPLATE_TEXT_FONT_SIZE = 36;
+const TEMPLATE_TEXT_FONT_SIZE = 8;
 const TEMPLATE_TEXT_FONT_SIZE_MIN = 8;
 const TEMPLATE_TEXT_FONT_SIZE_MAX = 160;
 const TEMPLATE_TEXT_PADDING = 10;
@@ -262,11 +263,14 @@ const TEMPLATE_TEXT_HARD_EDGE_ALPHA_THRESHOLD = 128;
 const TEMPLATE_TEXT_HARD_EDGE_ALPHA_THRESHOLD_SMALL = 72;
 const TEMPLATE_TEXT_HARD_EDGE_ALPHA_THRESHOLD_SMALL_PIXEL = 56;
 const TEMPLATE_TEXT_HARD_EDGE_SMALL_FONT_MAX = 10;
+// Oversampling factor for fonts with a native pixel grid: glyphs are drawn at nativeSize * this,
+// then each block collapses to its center sample so the output matches the font's grid exactly.
+const TEMPLATE_TEXT_NATIVE_GRID_SUPERSAMPLE = 8;
 const TEMPLATE_TEXT_SMALL_FONT_WEIGHT_MIN = 500;
 const TEMPLATE_TEXT_FONT_LOAD_TIMEOUT_MS = 1200;
 const TEMPLATE_TILE_SIZE = 1000;
 const TEMPLATE_TEXT_WINDOW_DEFAULT_W = 440;
-const TEMPLATE_TEXT_WINDOW_DEFAULT_H = 440;
+const TEMPLATE_TEXT_WINDOW_DEFAULT_H = 600;
 const TEMPLATE_TEXT_WINDOW_MIN_W = 320;
 const TEMPLATE_TEXT_WINDOW_MIN_H = 320;
 const TEMPLATE_TEXT_PREVIEW_MIN_W = 240;
@@ -417,9 +421,18 @@ const convertTemplateImageFileToPaletteBlob = async (sourceFile, options = {}) =
     stats: workerResult?.stats ?? null,
   };
 };
-const TEMPLATE_TEXT_FONT_DEFAULT_KEY = 'segoe-bold';
+const TEMPLATE_TEXT_FONT_DEFAULT_KEY = 'ruspixel-pantin-2';
 const TEMPLATE_TEXT_LINE_HEIGHT_DEFAULT = 1.2;
 const templateTextFontOptions = [
+  {
+    key: 'ruspixel-pantin-2',
+    name: 'RuspixelPantin2',
+    // Bundled via src/fonts.js. 2048 upem on a 7-unit grid (5 cap + 2 descender rows).
+    family: '"RuspixelPantin2", "RuxpixelPantin", "Press Start 2P", "Courier New", monospace',
+    weight: 400,
+    lineHeight: 1.28,
+    nativeSize: 7,
+  },
   {
     key: 'segoe-bold',
     name: 'Segoe UI Bold',
@@ -505,6 +518,16 @@ const templateTextFontOptions = [
     lineHeight: 1.12,
   },
   {
+    key: 'ruxpixel-pantin',
+    name: 'RuxpixelPantin',
+    // Bundled via src/fonts.js (@font-face registered at startup), no network needed.
+    family: '"RuxpixelPantin", "Press Start 2P", "Courier New", monospace',
+    weight: 400,
+    lineHeight: 1.3,
+    // 2048 upem on a 6-unit grid: at 6px every stroke is exactly one pixel wide.
+    nativeSize: 6,
+  },
+  {
     key: 'pixel-saver',
     name: 'Pixel Saver (Narrow)',
     family: '"Arial Narrow", "Liberation Sans Narrow", "Nimbus Sans Narrow", Arial, sans-serif',
@@ -513,7 +536,7 @@ const templateTextFontOptions = [
   },
 ];
 const templateTextFontMap = new Map(templateTextFontOptions.map((entry) => [entry.key, entry]));
-const templateTextPixelFontKeys = new Set(['press-start-2p', 'pixel-operator', 'vt323', 'silkscreen', 'pixel-retro']);
+const templateTextPixelFontKeys = new Set(['press-start-2p', 'pixel-operator', 'vt323', 'silkscreen', 'pixel-retro', 'ruxpixel-pantin', 'ruspixel-pantin-2']);
 const resolveTemplateTextFont = (options = {}) => {
   const optionKey = String(options?.fontKey || '').trim();
   const fromKey = templateTextFontMap.get(optionKey);
@@ -851,6 +874,119 @@ const buildTextTemplateName = (text) => {
   return compact.length <= 24 ? `Text: ${compact}` : `Text: ${compact.slice(0, 24)}...`;
 };
 
+/** Rasterizes text with a font that has a native pixel grid (e.g. a 6px bitmap-style TTF).
+ * The requested font size is snapped to an integer multiple of the native size, glyphs are drawn
+ * oversampled and collapsed back onto the native grid (center sample per cell), then scaled up
+ * with nearest-neighbour. Strokes therefore stay exactly `scale` pixels wide with no antialiasing.
+ */
+const createNativeGridTextTemplateBlob = async ({ text, lines, fontOption, fontSize, fontWeight, fontFamily, nativeSize, colorRgb }) => {
+  const scale = Math.max(1, Math.round(fontSize / nativeSize));
+  const superSample = TEMPLATE_TEXT_NATIVE_GRID_SUPERSAMPLE;
+  const renderSize = nativeSize * superSample;
+  const font = `${fontWeight} ${renderSize}px ${fontFamily}`;
+  const sampleText = (lines.join(' ').trim() || 'Hg').slice(0, 64);
+  await ensureTemplateTextFontReady(font, sampleText);
+
+  const lineHeightFactor = Number(fontOption?.lineHeight);
+  const nativeLineHeight = Math.max(
+    1,
+    Math.ceil(nativeSize * (Number.isFinite(lineHeightFactor) && lineHeightFactor > 0 ? lineHeightFactor : TEMPLATE_TEXT_LINE_HEIGHT_DEFAULT))
+  );
+  const nativePadding = Math.max(1, Math.round(TEMPLATE_TEXT_PADDING / nativeSize));
+
+  const measureCanvas = document.createElement('canvas');
+  measureCanvas.width = 1;
+  measureCanvas.height = 1;
+  const measureContext = measureCanvas.getContext('2d');
+  if (!measureContext) {
+    throw new Error('Unable to prepare text template canvas.');
+  }
+  measureContext.font = font;
+  const nativeContentWidth = Math.max(
+    ...lines.map(line => Math.ceil(measureContext.measureText(line || ' ').width / superSample)),
+    1
+  );
+  const nativeWidth = nativeContentWidth + nativePadding * 2;
+  const nativeHeight = lines.length * nativeLineHeight + nativePadding * 2;
+  const width = nativeWidth * scale;
+  const height = nativeHeight * scale;
+  if (width > TEMPLATE_TEXT_MAX_DIMENSION || height > TEMPLATE_TEXT_MAX_DIMENSION) {
+    throw new Error(`Text template is too large (${width}x${height}).`);
+  }
+
+  // Oversampled draw: every native cell is a superSample x superSample block.
+  const renderCanvas = document.createElement('canvas');
+  renderCanvas.width = nativeWidth * superSample;
+  renderCanvas.height = nativeHeight * superSample;
+  const renderContext = renderCanvas.getContext('2d');
+  if (!renderContext) {
+    throw new Error('Unable to draw text template.');
+  }
+  renderContext.font = font;
+  renderContext.textBaseline = 'top';
+  renderContext.fillStyle = '#000';
+  lines.forEach((line, index) => {
+    renderContext.fillText(line || ' ', nativePadding * superSample, (nativePadding + index * nativeLineHeight) * superSample);
+  });
+  const rendered = renderContext.getImageData(0, 0, renderCanvas.width, renderCanvas.height).data;
+
+  // Collapse onto the native grid, then blow up by `scale` with hard pixels.
+  const output = new Uint8ClampedArray(width * height * 4);
+  const half = Math.floor(superSample / 2);
+  for (let ny = 0; ny < nativeHeight; ny++) {
+    for (let nx = 0; nx < nativeWidth; nx++) {
+      const sampleIndex = ((ny * superSample + half) * renderCanvas.width + (nx * superSample + half)) * 4 + 3;
+      if (rendered[sampleIndex] < 128) continue;
+      for (let dy = 0; dy < scale; dy++) {
+        let outIndex = ((ny * scale + dy) * width + nx * scale) * 4;
+        for (let dx = 0; dx < scale; dx++, outIndex += 4) {
+          output[outIndex] = colorRgb[0];
+          output[outIndex + 1] = colorRgb[1];
+          output[outIndex + 2] = colorRgb[2];
+          output[outIndex + 3] = 255;
+        }
+      }
+    }
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d');
+  if (!context) {
+    throw new Error('Unable to draw text template.');
+  }
+  context.putImageData(new ImageData(output, width, height), 0, 0);
+
+  const blob = await new Promise((resolve, reject) => {
+    canvas.toBlob((encodedBlob) => {
+      if (!encodedBlob) {
+        reject(new Error('Failed to encode text template image.'));
+        return;
+      }
+      resolve(encodedBlob);
+    }, 'image/png');
+  });
+
+  canvas.width = 0;
+  canvas.height = 0;
+  renderCanvas.width = 0;
+  renderCanvas.height = 0;
+  measureCanvas.width = 0;
+  measureCanvas.height = 0;
+
+  return {
+    blob,
+    text,
+    width,
+    height,
+    colorRgb,
+    fontSize: nativeSize * scale,
+    fontKey: fontOption?.key || TEMPLATE_TEXT_FONT_DEFAULT_KEY,
+    fontName: fontOption?.name || 'Segoe UI Bold',
+  };
+};
+
 const createTextTemplateBlob = async (rawText, options = {}) => {
   const text = String(rawText ?? '').replace(/\r\n?/g, '\n').trim();
   if (!text) {
@@ -881,6 +1017,10 @@ const createTextTemplateBlob = async (rawText, options = {}) => {
     ? (isPixelFont ? baseFontWeight : Math.max(TEMPLATE_TEXT_SMALL_FONT_WEIGHT_MIN, baseFontWeight))
     : baseFontWeight;
   const fontFamily = String(fontOption?.family || '"Segoe UI", sans-serif');
+  const nativeSize = Number(fontOption?.nativeSize);
+  if (Number.isFinite(nativeSize) && nativeSize > 0) {
+    return createNativeGridTextTemplateBlob({ text, lines, fontOption, fontSize, fontWeight, fontFamily, nativeSize, colorRgb });
+  }
   const font = `${fontWeight} ${fontSize}px ${fontFamily}`;
   ensureTemplateTextWebFontsLoaded();
   const sampleText = (lines.join(' ').trim() || 'Hg').slice(0, 64);
@@ -4350,6 +4490,9 @@ inject(() => {
     restoreMapPrototype();
   }, 30000);
 });
+
+// Bundled fonts are independent of the CSS delivery path, so register them first.
+GM.addStyle(buildFontFaceCss());
 
 // Imports the CSS file (inline build) or remote fallback
 if (typeof __INLINE_CSS__ !== 'undefined' && __INLINE_CSS__) {

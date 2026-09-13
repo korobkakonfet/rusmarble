@@ -176,6 +176,7 @@ const resultEsbuild = await esbuild.build({
     __INLINE_CSS__: JSON.stringify(inlineCss),
     __TEMPLATE_PIXEL_WORKER_SOURCE__: JSON.stringify(workerBundleJS?.text || '')
   },
+  loader: { '.ttf': 'dataurl' }, // Fonts under src/fonts are inlined as data: URLs (see src/fonts.js)
   format: 'iife', // What format the bundler bundles the code into
   target: 'es2020', // What is the minimum version/year that should be supported? When omited, it attempts to support backwards compatability with legacy browsers
   platform: 'browser', // The platform the bundled code will be operating on
