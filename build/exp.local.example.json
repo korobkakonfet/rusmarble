@@ -1,0 +1,8 @@
+{
+  "host": "user@server",
+  "staticDir": "/opt/exp-static",
+  "nginxSite": "/etc/nginx/sites-available/example.com",
+  "origin": "https://example.com",
+  "publicPath": "/some/unguessable/path",
+  "legacyPublicPaths": []
+}
