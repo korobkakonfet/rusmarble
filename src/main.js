@@ -8171,7 +8171,7 @@ async function buildOverlayMain() {
   };
   window.syncToggleList = syncToggleList;
   // apiManager owns the pixel-info DOM but not the template data, so it calls back in here.
-  window.bmOpenNearbyTemplates = (anchor, coords) => ext.openNearbyTemplates(anchor, coords);
+  window.bmOpenNearbyTemplates = (anchor, coords) => ext.openNearbyTemplates(anchor, coords, hostContext);
   let templatePositionEditStorageKey = null;
   const getOverlayCoordinateInputs = () => ({
     tx: document.querySelector('#bm-input-tx'),

@@ -32,10 +32,21 @@ const PATCHED_FILES = [
 const SMART_OUT = 'dist/RusMarble.exp.user.js';
 const SMART_META_OUT = 'dist/RusMarble.exp.meta.js';
 // The exp build is gitignored, so it can't be served from GitHub raw like the
-// regular script. It is deployed as a static file behind nginx (see
-// wplacetgbot/scripts/deploy_het.sh) so Tampermonkey can auto-update it.
-const SMART_DOWNLOAD_URL = 'https://wplace.zaebal.me/wplacebot/RusMarble.exp.user.js';
-const SMART_UPDATE_URL = 'https://wplace.zaebal.me/wplacebot/RusMarble.exp.meta.js';
+// regular script. It is deployed as a static file behind nginx (build/deploy-exp.sh)
+// so Tampermonkey can auto-update it. Where it lives is private: host, origin and
+// the (unguessable) public path come from build/exp.local.json, which is gitignored.
+// See build/exp.local.example.json for the shape.
+const EXP_CONFIG_PATH = 'build/exp.local.json';
+const expConfig = (() => {
+  try { return JSON.parse(fs.readFileSync(EXP_CONFIG_PATH, 'utf8')); } catch (_) { return null; }
+})();
+if (!expConfig?.origin || !expConfig?.publicPath) {
+  console.error(`${consoleStyle.RED + consoleStyle.BOLD}Missing or incomplete ${EXP_CONFIG_PATH} (private/gitignored — copy build/exp.local.example.json and fill it in).${consoleStyle.RESET}`);
+  process.exit(1);
+}
+const SMART_BASE_URL = expConfig.origin.replace(/\/$/, '') + '/' + expConfig.publicPath.replace(/^\/|\/$/g, '');
+const SMART_DOWNLOAD_URL = `${SMART_BASE_URL}/RusMarble.exp.user.js`;
+const SMART_UPDATE_URL = `${SMART_BASE_URL}/RusMarble.exp.meta.js`;
 const buildFlags = process.argv.slice(2).join(' ');
 
 const EXTENSIONS_MODULE = 'src/exp/expHooks.local.js';

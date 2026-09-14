@@ -12,6 +12,7 @@ npm run build:dev      # Development build (no obfuscation, no console removal)
 npm run build:prod     # Explicit production build
 npm run patch          # Bump patch version in package.json + README, then build
 npm run build:wasm     # Compile .wat WASM sources to .wasm binaries
+npm run build:ext      # Production build + Chrome MV3 extension in dist/extension (+ .zip)
 npm run test:png       # Test template PNG processing
 npm run benchmark      # Run benchmarks
 ```

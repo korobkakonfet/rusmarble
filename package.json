@@ -1,6 +1,6 @@
 {
   "name": "wplace-RusMarble",
-  "version": "0.87.102",
+  "version": "0.87.103",
   "type": "module",
   "homepage": "https://t.me/ruswplace",
   "repository": {
@@ -17,7 +17,8 @@
     "test:png": "node --experimental-specifier-resolution=node build/test-template-png.js",
     "benchmark": "node build/benchmark.js",
     "patch": "node build/patch.js && npm run build",
-    "check": "node build/check-undefined.js && node build/check-extension-points.js"
+    "check": "node build/check-undefined.js && node build/check-extension-points.js",
+    "build:ext": "npm run build && node build/build-extension.js"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",

@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
-# Deploy the experimental ("Rus Marble (Exp)") userscript to the Hetzner box.
+# Deploy the experimental ("Rus Marble (Exp)") userscript to a private static host.
 #
 # The exp build is gitignored, so it can't auto-update from GitHub raw like the
-# regular script. Instead we host it as a static file behind nginx on
-# wplace.zaebal.me and point the exp build's @downloadURL / @updateURL at it
-# (see build/build-ex.js). This script uploads dist/RusMarble.exp.user.js and
-# dist/RusMarble.exp.meta.js to the server and installs an idempotent nginx
-# block that serves them.
+# regular script. Instead we host it as a static file behind nginx and point the
+# exp build's @downloadURL / @updateURL at it (see build/build-ex.js). This script
+# uploads dist/RusMarble.exp.user.js and dist/RusMarble.exp.meta.js to the server
+# and installs an idempotent nginx block that serves them.
+#
+# Everything that identifies the host — SSH target, directories, origin and the
+# unguessable public path — lives in build/exp.local.json (gitignored; see
+# build/exp.local.example.json). Nothing here should name the real server.
 #
 # Usage:
 #   build/deploy-exp.sh [options]
 #
 # Options:
-#   --host HOST      Remote SSH target.        Default: root@het
-#   --static-dir P   Remote static directory.  Default: /opt/wplace-exp-static
-#   --nginx-site P   Remote nginx site config. Default: /etc/nginx/sites-available/wplace.zaebal.me
+#   --host HOST      Remote SSH target          (overrides exp.local.json "host")
+#   --static-dir P   Remote static directory    (overrides "staticDir")
+#   --nginx-site P   Remote nginx site config   (overrides "nginxSite")
 #   --build          Run `node build/build-ex.js` before deploying
 #   --help, -h       Show this help
 set -euo pipefail
@@ -28,11 +31,20 @@ require_cmd() {
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-HOST="root@het"
-# Standalone dir OUTSIDE /opt/wplacetgbot: the bot's app dir gets re-synced/cleaned
-# on redeploy, which would delete an exp static subdir living under it.
-STATIC_DIR="/opt/wplace-exp-static"
-NGINX_SITE="/etc/nginx/sites-available/wplace.zaebal.me"
+EXP_CONFIG="${REPO_DIR}/build/exp.local.json"
+[[ -f "$EXP_CONFIG" ]] || { echo "Missing ${EXP_CONFIG} — copy build/exp.local.example.json and fill it in" >&2; exit 1; }
+cfg() { node -e 'const c=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const v=c[process.argv[2]];process.stdout.write(Array.isArray(v)?v.join("\n"):(v??""))' "$EXP_CONFIG" "$1"; }
+
+HOST="$(cfg host)"
+# Keep the static dir standalone (not under any app dir that gets re-synced/cleaned on redeploy).
+STATIC_DIR="$(cfg staticDir)"
+NGINX_SITE="$(cfg nginxSite)"
+ORIGIN="$(cfg origin)"
+PUBLIC_PATH="$(cfg publicPath)"
+# Previous public paths that still serve the current files, so installs that
+# point at an old @updateURL update once more and pick up the new one. Drop a
+# path from the list once every install has moved and it will be removed from nginx.
+LEGACY_PATHS="$(cfg legacyPublicPaths)"
 DO_BUILD=0
 
 EXP_JS="${REPO_DIR}/dist/RusMarble.exp.user.js"
@@ -51,6 +63,12 @@ done
 
 require_cmd ssh
 require_cmd rsync
+require_cmd node
+for v in HOST STATIC_DIR NGINX_SITE ORIGIN PUBLIC_PATH; do
+  [[ -n "${!v}" ]] || { echo "exp.local.json is missing a value for ${v}" >&2; exit 1; }
+done
+ORIGIN="${ORIGIN%/}"
+PUBLIC_PATH="/${PUBLIC_PATH#/}"; PUBLIC_PATH="${PUBLIC_PATH%/}"
 
 if [[ "$DO_BUILD" == "1" ]]; then
   log "Building exp userscript"
@@ -70,11 +88,20 @@ rsync -az "$EXP_JS"   "${HOST}:${STATIC_DIR}/RusMarble.exp.user.js"
 rsync -az "$EXP_META" "${HOST}:${STATIC_DIR}/RusMarble.exp.meta.js"
 
 log "Installing nginx block on ${NGINX_SITE}"
-ssh "$HOST" bash -s -- "$STATIC_DIR" "$NGINX_SITE" <<'REMOTE'
+# Paths served: the current one plus any legacy ones (space-separated for awk).
+ALL_PATHS="$PUBLIC_PATH"
+while IFS= read -r legacy; do
+  [[ -n "$legacy" ]] || continue
+  legacy="/${legacy#/}"; legacy="${legacy%/}"
+  [[ "$legacy" == "$PUBLIC_PATH" ]] || ALL_PATHS="$ALL_PATHS $legacy"
+done <<<"$LEGACY_PATHS"
+
+ssh "$HOST" bash -s -- "$STATIC_DIR" "$NGINX_SITE" "$ALL_PATHS" <<'REMOTE'
 set -euo pipefail
 
 STATIC_DIR="$1"
 NGINX_SITE="$2"
+ALL_PATHS="$3"
 
 TS="$(date -u +%Y%m%d-%H%M%S)"
 NGINX_BACKUP_PATH="${NGINX_SITE}.bak-exp-${TS}"
@@ -88,18 +115,24 @@ log() { printf '[remote deploy-exp] %s\n' "$*"; }
 cp "$NGINX_SITE" "$NGINX_BACKUP_PATH"
 
 # Remove any previous managed block, then insert a fresh one before `location /`.
-awk -v static_dir="$STATIC_DIR" '
+awk -v static_dir="$STATIC_DIR" -v paths="$ALL_PATHS" '
   BEGIN {
-    block = "    location = /wplacebot/RusMarble.exp.user.js {\n" \
+    n = split(paths, p, " ")
+    block = ""
+    for (i = 1; i <= n; i++) {
+      block = block \
+            "    location = " p[i] "/RusMarble.exp.user.js {\n" \
             "        default_type application/javascript;\n" \
             "        add_header Cache-Control \"no-cache\";\n" \
             "        alias " static_dir "/RusMarble.exp.user.js;\n" \
             "    }\n\n" \
-            "    location = /wplacebot/RusMarble.exp.meta.js {\n" \
+            "    location = " p[i] "/RusMarble.exp.meta.js {\n" \
             "        default_type application/javascript;\n" \
             "        add_header Cache-Control \"no-cache\";\n" \
             "        alias " static_dir "/RusMarble.exp.meta.js;\n" \
             "    }\n"
+      if (i < n) block = block "\n"
+    }
     in_managed = 0
     inserted = 0
   }
@@ -132,33 +165,30 @@ systemctl reload nginx
 log "Deployed. nginx backup: ${NGINX_BACKUP_PATH}"
 REMOTE
 
-# Cloudflare fronts wplace.zaebal.me and caches .js aggressively (and caches
-# 404s), so a fresh deploy stays hidden behind a stale edge cache. Purge it if
-# credentials are available; otherwise tell the user to purge manually.
-EXP_URLS=(
-  "https://wplace.zaebal.me/wplacebot/RusMarble.exp.user.js"
-  "https://wplace.zaebal.me/wplacebot/RusMarble.exp.meta.js"
-)
+# A CDN in front of the origin may cache .js aggressively (and cache 404s), so a
+# fresh deploy can stay hidden behind a stale edge cache. Purge every served URL
+# if Cloudflare credentials are available; otherwise tell the user to purge manually.
+EXP_URLS=()
+for path in $ALL_PATHS; do
+  EXP_URLS+=("${ORIGIN}${path}/RusMarble.exp.user.js" "${ORIGIN}${path}/RusMarble.exp.meta.js")
+done
 if [[ -n "${CF_API_TOKEN:-}" && -n "${CF_ZONE_ID:-}" ]]; then
   log "Purging Cloudflare cache for exp URLs"
+  files_json="$(printf '"%s",' "${EXP_URLS[@]}")"; files_json="[${files_json%,}]"
   curl -fsS -X POST "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/purge_cache" \
     -H "Authorization: Bearer ${CF_API_TOKEN}" \
     -H "Content-Type: application/json" \
-    --data "{\"files\":[\"${EXP_URLS[0]}\",\"${EXP_URLS[1]}\"]}" >/dev/null \
+    --data "{\"files\":${files_json}}" >/dev/null \
     && log "Cloudflare cache purged" \
     || log "WARN: Cloudflare purge failed"
 else
-  log "Set CF_API_TOKEN and CF_ZONE_ID to auto-purge Cloudflare, or purge these URLs manually in the Cloudflare dashboard:"
-  log "  ${EXP_URLS[0]}"
-  log "  ${EXP_URLS[1]}"
+  log "Set CF_API_TOKEN and CF_ZONE_ID to auto-purge the CDN cache, or purge these URLs manually:"
+  for u in "${EXP_URLS[@]}"; do log "  $u"; done
 fi
 
 log "Verifying public URLs"
-curl -fsS -o /dev/null "https://wplace.zaebal.me/wplacebot/RusMarble.exp.user.js" \
-  && log "OK: https://wplace.zaebal.me/wplacebot/RusMarble.exp.user.js" \
-  || log "WARN: could not fetch exp userscript over HTTPS (check DNS/TLS)"
-curl -fsS -o /dev/null "https://wplace.zaebal.me/wplacebot/RusMarble.exp.meta.js" \
-  && log "OK: https://wplace.zaebal.me/wplacebot/RusMarble.exp.meta.js" \
-  || log "WARN: could not fetch exp meta over HTTPS"
+for u in "${EXP_URLS[@]}"; do
+  curl -fsS -o /dev/null "$u" && log "OK: $u" || log "WARN: could not fetch $u"
+done
 
 log "Done."

@@ -406,7 +406,8 @@ FodyWeavers.xsd
 *.local.patch
 *.local.md
 
-# Experimental build — deployed via nginx (wplace.zaebal.me), not committed
+# Experimental build — deployed to a private static host, not committed
 dist/RusMarble.exp.user.js
 dist/RusMarble.exp.meta.js
 src/exp/
+build/exp.local.json

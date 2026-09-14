@@ -1526,9 +1526,18 @@ export default class TemplateManager {
         if (state.needsRun) {
           state.needsRun = false;
           if (followUpFull) {
-            // Full rebuild supersedes any queued scoped render — don't drop the follow-up.
+            // Full rebuild supersedes any queued scoped render — don't drop the follow-up. But it
+            // must cover the queued request's template too: a template created while another
+            // one's visible-first pass was running used to be dropped here (its sortID replaced by
+            // `pending`), leaving it without crosses until a reload.
+            const queuedSortID = state.pendingSortID;
+            const queuedOptions = state.pendingOptions;
+            state.pendingSortID = undefined;
             state.pendingOptions = null;
-            this.createOverlayOnMap(pending ?? null, followUpOptions);
+            const mergedSortID = queuedSortID === undefined ? pending : mergeSortId(pending, queuedSortID);
+            // Only keep skipping mounted layers when the queued request would have skipped them too.
+            const mergedOptions = (followUpOptions && queuedOptions?.skipExisting) ? followUpOptions : null;
+            this.createOverlayOnMap(mergedSortID ?? null, mergedOptions);
           } else {
             this.createOverlayOnMap(state.pendingSortID ?? null, state.pendingOptions ?? null);
           }

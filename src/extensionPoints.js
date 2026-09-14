@@ -61,9 +61,10 @@ export const onPanelClosed = () => {};
  * data, so it calls back through here. No-op (and reports unhandled) in the public build.
  * @param {Element} _anchor
  * @param {number[]} _coords
+ * @param {object} _main the hostContext
  * @returns {boolean} whether an extension handled it
  */
-export const openNearbyTemplates = (_anchor, _coords) => false;
+export const openNearbyTemplates = (_anchor, _coords, _main) => false;
 
 /** Extra `bmControl` action kinds an extension understands.
  * `parse` turns a raw console action descriptor into a normalized action (or null to decline);
