@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Rus Marble",
-  "version": "0.87.102",
+  "version": "0.87.104",
   "description": "Overlay templates, stats and helpers for wplace.live. Not affiliated with wplace.live.",
   "homepage_url": "https://t.me/ruswplace",
   "icons": {

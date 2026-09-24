@@ -482,25 +482,6 @@ export function buildUserSettingsSection({
             forceRefreshTiles();
           });
         }).buildElement()
-        .addDiv({'className': 'bm-setting-row'})
-          .addSpan({'id': 'bm-transparent-erase-color-label', 'textContent': t('settings.transparentEraseColor.label')}).buildElement()
-          .addInput({'id': 'bm-transparent-erase-color', 'type': 'color', 'value': templateManager.getTransparentEraseColor(), 'title': t('settings.transparentEraseColor.title')}, (instance, input) => {
-            input.style.width = '2.2em';
-            input.style.padding = '0';
-            input.style.cursor = 'pointer';
-            // 'change' rather than 'input': the colour picker fires continuously while dragging, and
-            // each change drops every cached raster and re-renders the overlay.
-            input.addEventListener('change', async () => {
-              const applied = await templateManager.setTransparentEraseColor(input.value);
-              if (!applied) {
-                input.value = templateManager.getTransparentEraseColor();
-                return;
-              }
-              await templateManager.createOverlayOnMapVisibleOnly(null, { skipExisting: false });
-              instance.handleDisplayStatus(`Transparent pixels are now marked in ${input.value}.`);
-            });
-          }).buildElement()
-        .buildElement()
         .addCheckbox({'id': 'bm-background-mode-enabled', 'textContent': t('settings.backgroundMode'), 'checked': templateManager.isBackgroundModeEnabled?.() ?? false}, (instance, label, checkbox) => {
           checkbox.addEventListener('change', async () => {
             await templateManager.setBackgroundModeEnabled?.(checkbox.checked);
@@ -521,6 +502,16 @@ export function buildUserSettingsSection({
             } else {
               instance.handleDisplayStatus("Memory Saving Mode Disabled. The Effect will be Fully Active After a Page Refresh.");
             }
+          });
+        }).buildElement()
+        .addCheckbox({'id': 'bm-offscreen-culling-enabled', 'textContent': t('settings.offscreenCulling'), 'title': t('settings.offscreenCulling.title'), 'checked': templateManager.isOffscreenCullingOn()}, (instance, label, checkbox) => {
+          label.title = t('settings.offscreenCulling.title');
+          checkbox.addEventListener('change', async () => {
+            await templateManager.setOffscreenCulling(checkbox.checked);
+            // Turning it off has to fill in everything that was skipped; turning it on drops the
+            // off-screen layers on the next pass.
+            templateManager.createOverlayOnMapVisibleFirst();
+            window.buildTemplateFilterList?.();
           });
         }).buildElement()
         .addCheckbox({'id': 'bm-debug-logs-enabled', 'textContent': t('settings.debugLogs'), 'checked': templateManager.isDebugLoggingEnabled()}, (instance, label, checkbox) => {

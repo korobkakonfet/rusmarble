@@ -1323,6 +1323,10 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   padding-left: 6px;
 }
 
+.bm-template-offscreen {
+  opacity: 0.45;
+}
+
 .bm-remote-badge {
   display: inline-block;
   font-size: 8px;
@@ -2815,4 +2819,48 @@ span.bm-templatename:hover, a.bm-templatename:focus {
 /* Alliance HQ markers the user has hidden (bmHiddenAllianceHqIds). */
 .maplibregl-marker.bm-hidden-alliance-hq {
   display: none !important;
+}
+
+/* ---- User-resized main overlay (grip in the bottom-right corner) ---- */
+/* After the language rule on purpose: same specificity, and the Russian layout's fixed width
+   must not win over a size the user picked. */
+#bm-overlay.bm-overlay-resized:not(.bm-overlay-minimized) {
+  width: var(--bm-overlay-width) !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  height: var(--bm-overlay-height, auto);
+  overflow-y: auto;
+}
+
+#bm-overlay.bm-overlay-resizing {
+  transition: none !important;
+}
+
+#bm-overlay-resize-grip {
+  position: fixed;
+  width: 14px;
+  height: 14px;
+  z-index: 9001;
+  cursor: nwse-resize;
+  touch-action: none;
+  opacity: 0.55;
+  background:
+    linear-gradient(135deg, transparent 0 55%, rgba(255, 255, 255, 0.85) 55% 62%, transparent 62% 72%, rgba(255, 255, 255, 0.85) 72% 79%, transparent 79%);
+  transition: opacity 0.15s ease;
+}
+
+#bm-overlay-resize-grip:hover {
+  opacity: 1;
+}
+
+@media (max-width: 640px), (pointer: coarse) {
+  /* The mobile bottom sheet sizes itself. */
+  #bm-overlay.bm-overlay-resized:not(.bm-overlay-minimized) {
+    width: auto !important;
+    height: auto;
+  }
+
+  #bm-overlay-resize-grip {
+    display: none !important;
+  }
 }

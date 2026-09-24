@@ -437,5 +437,12 @@
   "bm-deface-display": "bm-b1",
   "bm-deface-hole": "bm-bR",
   "bm-hidden-alliance-hq": "bm-9H",
-  "bm-hide-alliance-hq": "bm-ax"
+  "bm-hide-alliance-hq": "bm-ax",
+  "bm-offscreen-culling-enabled": "bm-7Q",
+  "bm-template-offscreen": "bm-9I",
+  "bm-overlay-resize-grip": "bm-9n",
+  "bm-overlay-resizing": "bm-az",
+  "bm-overlay-resized": "bm-aR",
+  "bm-overlay-height": "bm-bd",
+  "bm-overlay-width": "bm-bz"
 }

@@ -1324,7 +1324,7 @@ export const createArchiveTemplateUi = (deps = {}) => {
             templateName,
             [rect.tx1, rect.ty1, rect.px1, rect.py1],
             {
-              enabled: targetTemplate?.enabled ?? true,
+              enabled: targetTemplate ? (targetTemplate.enabled || targetTemplate.autoDisabled === true) : true,
               timeArchiveMeta,
             }
           );

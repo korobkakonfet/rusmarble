@@ -1190,7 +1190,7 @@ export default class TemplateManager {
       let errorImage = null;
       let errorData = null;
 
-      const templateTileEnabled = template.enabled ?? true;
+      const templateTileEnabled = this.isTemplateUserEnabled(template);
       if (isErrorMapShown && templateTileEnabled) {
         errorCanvas = new OffscreenCanvas(errorWidth, errorHeight);
         errorContext = errorCanvas.getContext('2d', { willReadFrequently: true });
@@ -1312,7 +1312,7 @@ export default class TemplateManager {
         memorySaving: currentMemorySavingMode,
       });
       if (!sampleData) continue;
-      const templateTileEnabled = template.enabled ?? true;
+      const templateTileEnabled = this.isTemplateUserEnabled(template);
       prepared.push({
         sampleData,
         entry: {
@@ -1536,9 +1536,18 @@ export default class TemplateManager {
       state.timer = null;
       state._pendingDelay = 0;
       state.running = true;
-      const pending = state.pendingSortID;
-      const pendingOptions = state.pendingOptions;
-      const followUpFull = !!(pendingOptions?.followUpFull && pendingOptions?.tilePrefixes);
+      let pending = state.pendingSortID;
+      // Resolved here rather than at queue time: the viewport may have moved during the debounce.
+      const culled = this.isOffscreenCullingOn() ? this._scopeOverlayRenderToViewport(pending, state.pendingOptions) : null;
+      // A template that just came into view was switched on by the pass above; a render scoped to
+      // some other template would leave it blank.
+      if (culled?.autoEnabledSortIDs?.length && pending !== null && pending !== undefined
+        && culled.autoEnabledSortIDs.some((id) => id != pending)) {
+        pending = null;
+      }
+      const pendingOptions = culled ?? state.pendingOptions;
+      // With culling there is no full pass to follow up with — panning renders the rest.
+      const followUpFull = !culled && !!(pendingOptions?.followUpFull && pendingOptions?.tilePrefixes);
       // The follow-up full pass must inherit skipExisting, otherwise a toggle-on whose layers are
       // already valid pays for a complete re-render one tick after we deliberately skipped it.
       const followUpOptions = pendingOptions?.skipExisting ? { skipExisting: true } : null;
@@ -1653,8 +1662,14 @@ export default class TemplateManager {
    * Uses sleep(0) yields between tiles to avoid competing with active renders.
    */
   async _prewarmTemplateSamples(template) {
-    const allKeys = template.getChunkKeys();
-    for (const tileKey of allKeys) {
+    let tileKeys = template.getChunkKeys();
+    if (this.isOffscreenCullingOn()) {
+      // Only the neighbourhood of the viewport; anything further is decoded when panned to.
+      const nearbyPrefixes = this.getVisibleTilePrefixes(3);
+      if (!nearbyPrefixes || !nearbyPrefixes.size) return;
+      tileKeys = this._getTemplateTileKeys(template, nearbyPrefixes);
+    }
+    for (const tileKey of tileKeys) {
       if (template.getRawChunkBuffer(tileKey) || template.chunkedSamples?.[tileKey]) continue;
       const hasBitmap = (template.chunked && Object.prototype.hasOwnProperty.call(template.chunked, tileKey))
         || (template.chunkedBuffer && Object.prototype.hasOwnProperty.call(template.chunkedBuffer, tileKey));
@@ -2437,7 +2452,10 @@ export default class TemplateManager {
         templateInstance.remoteHighlightedAt = templateValue.remoteHighlightedAt ?? null;
         templateInstance.remoteOrder = templateValue.remoteOrder ?? null;
         templateInstance.timeArchiveMeta = normalizeTimeArchiveMeta(templateValue.timeArchiveMeta);
-        templateInstance.enforceTransparentAsDeface = templateValue.enforceTransparentAsDeface === true;
+        // Its list toggle was removed (transparency is handled elsewhere), so a flag left on from
+        // before could never be switched off again.
+        templateInstance.enforceTransparentAsDeface = false;
+        delete templateValue.enforceTransparentAsDeface;
 
         for (const tileKey of chunkKeys) {
           const tileCoords = tileKey.split(',').map(Number);
@@ -2670,7 +2688,7 @@ export default class TemplateManager {
    */
   getTileCacheKeyFromCalculated(displayedColors, involvedTemplates) {
     // we still need to check the enabled status since disabled templates should still have the painted count updated.
-    return displayedColors.join(';') + '||' + involvedTemplates.map(t => t.storageKey + "," + t.storageTimeString + "," + (+(t.enabled ?? true))).join(';');
+    return displayedColors.join(';') + '||' + involvedTemplates.map(t => t.storageKey + "," + t.storageTimeString + "," + (+this.isTemplateUserEnabled(t))).join(';');
   }
 
   /** Returns tile prefixes for currently visible map bounds (with padding).
@@ -2767,6 +2785,99 @@ export default class TemplateManager {
       return keep === 'full' ? sourceID !== fullSourceID : sourceID === fullSourceID;
     });
     if (toRemove.length) removeTemplateCanvasSources(toRemove, 'overlay');
+  }
+
+  /** Restrict a queued overlay render to the visible tiles and unmount what has left the screen.
+   * @param {number|null|undefined} sortID
+   * @param {object|null} options - the queued render options
+   * @returns {object|null} The options to render with, or `null` when the viewport is unknown or
+   *   too large to enumerate (zoomed far out) — the caller then renders unscoped as before.
+   */
+  _scopeOverlayRenderToViewport(sortID, options) {
+    const visiblePrefixes = this.getVisibleTilePrefixes();
+    if (!visiblePrefixes || !visiblePrefixes.size) return null;
+    const autoEnabledSortIDs = this.applyViewportAutoEnable(visiblePrefixes);
+    const scopedSortID = sortID ?? null;
+    this.pruneOverlayToVisiblePrefixes(scopedSortID, visiblePrefixes);
+    this._pruneOffscreenFullOverlays(scopedSortID, visiblePrefixes);
+    // An explicit prefix set (visible-first, or tiles touched by an update) is already scoped.
+    const tilePrefixes = options?.tilePrefixes ?? visiblePrefixes;
+    return { ...options, tilePrefixes, followUpFull: false, autoEnabledSortIDs };
+  }
+
+  /** Whether the user wants a template on: `enabled`, or switched off only for being off-screen.
+   * This — not `enabled` — is what gets persisted.
+   * @param {Template} template
+   * @returns {boolean}
+   */
+  isTemplateUserEnabled(template) {
+    return template?.enabled === true || template?.autoDisabled === true;
+  }
+
+  /** Switch templates on/off by whether they are in view. A template the user turned off has
+   * `enabled: false` without `autoDisabled`, so it is never switched back on here.
+   * @param {Set<string>} visiblePrefixes
+   * @returns {number[]} sortIDs of templates that were just switched on
+   */
+  applyViewportAutoEnable(visiblePrefixes) {
+    const autoEnabled = [];
+    let changed = false;
+    for (const template of this.templatesArray ?? []) {
+      if (!this.isTemplateUserEnabled(template)) continue;
+      const inView = this.isTemplateInPrefixes(template, visiblePrefixes);
+      if (inView === (template.enabled === true)) continue;
+      template.enabled = inView;
+      template.autoDisabled = !inView;
+      if (inView) autoEnabled.push(template.sortID);
+      changed = true;
+    }
+    if (changed) {
+      this.requestListRebuild();
+      window.scheduleProgressUiRefresh?.();
+    }
+    return autoEnabled;
+  }
+
+  /** Put back every template switched off for being off-screen (culling turned off). */
+  restoreAutoDisabledTemplates() {
+    let changed = false;
+    for (const template of this.templatesArray ?? []) {
+      if (template?.autoDisabled !== true) continue;
+      template.enabled = true;
+      template.autoDisabled = false;
+      changed = true;
+    }
+    if (changed) this.requestListRebuild();
+  }
+
+  /** Unmount merged full-canvas overlays of templates with no tile in view.
+   * pruneOverlayToVisiblePrefixes never touches them, and a skipExisting render treats a mounted
+   * full canvas as current — so one left up while off-screen would come back stale.
+   * @param {number|null} sortID
+   * @param {Set<string>} visiblePrefixes
+   */
+  _pruneOffscreenFullOverlays(sortID, visiblePrefixes) {
+    const mounted = bmCanvas.overlay ?? {};
+    const toRemove = [];
+    for (const template of this.templatesArray ?? []) {
+      if (sortID !== null && template.sortID != sortID) continue;
+      const sourceID = `BM-overlay-full-${template.sortID}`;
+      if (!Object.prototype.hasOwnProperty.call(mounted, sourceID)) continue;
+      if (!this.isTemplateInPrefixes(template, visiblePrefixes)) toRemove.push(sourceID);
+    }
+    if (toRemove.length) removeTemplateCanvasSources(toRemove, 'overlay');
+  }
+
+  /** Whether any tile of a template falls within a set of tile prefixes.
+   * @param {Template} template
+   * @param {Set<string>} prefixes
+   * @returns {boolean}
+   */
+  isTemplateInPrefixes(template, prefixes) {
+    for (const prefix of this._getTileKeysByPrefixMap(template).keys()) {
+      if (prefixes.has(prefix)) return true;
+    }
+    return false;
   }
 
   pruneOverlayToVisiblePrefixes(sortID, visiblePrefixes) {
@@ -3021,6 +3132,27 @@ export default class TemplateManager {
     // list is only built (for that colour alone) when something actually reads it.
     const combinedProgress = this._progress.buildCombinedProgress();
 
+    // Painted counts for the templates that are on right now, from the per-template totals. The
+    // per-tile `paintedAndEnabled` bakes in whether a template was on when its tile was scanned,
+    // and with off-screen templates switched on/off while panning that no longer matches the
+    // paletteSum above — a template coming into view had its tiles scanned while still off.
+    {
+      const paintedByColor = Object.create(null);
+      for (const template of (this.templatesArray ?? [])) {
+        if (!template?.enabled) continue;
+        const palette = this._runningTemplate[template.storageKey]?.palette;
+        if (!palette) continue;
+        for (const colorKey in palette) {
+          paintedByColor[colorKey] = (paintedByColor[colorKey] || 0) + Math.max(0, Number(palette[colorKey]) || 0);
+        }
+      }
+      for (const colorKey of new Set([...Object.keys(combinedProgress), ...Object.keys(paintedByColor)])) {
+        if (colorKey === TEMPLATE_DEFACE_COLOR_KEY) continue; // derived from `missing` below
+        const entry = (combinedProgress[colorKey] ??= this._progress.createEmptyEntry(colorKey));
+        entry.paintedAndEnabled = paintedByColor[colorKey] || 0;
+      }
+    }
+
     // Placed after the running totals are in: `missing` is what the tile scans counted as still
     // painted, so the remaining figure is exact even when defacePixelCount is 0 for a template
     // stored before it was persisted.
@@ -3231,6 +3363,43 @@ export default class TemplateManager {
    */
   isMemorySavingModeOn() {
     return this.userSettings?.memorySavingMode ?? false;
+  }
+
+  /** Whether overlay rendering is limited to the visible part of the map. On by default.
+   * @returns {boolean}
+   */
+  isOffscreenCullingOn() {
+    return this.userSettings?.offscreenCulling ?? true;
+  }
+
+  /** Sets the `offscreenCulling` boolean in the `userSettings`.
+   * @param {boolean} value
+   */
+  async setOffscreenCulling(value) {
+    this.userSettings.offscreenCulling = value === true;
+    if (!this.userSettings.offscreenCulling) this.restoreAutoDisabledTemplates();
+    await this.storeUserSettings();
+  }
+
+  /** The user-chosen size of the main overlay, or null for the default (content-sized).
+   * @returns {{width: number, height: number}|null}
+   */
+  getOverlaySize() {
+    const size = this.userSettings?.overlaySize;
+    const width = Number(size?.width);
+    if (!Number.isFinite(width) || width <= 0) return null;
+    const height = Number(size?.height);
+    return { width, height: Number.isFinite(height) && height > 0 ? height : 0 };
+  }
+
+  /** @param {{width: number, height: number}|null} size - null resets to the default size */
+  async setOverlaySize(size) {
+    if (size) {
+      this.userSettings.overlaySize = { width: Math.round(size.width), height: Math.round(size.height || 0) };
+    } else {
+      delete this.userSettings.overlaySize;
+    }
+    await this.storeUserSettings();
   }
 
   /** Sets the `memorySavingMode` boolean in the `userSettings` to a value.
@@ -3939,7 +4108,10 @@ export default class TemplateManager {
    * @since 0.87.6
    */
   isTemplateAutoSyncEnabled() {
-    return this.userSettings?.autoSyncTemplates ?? false;
+    // On unless the user switched it off themselves. `autoSyncTemplates: false` alone is not
+    // enough: it was the stored default for everyone before, whether they touched it or not.
+    if (this.userSettings?.autoSyncTemplatesUserSet !== true) return true;
+    return this.userSettings?.autoSyncTemplates ?? true;
   }
 
   /** Sets auto-sync for remote templates.
@@ -3947,7 +4119,8 @@ export default class TemplateManager {
    * @since 0.87.6
    */
   async setTemplateAutoSyncEnabled(value) {
-    this.userSettings.autoSyncTemplates = value;
+    this.userSettings.autoSyncTemplates = value === true;
+    this.userSettings.autoSyncTemplatesUserSet = true;
     await this.storeUserSettings();
   }
 
