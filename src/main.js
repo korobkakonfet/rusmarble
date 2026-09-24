@@ -9265,7 +9265,9 @@ async function buildOverlayMain() {
       }
 
       const paletteEntry = combinedProgress[colorKey];
-      if (remainingCount > 0 && (paletteEntry?.examplesEnabled?.length ?? 0) === 0 && colorKey !== 'other') continue;
+      // exampleCount rather than examplesEnabled.length: the list itself is built lazily, on click.
+      const paletteExampleCount = paletteEntry?.exampleCount ?? 0;
+      if (remainingCount > 0 && paletteExampleCount === 0 && colorKey !== 'other') continue;
       let currentIndex = 0;
       swatch.addEventListener('click', () => {
         // if ((paletteEntry?.examples?.length ?? 0) > 0) {
@@ -9279,7 +9281,7 @@ async function buildOverlayMain() {
         }
       });
       // if ((paletteEntry?.examples?.length ?? 0) > 0) {
-      if ((paletteEntry?.examplesEnabled?.length ?? 0) > 0) {
+      if (paletteExampleCount > 0) {
         swatch.style["cursor"] = "pointer";
       };
 
@@ -9455,7 +9457,7 @@ async function buildOverlayMain() {
         if (rgb === 'other') return;
         const paintedCount = Number(combinedProgressForTemplateList[rgb]?.paintedAndEnabled ?? 0);
         const remainingCount = Math.max(0, (Number(totalCount) || 0) - paintedCount);
-        const exampleCount = Number(combinedProgressForTemplateList[rgb]?.examplesEnabled?.length ?? 0);
+        const exampleCount = Number(combinedProgressForTemplateList[rgb]?.exampleCount ?? 0);
         if (remainingCount > 0 && exampleCount === 0) {
           phantomColorKeys.add(rgb);
         }
@@ -9890,7 +9892,7 @@ async function buildOverlayMain() {
     const entries = [];
     for (const [rgb, paintedCount, totalCount] of paletteSumSorted) {
       const remainingCount = Math.max(0, totalCount - paintedCount);
-      const examplesEnabledCount = combinedProgress[rgb]?.examplesEnabled?.length ?? 0;
+      const examplesEnabledCount = combinedProgress[rgb]?.exampleCount ?? 0;
       const meta = (
         rgb === '#deface'
           ? (rgbToMeta.get('222,250,206') ?? { id: 0, premium: false, name: 'Transparent' })

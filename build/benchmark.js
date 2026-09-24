@@ -17,6 +17,7 @@ import {
   paintablePaletteChannels,
 } from '../src/templateChunkUtils.js';
 import { convertImageDataToWplacePalette } from '../src/Template.js';
+import { TemplateProgressAggregator } from '../src/templateProgressAggregator.js';
 import { templatePaletteChannels } from '../src/templatePaletteConversion.js';
 import { createExactNearestLookup } from '../src/templateNearestPalette.js';
 import { colorpalette, rgbToMeta, uint8ToBase64, base64ToUint8 } from '../src/utils.js';
@@ -1927,6 +1928,252 @@ function buildTileProgressAggregationBenchmarks(sampleData, tilePixels) {
   ];
 }
 
+// Pre-0.87.104 TemplateManager running totals, verbatim: every re-scanned tile dirtied its
+// colours' example reservoirs, and the next getOverallPerColorProgress rebuilt them across all tiles.
+class LegacyProgressAggregator {
+  constructor(exampleMax) {
+    this.exampleMax = exampleMax;
+    this.tileProgress = new Map();
+    this._runningPalette = Object.create(null);
+    this._runningTemplate = Object.create(null);
+    this._runningExamples = Object.create(null);
+    this._examplesColorDirty = new Set();
+  }
+  _applyTileToRunning(stats, sign) {
+    const palette = stats.palette;
+    if (palette) {
+      const exampleMax = this.exampleMax;
+      for (const colorKey in palette) {
+        const entry = palette[colorKey];
+        if (!entry) continue;
+        let slot = this._runningPalette[colorKey];
+        if (!slot) {
+          slot = { painted: 0, paintedAndEnabled: 0, missing: 0 };
+          this._runningPalette[colorKey] = slot;
+        }
+        slot.painted += sign * (entry.painted || 0);
+        slot.paintedAndEnabled += sign * (entry.paintedAndEnabled || 0);
+        slot.missing += sign * (entry.missing || 0);
+        if (sign === 1 && Array.isArray(entry.examplesEnabled) && entry.examplesEnabled.length > 0) {
+          if (!this._examplesColorDirty.has(colorKey)) {
+            if (!this._runningExamples[colorKey]) {
+              this._runningExamples[colorKey] = { examplesEnabled: [], _exampleSeenCount: 0 };
+            }
+            mergeTemplateExampleReservoir(this._runningExamples[colorKey], entry.examplesEnabled, exampleMax);
+          }
+        } else if (sign === -1 && Array.isArray(entry.examplesEnabled) && entry.examplesEnabled.length > 0) {
+          this._examplesColorDirty.add(colorKey);
+          delete this._runningExamples[colorKey];
+        }
+      }
+    }
+    const template = stats.template;
+    if (template) {
+      for (const storageKey in template) {
+        const entry = template[storageKey];
+        if (!entry) continue;
+        let slot = this._runningTemplate[storageKey];
+        if (!slot) {
+          slot = { painted: 0, palette: Object.create(null) };
+          this._runningTemplate[storageKey] = slot;
+        }
+        slot.painted += sign * (entry.painted || 0);
+        const pal = entry.palette;
+        if (pal) {
+          for (const colorKey in pal) {
+            slot.palette[colorKey] = (slot.palette[colorKey] || 0) + sign * (Number(pal[colorKey]) || 0);
+          }
+        }
+      }
+    }
+  }
+  set(key, stats) {
+    const old = this.tileProgress.get(key);
+    if (old) this._applyTileToRunning(old, -1);
+    this.tileProgress.set(key, stats);
+    if (stats) this._applyTileToRunning(stats, +1);
+  }
+  delete(key) {
+    const old = this.tileProgress.get(key);
+    if (old) this._applyTileToRunning(old, -1);
+    this.tileProgress.delete(key);
+  }
+  buildCombinedProgress() {
+    const combinedProgress = {};
+    for (const colorKey in this._runningPalette) {
+      const slot = this._runningPalette[colorKey];
+      combinedProgress[colorKey] = {
+        painted: Math.max(0, slot.painted),
+        paintedAndEnabled: Math.max(0, slot.paintedAndEnabled),
+        missing: Math.max(0, slot.missing),
+        examplesEnabled: [],
+      };
+    }
+    if (this._examplesColorDirty.size > 0) {
+      const rebuilding = new Map();
+      for (const colorKey of this._examplesColorDirty) {
+        rebuilding.set(colorKey, { examplesEnabled: [], _exampleSeenCount: 0 });
+      }
+      for (const stats of this.tileProgress.values()) {
+        const palette = stats.palette;
+        if (!palette) continue;
+        for (const colorKey in palette) {
+          const target = rebuilding.get(colorKey);
+          if (!target) continue;
+          const content = palette[colorKey];
+          if (content?.examplesEnabled?.length) {
+            mergeTemplateExampleReservoir(target, content.examplesEnabled, this.exampleMax);
+          }
+        }
+      }
+      for (const [colorKey, rebuilt] of rebuilding) {
+        this._runningExamples[colorKey] = rebuilt;
+      }
+      this._examplesColorDirty.clear();
+    }
+    for (const colorKey in this._runningExamples) {
+      if (combinedProgress[colorKey]) {
+        combinedProgress[colorKey].examplesEnabled = this._runningExamples[colorKey]?.examplesEnabled ?? [];
+      }
+    }
+    return combinedProgress;
+  }
+}
+
+// Heavy load: 500 tiles x 30 colours x 3 templates per tile, 32 examples per colour per tile.
+function buildProgressAggregatorFixture() {
+  const TILE_COUNT = 500;
+  const COLORS_PER_TILE = 30;
+  const TEMPLATES_PER_TILE = 3;
+  const TEMPLATE_COUNT = 20;
+  const EXAMPLES_PER_COLOR = 32;
+  const rng = createRng(0xab000002);
+  const colorKeys = [...rgbToMeta.keys()].filter((key) => /^\d+,\d+,\d+$/.test(key)).slice(1, 1 + COLORS_PER_TILE);
+  const makeStats = (tileIndex, salt) => {
+    const palette = {};
+    for (const colorKey of colorKeys) {
+      palette[colorKey] = {
+        painted: Math.floor(rng() * 1000) + salt,
+        paintedAndEnabled: Math.floor(rng() * 1000),
+        missing: Math.floor(rng() * 1000),
+        examplesEnabled: Array.from({ length: EXAMPLES_PER_COLOR }, (_, j) => (
+          [[tileIndex, j], [Math.floor(rng() * 1000), Math.floor(rng() * 1000)]]
+        )),
+      };
+    }
+    const template = {};
+    for (let k = 0; k < TEMPLATES_PER_TILE; k++) {
+      const templatePalette = {};
+      for (const colorKey of colorKeys) templatePalette[colorKey] = Math.floor(rng() * 500);
+      template[`template-${(tileIndex + k) % TEMPLATE_COUNT}`] = { painted: Math.floor(rng() * 5000), palette: templatePalette };
+    }
+    return { painted: 500, required: 700, wrong: 50, palette, template };
+  };
+  const tileKeys = Array.from({ length: TILE_COUNT }, (_, t) => `${String(t).padStart(4, '0')},${String(t * 3).padStart(4, '0')}`);
+  const initialStats = tileKeys.map((_, t) => makeStats(t, 0));
+  // Pool of "re-scanned" stats, as a tile refresh would produce.
+  const rescanPool = Array.from({ length: 64 }, (_, i) => makeStats(i, 1));
+  return { tileKeys, initialStats, rescanPool, colorKeys, exampleMax: EXAMPLES_PER_COLOR };
+}
+
+// What a list refresh reads: counts plus "does this colour have examples".
+function readProgressLikeUi(combined, useExampleCount) {
+  let sum = 0;
+  for (const colorKey in combined) {
+    const entry = combined[colorKey];
+    sum += entry.painted + entry.missing;
+    sum += useExampleCount ? entry.exampleCount : entry.examplesEnabled.length;
+  }
+  return sum;
+}
+
+function buildProgressAggregatorBenchmarks() {
+  const names = ['legacy,rescan1+refresh', 'lazy,rescan1+refresh', 'legacy,rescan20+refresh', 'lazy,rescan20+refresh', 'lazy,swatchClick1Color']
+    .map((variant) => `progressAggregator(${variant})`);
+  if (!names.some(isBenchmarkSelected)) return []; // skip building the heavy fixture
+  const fixture = buildProgressAggregatorFixture();
+  const makeLegacy = () => {
+    const legacy = new LegacyProgressAggregator(fixture.exampleMax);
+    fixture.tileKeys.forEach((key, index) => legacy.set(key, fixture.initialStats[index]));
+    legacy.buildCombinedProgress();
+    return legacy;
+  };
+  const makeNew = () => {
+    const next = new TemplateProgressAggregator({ getExampleLimit: () => fixture.exampleMax });
+    fixture.tileKeys.forEach((key, index) => next.set(key, fixture.initialStats[index]));
+    return next;
+  };
+
+  // Equivalence: identical totals, and exampleCount equals the legacy reservoir length.
+  {
+    const legacy = makeLegacy();
+    const next = makeNew();
+    for (let i = 0; i < 40; i++) {
+      const key = fixture.tileKeys[(i * 37) % fixture.tileKeys.length];
+      legacy.set(key, fixture.rescanPool[i % fixture.rescanPool.length]);
+      next.set(key, fixture.rescanPool[i % fixture.rescanPool.length]);
+    }
+    legacy.delete(fixture.tileKeys[5]);
+    next.delete(fixture.tileKeys[5]);
+    const a = legacy.buildCombinedProgress();
+    const b = next.buildCombinedProgress();
+    for (const colorKey of Object.keys(a)) {
+      const x = a[colorKey];
+      const y = b[colorKey];
+      if (!y || x.painted !== y.painted || x.paintedAndEnabled !== y.paintedAndEnabled || x.missing !== y.missing
+        || x.examplesEnabled.length !== y.exampleCount || y.examplesEnabled.length !== y.exampleCount) {
+        throw new Error(`progressAggregator mismatch for ${colorKey}`);
+      }
+    }
+    for (const storageKey of Object.keys(legacy._runningTemplate)) {
+      const x = legacy._runningTemplate[storageKey];
+      const y = next.template[storageKey];
+      if (!y || x.painted !== y.painted) throw new Error(`progressAggregator template mismatch for ${storageKey}`);
+      for (const colorKey in x.palette) {
+        if (x.palette[colorKey] !== y.palette[colorKey]) throw new Error(`progressAggregator template palette mismatch ${storageKey}/${colorKey}`);
+      }
+    }
+    console.log('progressAggregator equivalence  ok');
+  }
+
+  const legacy = makeLegacy();
+  const next = makeNew();
+  const clickTarget = makeNew();
+  // Separate cursors so both variants re-scan the same tile sequence (checksums must match).
+  const cursors = new Map();
+  const rescan = (target, count) => {
+    let cursor = cursors.get(target) ?? 0;
+    for (let i = 0; i < count; i++) {
+      const key = fixture.tileKeys[(cursor * 37) % fixture.tileKeys.length];
+      target.set(key, fixture.rescanPool[cursor % fixture.rescanPool.length]);
+      cursor++;
+    }
+    cursors.set(target, cursor);
+  };
+  return [
+    runBenchmark('progressAggregator(legacy,rescan1+refresh)', 60, () => {
+      rescan(legacy, 1);
+      return readProgressLikeUi(legacy.buildCombinedProgress(), false);
+    }),
+    runBenchmark('progressAggregator(lazy,rescan1+refresh)', 60, () => {
+      rescan(next, 1);
+      return readProgressLikeUi(next.buildCombinedProgress(), true);
+    }),
+    runBenchmark('progressAggregator(legacy,rescan20+refresh)', 30, () => {
+      rescan(legacy, 20);
+      return readProgressLikeUi(legacy.buildCombinedProgress(), false);
+    }),
+    runBenchmark('progressAggregator(lazy,rescan20+refresh)', 30, () => {
+      rescan(next, 20);
+      return readProgressLikeUi(next.buildCombinedProgress(), true);
+    }),
+    runBenchmark('progressAggregator(lazy,swatchClick1Color)', 60, () => {
+      rescan(clickTarget, 1);
+      return clickTarget.buildCombinedProgress()[fixture.colorKeys[3]].examplesEnabled.length;
+    }),
+  ];
+}
+
 // ── Exactness gate ────────────────────────────────────────────────────────────────────────────
 // The optimisations below are only worth having if they are bit-identical to the algorithms they
 // replace, so that claim is checked rather than asserted. These run before the timings and abort
@@ -2527,6 +2774,7 @@ async function main() {
       hotPathLoggingGuardedOffSim()
     )),
     ...buildTileProgressAggregationBenchmarks(sampleData, tilePixels),
+    ...buildProgressAggregatorBenchmarks(),
   ];
   if (typeof wasmNearestRunner === 'function') {
     results.splice(8, 0, runBenchmark('findNearestUnpaintedSamplePixel(WASM)', 24, () => (
