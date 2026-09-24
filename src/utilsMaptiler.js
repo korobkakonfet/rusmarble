@@ -411,7 +411,7 @@ export async function addTemplateCanvas(sortID, tileName, templateSize, source, 
   bmCanvas[usage][sourceID] = [geoCoords1, geoCoords2];
   await syncTemplateCanvasSource({ id: sourceID }, source);
 
-  return controlMapTiler((map, sourceID, geoCoords1, geoCoords2, usage, bmCanvas) => {
+  return controlMapTiler((map, sourceID, geoCoords1, geoCoords2, usage, bmCanvas, initialOpacity) => {
     document.head["__bmCanvas"] = bmCanvas; // sync bmCanvas to document
 
     // Fast path: source + layer already registered. Canvas content was already updated by
@@ -478,7 +478,7 @@ export async function addTemplateCanvas(sortID, tileName, templateSize, source, 
       "type": "raster",
       "paint": {
           "raster-resampling": "nearest",
-          "raster-opacity": 1
+          "raster-opacity": initialOpacity
       }
     }, nextLayer);
     // add ghost layer once per session to prevent wplace inserting paint-preview
@@ -502,7 +502,7 @@ export async function addTemplateCanvas(sortID, tileName, templateSize, source, 
         map["moveLayer"](hoverLayerName + "-ghost");
       }
     }
-  }, sourceID, geoCoords1, geoCoords2, usage, bmCanvas);
+  }, sourceID, geoCoords1, geoCoords2, usage, bmCanvas, getUsageLayersOpacity(usage));
 }
 
 /** Register a single canvas covering the full template extent (one MapTiler source+layer per template).
@@ -518,7 +518,7 @@ export async function addTemplateFullCanvas(sortID, coords, [width, height], sou
   const sourceID = `${prefix}-${usage}-full-${sortID}`;
   bmCanvas[usage][sourceID] = [geoCoords1, geoCoords2];
   await syncTemplateCanvasSource({ id: sourceID }, source);
-  return controlMapTiler((map, sourceID, geoCoords1, geoCoords2, usage, bmCanvas) => {
+  return controlMapTiler((map, sourceID, geoCoords1, geoCoords2, usage, bmCanvas, initialOpacity) => {
     document.head["__bmCanvas"] = bmCanvas;
     if (map["getSource"](sourceID) && map["getLayer"](sourceID)) {
       const currentLayers = map["getLayersOrder"]?.() ?? [];
@@ -570,7 +570,7 @@ export async function addTemplateFullCanvas(sortID, coords, [width, height], sou
       "id": sourceID,
       "source": sourceID,
       "type": "raster",
-      "paint": { "raster-resampling": "nearest", "raster-opacity": 1 },
+      "paint": { "raster-resampling": "nearest", "raster-opacity": initialOpacity },
     }, nextLayer);
     if (!hoverGhostLayerAdded) {
       if (!map["getLayer"](hoverLayerName + "-ghost")) {
@@ -583,7 +583,7 @@ export async function addTemplateFullCanvas(sortID, coords, [width, height], sou
       }
       hoverGhostLayerAdded = true;
     }
-  }, sourceID, geoCoords1, geoCoords2, usage, bmCanvas);
+  }, sourceID, geoCoords1, geoCoords2, usage, bmCanvas, getUsageLayersOpacity(usage));
 }
 
 /** Register a styledata listener that re-adds any bmCanvas sources/layers after a style change.
@@ -703,7 +703,15 @@ export function removeLayer(usage = null, sortID = null) {
   }, toRemove, bmCanvas);
 }
 
+// Opacity last applied per usage, so layers created afterwards start at it (error map on = the
+// overlay layers are hidden) instead of flashing at 1 until the next setUsageLayersOpacity.
+const usageLayersOpacity = Object.create(null);
+export function getUsageLayersOpacity(usage) {
+  return usageLayersOpacity[usage] ?? 1;
+}
+
 export function setUsageLayersOpacity(usage, opacity) {
+  usageLayersOpacity[usage] = opacity;
   const sourceIDs = Object.keys(bmCanvas[usage] ?? {});
   if (!sourceIDs.length) return;
   controlMapTiler((map, sourceIDs, opacity) => {

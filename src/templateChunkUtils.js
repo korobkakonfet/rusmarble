@@ -232,6 +232,23 @@ export const getPaletteKeyForRgb = (r, g, b) => (
   paletteKeyByPackedRgb.get(packRgb(r, g, b)) || TEMPLATE_OTHER_COLOR_KEY
 );
 
+// Packed-colour form of `displayedColorSet.has(getPaletteKeyForRgb(r, g, b))`, for per-sample
+// loops: allowedPacked covers every known colour whose key is displayed, and anything unknown
+// maps to 'other'. Cached per Set (callers build a new Set whenever the selection changes).
+const displayedColorFilterCache = new WeakMap();
+const getDisplayedColorFilter = (displayedColorSet) => {
+  let filter = displayedColorFilterCache.get(displayedColorSet);
+  if (!filter) {
+    const allowedPacked = new Set();
+    for (const [packed, key] of paletteKeyByPackedRgb) {
+      if (displayedColorSet.has(key)) allowedPacked.add(packed);
+    }
+    filter = { allowedPacked, allowOther: displayedColorSet.has(TEMPLATE_OTHER_COLOR_KEY) };
+    displayedColorFilterCache.set(displayedColorSet, filter);
+  }
+  return filter;
+};
+
 export const buildMaskRowSpans = (maskPoints, size) => {
   const safeSize = Math.max(0, Math.trunc(Number(size) || 0));
   const rows = Array.from({ length: safeSize }, () => []);
@@ -410,6 +427,10 @@ export const renderSampleDataToImage = ({
   // transparent, which is what the old code achieved by simply never marking it covered.
   const clearSkipped = enforceTransparentAsDeface;
 
+  const colorFilter = displayedColorSet instanceof Set ? getDisplayedColorFilter(displayedColorSet) : null;
+  let lastFilterPacked = -1;
+  let lastFilterAllowed = true;
+
   for (let index = 0; index < sampleData.count; index++) {
     const alpha = sampleData.a[index];
     if (alpha < 1) continue;
@@ -455,7 +476,19 @@ export const renderSampleDataToImage = ({
     let packedColor;
     // Erase pixels follow the Transparent entry in the colour list like any other colour; their
     // palette key is the deface colour itself, so no special case is needed here.
-    if (displayedColorSet && !displayedColorSet.has(getPaletteKeyForRgb(red, green, blue))) {
+    let allowed = true;
+    if (colorFilter) {
+      const packedRgb = (red << 16) | (green << 8) | blue;
+      if (packedRgb !== lastFilterPacked) {
+        lastFilterPacked = packedRgb;
+        lastFilterAllowed = colorFilter.allowedPacked.has(packedRgb)
+          || (colorFilter.allowOther && !paletteKeyByPackedRgb.has(packedRgb));
+      }
+      allowed = lastFilterAllowed;
+    } else if (displayedColorSet) {
+      allowed = displayedColorSet.has(getPaletteKeyForRgb(red, green, blue));
+    }
+    if (!allowed) {
       if (!clearSkipped) continue;
       packedColor = 0;
     } else {
