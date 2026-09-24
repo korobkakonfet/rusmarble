@@ -1557,6 +1557,63 @@ function runBenchmark(name, iterations, fn, warmup = 2) {
   };
 }
 
+async function runAsyncBenchmark(name, iterations, fn, warmup = 1) {
+  if (!isBenchmarkSelected(name)) return null;
+  let checksum = 0;
+  // fn may return { value, sampleMs } to time only the part of its work that matters.
+  const unwrap = (out) => (out && typeof out === 'object' ? out : { value: out, sampleMs: null });
+  for (let index = 0; index < warmup; index++) {
+    checksum = (checksum + Number(unwrap(await fn()).value) + index) >>> 0;
+  }
+  const samples = [];
+  for (let index = 0; index < iterations; index++) {
+    const start = performance.now();
+    const { value, sampleMs } = unwrap(await fn());
+    const elapsed = performance.now() - start;
+    checksum = (checksum + Number(value) + index) >>> 0;
+    samples.push(sampleMs ?? elapsed);
+  }
+  return { name, iterations, checksum, ...summarizeTimes(samples) };
+}
+
+// A tile PNG arriving over the network in 8 chunks, 2 ms apart.
+function makeStreamedTileResponse() {
+  const chunkCount = 8;
+  const chunk = new Uint8Array(8 * 1024).fill(7);
+  let sent = 0;
+  const body = new ReadableStream({
+    async pull(controller) {
+      if (sent >= chunkCount) { controller.close(); return; }
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      controller.enqueue(chunk);
+      sent++;
+    },
+  });
+  return new Response(body, { headers: { 'content-type': 'image/png' } });
+}
+
+// Measures how long the page waits for the first byte of its own tile through the fetch hook.
+async function fetchHookFirstByteSim(awaitClone) {
+  const start = performance.now();
+  const response = makeStreamedTileResponse();
+  const cloned = response.clone();
+  let posted = 0;
+  const post = (blob) => { posted = blob.size; };
+  if (awaitClone) {
+    post(await cloned.blob());
+  } else {
+    cloned.blob().then(post);
+  }
+  const reader = response.body.getReader();
+  const first = await reader.read();
+  const sampleMs = performance.now() - start;
+  const firstBytes = first.value?.byteLength ?? 0;
+  // Drain so both variants finish the same work before the next iteration.
+  while (!(await reader.read()).done) { /* drain */ }
+  while (posted === 0) await new Promise((resolve) => setTimeout(resolve, 0));
+  return { value: firstBytes + posted, sampleMs };
+}
+
 async function createNearestWasmRunner({
   sampleData,
   tilePixels,
@@ -2540,6 +2597,9 @@ async function main() {
     }
     return checksum;
   }));
+
+  results.push(await runAsyncBenchmark('fetchHookImageFirstByte(await clone)', 12, () => fetchHookFirstByteSim(true)));
+  results.push(await runAsyncBenchmark('fetchHookImageFirstByte(background)', 12, () => fetchHookFirstByteSim(false)));
 
   printResults(results, { sampleData });
   printTemplateCreationBreakdown(templateCreationBreakdowns);

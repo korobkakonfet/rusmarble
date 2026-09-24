@@ -4376,21 +4376,24 @@ inject(() => {
         });
       }
     } else if (contentType.includes('image/') && (!endpointName.includes('openfreemap') && !endpointName.includes('maps'))) {
-      // Fetch custom for all images but opensourcemap
+      // Fetch custom for all images but opensourcemap.
+      // Read the clone in the background: awaiting it here held the page's own tile response
+      // back until the whole body had downloaded, on every tile.
+      cloned.blob().then((blob) => {
+        if (isDebugLoggingEnabledInjected()) {
+          console.log(`%c${name}%c: ${fetchedBlobQueue.size} Sending IMAGE message about endpoint "${endpointName}"`, consoleStyle, '');
+        }
 
-      const blob = await cloned.blob(); // The original blob
-
-      if (isDebugLoggingEnabledInjected()) {
-        console.log(`%c${name}%c: ${fetchedBlobQueue.size} Sending IMAGE message about endpoint "${endpointName}"`, consoleStyle, '');
-      }
-
-      // Send the received blob
-      window.postMessage({
-        source: 'blue-marble',
-        endpoint: endpointName,
-        lastModified: cloned.headers.get("Last-Modified"),
-        blobData: blob,
-        blink: blink
+        // Send the received blob
+        window.postMessage({
+          source: 'blue-marble',
+          endpoint: endpointName,
+          lastModified: cloned.headers.get("Last-Modified"),
+          blobData: blob,
+          blink: blink
+        });
+      }).catch((err) => {
+        console.error(`%c${name}%c: Failed to read image body: `, consoleStyle, '', err);
       });
     }
 
