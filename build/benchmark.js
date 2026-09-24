@@ -2539,7 +2539,7 @@ async function main() {
       );
       return result.count + result.width + result.height;
     }),
-    runBenchmark('buildChunkSampleDataFromSource+stats', 20, () => {
+    runBenchmark('buildChunkSampleDataFromSource+stats', 120, () => {
       const accumulator = createPaletteStatsAccumulator();
       const result = buildChunkSampleDataFromSource(
         sourceData,
@@ -2878,7 +2878,7 @@ async function main() {
       });
       return image.data[0] + image.data[1] + image.data[2] + image.data[3] + image.data[image.data.length - 1];
     }),
-    runBenchmark('renderSampleDataToImage', 10, () => {
+    runBenchmark('renderSampleDataToImage', 80, () => {
       const image = { data: new Uint8ClampedArray(crossResultWidth * crossResultHeight * 4) };
       renderSampleDataToImage({
         sampleData,
