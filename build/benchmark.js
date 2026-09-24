@@ -15,6 +15,9 @@ import {
   findNearestUnpaintedSamplePixel,
   renderSampleDataToImage,
   paintablePaletteChannels,
+  snapRgbToNearestPalette,
+  isDefaceRgb,
+  TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE,
 } from '../src/templateChunkUtils.js';
 import { convertImageDataToWplacePalette } from '../src/Template.js';
 import { TemplateProgressAggregator } from '../src/templateProgressAggregator.js';
@@ -1085,6 +1088,52 @@ function encodeChunkSampleDataLegacy(sampleData) {
     offset += recordBytes;
   }
   return uint8ToBase64(new Uint8Array(buffer));
+}
+
+// decodeChunkSampleBuffer's palette snap as of 0.87.103 (one object per sample, always rewrites),
+// applied after a plain columnar copy so it can be compared with the current decode on raw bytes.
+function decodeChunkSampleBytesSnapLegacy(bytes) {
+  const count = (bytes[4] | (bytes[5] << 8) | (bytes[6] << 16) | (bytes[7] << 24)) >>> 0;
+  const xOffset = 8;
+  const yOffset = xOffset + count * 2;
+  const flagsOffset = yOffset + count * 2;
+  const rOffset = flagsOffset + count;
+  const sampleData = {
+    width: bytes[0] | ((bytes[1] & 0x0F) << 8),
+    height: bytes[2] | (bytes[3] << 8),
+    count,
+    x: new Uint16Array(count),
+    y: new Uint16Array(count),
+    flags: bytes.slice(flagsOffset, flagsOffset + count),
+    r: bytes.slice(rOffset, rOffset + count),
+    g: bytes.slice(rOffset + count, rOffset + 2 * count),
+    b: bytes.slice(rOffset + 2 * count, rOffset + 3 * count),
+    a: bytes.slice(rOffset + 3 * count, rOffset + 4 * count),
+  };
+  sampleData.x.set(new Uint16Array(bytes.buffer, bytes.byteOffset + xOffset, count));
+  sampleData.y.set(new Uint16Array(bytes.buffer, bytes.byteOffset + yOffset, count));
+  for (let i = 0; i < count; i++) {
+    if (sampleData.a[i] < 64) continue;
+    const r = sampleData.r[i], g = sampleData.g[i], b = sampleData.b[i];
+    const alreadyDeface = (sampleData.flags[i] & TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) !== 0;
+    if (alreadyDeface || isDefaceRgb(r, g, b)) {
+      sampleData.flags[i] |= TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE;
+      continue;
+    }
+    const snapped = snapRgbToNearestPalette(r, g, b);
+    sampleData.r[i] = snapped.r;
+    sampleData.g[i] = snapped.g;
+    sampleData.b[i] = snapped.b;
+  }
+  return sampleData;
+}
+
+function checksumSampleColors(sampleData) {
+  let sum = 0;
+  for (let i = 0; i < sampleData.count; i++) {
+    sum = (sum + sampleData.r[i] * 3 + sampleData.g[i] * 5 + sampleData.b[i] * 7 + sampleData.flags[i]) >>> 0;
+  }
+  return sum;
 }
 
 function decodeChunkSampleBufferLegacy(bufferValue) {
@@ -2308,6 +2357,11 @@ async function main() {
   );
   const encodedSample = encodeChunkSampleData(sampleData);
   const encodedSampleBytes = encodeChunkSampleBytes(sampleData);
+  // Samples stored before extraction-time snapping (old/remote templates, Brave noise): the
+  // decode has to snap every one of these.
+  const offPaletteSampleBytes = encodeChunkSampleBytes(buildChunkSampleDataFromSource(
+    nonPaletteSourceData, IMAGE_WIDTH, CHUNK_SOURCE_X, CHUNK_SOURCE_Y, CHUNK_WIDTH, CHUNK_HEIGHT
+  ));
   const tilePixels = buildTilePixels(sampleData);
   const displayedColorSet = buildDisplayedColorSet(sampleData);
   const tileCoords = [TILE_X, TILE_Y];
@@ -2534,6 +2588,18 @@ async function main() {
       const result = decodeChunkSampleBuffer(encodedSample);
       return (result?.count || 0) + (result?.width || 0) + (result?.height || 0);
     }),
+    runBenchmark('decodeChunkSampleBytes(palette,snapLegacy)', 150, () => (
+      checksumSampleColors(decodeChunkSampleBytesSnapLegacy(encodedSampleBytes))
+    )),
+    runBenchmark('decodeChunkSampleBytes(palette)', 150, () => (
+      checksumSampleColors(decodeChunkSampleBuffer(encodedSampleBytes))
+    )),
+    runBenchmark('decodeChunkSampleBytes(offPalette,snapLegacy)', 150, () => (
+      checksumSampleColors(decodeChunkSampleBytesSnapLegacy(offPaletteSampleBytes))
+    )),
+    runBenchmark('decodeChunkSampleBytes(offPalette)', 150, () => (
+      checksumSampleColors(decodeChunkSampleBuffer(offPaletteSampleBytes))
+    )),
     runBenchmark('decodeChunkSampleBuffer(legacy)', 24, () => {
       const result = decodeChunkSampleBufferLegacy(encodedSample);
       return (result?.count || 0) + (result?.width || 0) + (result?.height || 0);
