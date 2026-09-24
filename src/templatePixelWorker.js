@@ -16,6 +16,11 @@ import {
 } from './templateFilterWasm.js';
 import { convertImageDataToWplacePalette, templatePalettePackedSet } from './templatePaletteConversion.js';
 import { uint8ToBase64, compressTemplateBufferPayload } from './utils.js';
+import { WorkerSampleCache } from './templateSampleResidency.js';
+
+// Decoded chunk samples kept between tile scans; see templateSampleResidency.js.
+const WORKER_SAMPLE_CACHE_MAX_BYTES = 32 * 1024 * 1024;
+const residentSamples = new WorkerSampleCache(WORKER_SAMPLE_CACHE_MAX_BYTES);
 
 const cloneDisplayedColorSet = (displayedColors) => (
   Array.isArray(displayedColors) ? new Set(displayedColors) : null
@@ -159,6 +164,30 @@ const handlers = {
    */
   async scanTileProgressBatch(payload) {
     const tileSize = payload.tileSize;
+
+    // Resolve every chunk's samples before decoding the tile: entries without bytes rely on this
+    // worker still holding them, and if any is gone the main thread retries with bytes.
+    const entrySamples = [];
+    const missingSampleIds = [];
+    const evictedSampleIds = [];
+    for (const entry of (payload.entries || [])) {
+      const sampleId = entry.sampleId || 0;
+      let sampleData = null;
+      if (entry.sampleData) {
+        sampleData = decodeChunkSampleBuffer(entry.sampleData);
+        if (sampleData && sampleId && payload.cacheSamples === true) {
+          evictedSampleIds.push(...residentSamples.set(sampleId, sampleData));
+        }
+      } else if (sampleId) {
+        sampleData = residentSamples.get(sampleId);
+        if (!sampleData) missingSampleIds.push(sampleId);
+      }
+      entrySamples.push(sampleData);
+    }
+    if (missingSampleIds.length) {
+      return { missingSampleIds, evictedSampleIds };
+    }
+
     // tileBytes is the encoded PNG — pass it through untouched; coercing it to Uint8ClampedArray
     // would copy the whole buffer for no reason.
     const tilePixels = payload.tileBytes
@@ -175,8 +204,10 @@ const handlers = {
     let requiredCount = 0;
     const errorMaps = [];
 
-    for (const entry of (payload.entries || [])) {
-      const sampleData = decodeChunkSampleBuffer(entry.sampleData);
+    const entries = payload.entries || [];
+    for (let entryIndex = 0; entryIndex < entries.length; entryIndex++) {
+      const entry = entries[entryIndex];
+      const sampleData = entrySamples[entryIndex];
       if (!sampleData) continue;
       const errorWidth = Math.max(0, Math.trunc(Number(entry.errorWidth) || 0));
       const errorHeight = Math.max(0, Math.trunc(Number(entry.errorHeight) || 0));
@@ -210,7 +241,7 @@ const handlers = {
       }
     }
 
-    return { paintedCount, wrongCount, requiredCount, paletteStats, templateStats, errorMaps };
+    return { paintedCount, wrongCount, requiredCount, paletteStats, templateStats, errorMaps, evictedSampleIds };
   },
 
   scanTileProgress(payload) {

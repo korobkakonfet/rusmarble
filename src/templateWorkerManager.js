@@ -64,6 +64,23 @@ class TemplateWorkerManager {
     return DEFAULT_TEMPLATE_WORKER_POOL_SIZE;
   }
 
+  /** Stable worker index for a key, for jobs that rely on state a particular worker keeps
+   * (e.g. resident chunk samples). Pass it to runTask as `slot`.
+   */
+  getSlotForKey(key) {
+    const text = String(key);
+    let hash = 2166136261;
+    for (let index = 0; index < text.length; index++) {
+      hash = Math.imul(hash ^ text.charCodeAt(index), 16777619);
+    }
+    return (hash >>> 0) % DEFAULT_TEMPLATE_WORKER_POOL_SIZE;
+  }
+
+  /** Bumped whenever the pool is torn down, so callers can drop anything they believe a worker holds. */
+  getPoolEpoch() {
+    return this.poolEpoch || 0;
+  }
+
   cancelGeneration(generation) {
     if (!generation) return;
     this.cancelledGenerations.add(generation);
@@ -75,7 +92,7 @@ class TemplateWorkerManager {
     });
   }
 
-  async runTask(type, payload, { transferList = [], generation = null } = {}) {
+  async runTask(type, payload, { transferList = [], generation = null, slot = null } = {}) {
     if (!this.canUseWorkers()) {
       return null;
     }
@@ -95,7 +112,8 @@ class TemplateWorkerManager {
         profiler.record(`worker:${type}`, performance.now() - t0);
         resolve(result);
       };
-      const job = { id, type, payload, transferList, generation, resolve: wrappedResolve, reject };
+      const pinnedSlot = Number.isInteger(slot) && slot >= 0 ? slot % DEFAULT_TEMPLATE_WORKER_POOL_SIZE : null;
+      const job = { id, type, payload, transferList, generation, slot: pinnedSlot, resolve: wrappedResolve, reject };
       this.jobs.set(id, job);
       this.queue.push(job);
       this.pumpQueue();
@@ -142,15 +160,28 @@ class TemplateWorkerManager {
 
   pumpQueue() {
     if (!this.workers.length) return;
-    for (const slot of this.workers) {
+    for (let slotIndex = 0; slotIndex < this.workers.length; slotIndex++) {
+      const slot = this.workers[slotIndex];
       if (slot.busy) continue;
-      const nextJob = this.queue.shift();
-      if (!nextJob) return;
-      if (nextJob.generation && this.cancelledGenerations.has(nextJob.generation)) {
-        this.jobs.delete(nextJob.id);
-        nextJob.resolve(null);
-        continue;
+      // First queued job this worker may take: unpinned, or pinned to this worker. Cancelled jobs
+      // are dropped on the way without giving up the free worker.
+      let nextJob = null;
+      for (let queueIndex = 0; queueIndex < this.queue.length;) {
+        const job = this.queue[queueIndex];
+        if (job.generation && this.cancelledGenerations.has(job.generation)) {
+          this.queue.splice(queueIndex, 1);
+          this.jobs.delete(job.id);
+          job.resolve(null);
+          continue;
+        }
+        if (job.slot === null || job.slot === slotIndex) {
+          this.queue.splice(queueIndex, 1);
+          nextJob = job;
+          break;
+        }
+        queueIndex++;
       }
+      if (!nextJob) continue;
       slot.busy = true;
       slot.jobId = nextJob.id;
       slot.worker.postMessage(
@@ -165,6 +196,7 @@ class TemplateWorkerManager {
   }
 
   destroyPool() {
+    this.poolEpoch = (this.poolEpoch || 0) + 1;
     this.workers.forEach((slot) => {
       try {
         slot.worker.terminate();

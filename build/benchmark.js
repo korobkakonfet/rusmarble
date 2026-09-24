@@ -22,6 +22,7 @@ import {
 import { convertImageDataToWplacePalette } from '../src/Template.js';
 import { TemplateProgressAggregator } from '../src/templateProgressAggregator.js';
 import { isCollectProgressWasmAvailable } from '../src/templateProgressWasm.js';
+import { WorkerSampleCache, getResidentSampleId } from '../src/templateSampleResidency.js';
 import { templatePaletteChannels } from '../src/templatePaletteConversion.js';
 import { createExactNearestLookup } from '../src/templateNearestPalette.js';
 import { colorpalette, rgbToMeta, uint8ToBase64, base64ToUint8 } from '../src/utils.js';
@@ -2742,6 +2743,43 @@ async function main() {
           sum += result.paintedCount + result.wrongCount + result.requiredCount;
         }
         return sum + Object.keys(templateStats).length;
+      };
+    })())),
+    // Main-thread encode + worker decode per chunk on every tile scan, vs samples resident in the
+    // worker (templateSampleResidency.js). postMessage transfer itself is not simulated.
+    ...['bytesEveryScan', 'residentSamples'].map((mode) => runBenchmark(`scanTilePipeline(4chunks/tile,${mode})`, 30, (() => {
+      const CHUNKS = 4;
+      const chunkSamples = Array.from({ length: CHUNKS }, () => decodeChunkSampleBuffer(encodeChunkSampleBytes(sampleData)));
+      const cache = new WorkerSampleCache(32 * 1024 * 1024);
+      const tiles = [tilePixelsPaletteWrong, new Uint8ClampedArray(tilePixelsPaletteWrong)];
+      let turn = 0;
+      return () => {
+        const tile = tiles[turn++ & 1];
+        const paletteStats = {};
+        const templateStats = {};
+        let sum = 0;
+        for (let chunk = 0; chunk < CHUNKS; chunk++) {
+          let workerSamples;
+          if (mode === 'residentSamples') {
+            const sampleId = getResidentSampleId(chunkSamples[chunk]);
+            workerSamples = cache.get(sampleId);
+            if (!workerSamples) {
+              workerSamples = decodeChunkSampleBuffer(encodeChunkSampleBytes(chunkSamples[chunk]));
+              cache.set(sampleId, workerSamples);
+            }
+          } else {
+            workerSamples = decodeChunkSampleBuffer(encodeChunkSampleBytes(chunkSamples[chunk]));
+          }
+          const result = collectTemplateProgressFromSamples({
+            sampleData: workerSamples, tilePixels: tile, tileSize: TEMPLATE_TILE_SIZE,
+            offsetX: OFFSET_X, offsetY: OFFSET_Y, tileCoords, templateEnabled: true,
+            templateKey: `bench-template-${chunk}`, paletteStats, templateStats, exampleMax: EXAMPLE_LIMIT,
+            errorMapOnlyEnabledColors: false, displayedColors: null, errorData: null, errorWidth: 0,
+            randomFn: makeReservoirRng(0xabc00003), useWasm: true,
+          });
+          sum += result.paintedCount + result.wrongCount + result.requiredCount;
+        }
+        return sum;
       };
     })())),
     runBenchmark('collectTemplateProgressFromSamples(JS)', 16, () => {
