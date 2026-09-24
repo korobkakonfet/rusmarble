@@ -2891,6 +2891,25 @@ async function main() {
       });
       return image.data[0] + image.data[1] + image.data[2] + image.data[3] + image.data[image.data.length - 1];
     }),
+    // Colour filter active (a quarter of the colours toggled off): the per-sample lookup path.
+    ...[['cross', crossMaskPoints, crossMaskRowSpans], ['full', fullMaskPoints, fullMaskRowSpans]].map(([maskLabel, points, spans]) => (
+      runBenchmark(`renderSampleDataToImage(colorFilter,${maskLabel}-mask)`, 40, () => {
+        const image = { data: new Uint8ClampedArray(crossResultWidth * crossResultHeight * 4) };
+        renderSampleDataToImage({
+          sampleData,
+          imageData: image,
+          resultWidth: crossResultWidth,
+          drawSize: CROSS_DRAW_SIZE,
+          maskPoints: points,
+          maskRowSpans: spans,
+          displayedColorSet: displayedColorSubsetWithOther,
+        });
+        const words = new Uint32Array(image.data.buffer);
+        let hash = 0;
+        for (let i = 0; i < words.length; i++) hash = (Math.imul(hash, 31) + words[i]) >>> 0;
+        return hash;
+      })
+    )),
     runBenchmark('renderSampleDataToImage(legacy)', 10, () => {
       const image = { data: new Uint8ClampedArray(crossResultWidth * crossResultHeight * 4) };
       renderSampleDataToImageLegacy({

@@ -2142,7 +2142,7 @@ export default class TemplateManager {
     // Set when a stale generation is detected mid-flight: the render is obsolete, so neither the
     // remaining preparations nor the queued mounts should keep spending time on it.
     let renderAborted = false;
-    const mountOverlayResult = async (result) => {
+    const mountOverlayResultTiles = async (result) => {
       const { template, cachedTiles, sampleTiles, bitmapTiles, workerPixelMap, mergedBitmap, canMerge,
         useUnfilteredRender, drawMultTemplate, drawMultCenterTemplate } = result;
 
@@ -2152,7 +2152,6 @@ export default class TemplateManager {
           [template.imageWidth, template.imageHeight], mergedBitmap, "overlay");
         mergedBitmap.close?.();
         this._pruneConflictingOverlayMounts(template.sortID, 'full');
-        if (this.isErrorMapShown()) setUsageLayersOpacity("overlay", 0);
         return;
       }
       if (canMerge) {
@@ -2177,7 +2176,6 @@ export default class TemplateManager {
           noteOverlayIssue('cached tile canvas failed', `tile=${t.tileKey} ${exception?.message ?? exception}`);
           continue;
         }
-        if (this.isErrorMapShown()) setUsageLayersOpacity("overlay", 0);
       }
 
       for (const t of sampleTiles) {
@@ -2209,7 +2207,6 @@ export default class TemplateManager {
           resultImage = image;
         }
         addTemplateCanvas(template.sortID, t.tileKey, [t.safeW, t.safeH], resultImage, "overlay");
-        if (this.isErrorMapShown()) setUsageLayersOpacity("overlay", 0);
       }
 
       // Hoisted: it depends only on the render-wide palette, but sat inside the loop and was
@@ -2266,10 +2263,17 @@ export default class TemplateManager {
         }
         if (!resultCanvas) resultCanvas = new OffscreenCanvas(t.resultWidth, t.resultHeight);
         addTemplateCanvas(template.sortID, t.tileKey, [t.safeW, t.safeH], resultCanvas, "overlay");
-        if (this.isErrorMapShown()) setUsageLayersOpacity("overlay", 0);
         cleanUpCanvas(resultCanvas);
         if (currentMemorySavingMode && t.bitmap) t.bitmap.close();
       }
+    };
+    // With the error map on, overlay layers are hidden. This used to run after every single tile
+    // mount, and each call walks every overlay source on the map, so a template's mount was
+    // O(tiles^2) in map calls. Now it runs once per template, up front: it records opacity 0 for
+    // the overlay usage, and addTemplateCanvas creates new layers at that opacity.
+    const mountOverlayResult = async (result) => {
+      if (this.isErrorMapShown()) setUsageLayersOpacity("overlay", 0);
+      await mountOverlayResultTiles(result);
     };
     // Mounts touch the map and yield to the browser internally, so two of them running at once
     // would interleave their canvas registrations. The chain keeps them strictly one at a time
