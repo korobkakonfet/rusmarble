@@ -20,6 +20,7 @@ import {
   isDefaceRgb,
 } from './templateChunkUtils.js';
 import { templateWorkerManager } from './templateWorkerManager.js';
+import { TemplateProgressAggregator } from './templateProgressAggregator.js';
 import { canUseTemplateBufferDb, readTemplateBuffers, writeTemplateBuffers, deleteTemplateBuffers, listTemplateBufferKeys, reportTemplateBufferBytes, estimateStorageQuota } from './templateBufferStore.js';
 
 const DEFAULT_TEMPLATE_SYNC_STREAM = 'root';
@@ -302,11 +303,11 @@ export default class TemplateManager {
     this.templatesArray = []; // All Template instnaces currently loaded (Template)
     this.templatesJSON = null; // All templates currently loaded (JSON)
     // this.templatesShouldBeDrawn = true; // Should ALL templates be drawn to the canvas?
-    this.tileProgress = new Map(); // Tracks per-tile progress stats {painted, required, wrong}
-    this._runningPalette = Object.create(null);  // colorKey -> {painted, paintedAndEnabled, missing}
-    this._runningTemplate = Object.create(null); // storageKey -> {painted, palette: {colorKey: count}}
-    this._runningExamples = Object.create(null); // colorKey -> {examplesEnabled, _exampleSeenCount} — kept in sync incrementally
-    this._examplesColorDirty = new Set();        // colors whose examples need full rebuild (after tile removal)
+    // Per-tile progress stats plus running totals; see templateProgressAggregator.js.
+    this._progress = new TemplateProgressAggregator({ getExampleLimit: () => this.getTemplateExampleLimit() });
+    this.tileProgress = this._progress.tiles;           // tile prefix -> {painted, required, wrong, palette, template}
+    this._runningPalette = this._progress.palette;      // colorKey -> {painted, paintedAndEnabled, missing, exampleItems}
+    this._runningTemplate = this._progress.template;    // storageKey -> {painted, palette: {colorKey: count}}
     // this.tileOverlay = new Map(); // Cache tile overlay to save time
     this.extraColorsBitmap = 0; // List of unlocked colors, set by apiManager
     this.completedColorsBitmapLo = 0; // 0 ~ 31
@@ -2975,58 +2976,15 @@ export default class TemplateManager {
       0
     );
 
-    // counts: O(colors) from incremental running totals — no tile iteration needed
-    const combinedProgress = {};
-    for (const colorKey in this._runningPalette) {
-      const slot = this._runningPalette[colorKey];
-      combinedProgress[colorKey] = {
-        painted: Math.max(0, slot.painted),
-        paintedAndEnabled: Math.max(0, slot.paintedAndEnabled),
-        missing: Math.max(0, slot.missing),
-        examplesEnabled: [],
-      };
-    }
-
-    // examples: incremental via _runningExamples; only dirty colors (removed tiles) need a full tile scan.
-    if (this._examplesColorDirty.size > 0) {
-      const exampleMax = this.getTemplateExampleLimit();
-      // Rebuild every dirty color in a single pass over tileProgress. Scanning the whole map once
-      // per dirty color is O(colors x tiles), and a template toggle dirties nearly every color at
-      // once via clearTileProgress — that combination was the expensive part of this function.
-      const rebuilding = new Map();
-      for (const colorKey of this._examplesColorDirty) {
-        rebuilding.set(colorKey, { examplesEnabled: [], _exampleSeenCount: 0 });
-      }
-      for (const stats of this.tileProgress.values()) {
-        const palette = stats.palette;
-        if (!palette) continue;
-        for (const colorKey in palette) {
-          const target = rebuilding.get(colorKey);
-          if (!target) continue;
-          const content = palette[colorKey];
-          if (content?.examplesEnabled?.length) {
-            mergeTemplateExampleReservoir(target, content.examplesEnabled, exampleMax);
-          }
-        }
-      }
-      for (const [colorKey, rebuilt] of rebuilding) {
-        this._runningExamples[colorKey] = rebuilt;
-      }
-      this._examplesColorDirty.clear();
-    }
-    for (const colorKey in this._runningExamples) {
-      if (combinedProgress[colorKey]) {
-        combinedProgress[colorKey].examplesEnabled = this._runningExamples[colorKey]?.examplesEnabled ?? [];
-      }
-    }
+    // O(colors) from the running totals. Each row carries `exampleCount`; its `examplesEnabled`
+    // list is only built (for that colour alone) when something actually reads it.
+    const combinedProgress = this._progress.buildCombinedProgress();
 
     // Placed after the running totals are in: `missing` is what the tile scans counted as still
     // painted, so the remaining figure is exact even when defacePixelCount is 0 for a template
     // stored before it was persisted.
     {
-      const entry = (combinedProgress[TEMPLATE_DEFACE_COLOR_KEY] ??= {
-        painted: 0, paintedAndEnabled: 0, missing: 0, examplesEnabled: [],
-      });
+      const entry = (combinedProgress[TEMPLATE_DEFACE_COLOR_KEY] ??= this._progress.createEmptyEntry(TEMPLATE_DEFACE_COLOR_KEY));
       const total = Math.max(defaceTotal, entry.missing);
       if (total > 0) {
         paletteSum[TEMPLATE_DEFACE_COLOR_KEY] = total;
@@ -4064,73 +4022,14 @@ export default class TemplateManager {
    * @since 0.85.19
    */
   // Apply a tile's palette/template counts to running totals. sign = +1 to add, -1 to subtract.
-  _applyTileToRunning(stats, sign) {
-    if (!stats) return;
-    const palette = stats.palette;
-    if (palette) {
-      const exampleMax = this.getTemplateExampleLimit();
-      for (const colorKey in palette) {
-        const entry = palette[colorKey];
-        if (!entry) continue;
-        let slot = this._runningPalette[colorKey];
-        if (!slot) {
-          slot = { painted: 0, paintedAndEnabled: 0, missing: 0 };
-          this._runningPalette[colorKey] = slot;
-        }
-        slot.painted += sign * (entry.painted || 0);
-        slot.paintedAndEnabled += sign * (entry.paintedAndEnabled || 0);
-        slot.missing += sign * (entry.missing || 0);
-
-        // Maintain incremental examples reservoir.
-        if (sign === 1 && Array.isArray(entry.examplesEnabled) && entry.examplesEnabled.length > 0) {
-          // On add: skip if this color is already dirty (rebuild will include this tile via tileProgress).
-          if (!this._examplesColorDirty.has(colorKey)) {
-            if (!this._runningExamples[colorKey]) {
-              this._runningExamples[colorKey] = { examplesEnabled: [], _exampleSeenCount: 0 };
-            }
-            mergeTemplateExampleReservoir(this._runningExamples[colorKey], entry.examplesEnabled, exampleMax);
-          }
-        } else if (sign === -1 && Array.isArray(entry.examplesEnabled) && entry.examplesEnabled.length > 0) {
-          // On remove: reservoir sampling is not invertible — mark for full rebuild.
-          this._examplesColorDirty.add(colorKey);
-          delete this._runningExamples[colorKey];
-        }
-      }
-    }
-    const template = stats.template;
-    if (template) {
-      for (const storageKey in template) {
-        const entry = template[storageKey];
-        if (!entry) continue;
-        let slot = this._runningTemplate[storageKey];
-        if (!slot) {
-          slot = { painted: 0, palette: Object.create(null) };
-          this._runningTemplate[storageKey] = slot;
-        }
-        slot.painted += sign * (entry.painted || 0);
-        const pal = entry.palette;
-        if (pal) {
-          for (const colorKey in pal) {
-            slot.palette[colorKey] = (slot.palette[colorKey] || 0) + sign * (Number(pal[colorKey]) || 0);
-          }
-        }
-      }
-    }
-  }
-
   // Set a tile's progress and keep running totals in sync.
   _setTileProgress(key, stats) {
-    const old = this.tileProgress.get(key);
-    if (old) this._applyTileToRunning(old, -1);
-    this.tileProgress.set(key, stats);
-    if (stats) this._applyTileToRunning(stats, +1);
+    this._progress.set(key, stats);
   }
 
   // Delete a tile's progress and keep running totals in sync.
   _deleteTileProgress(key) {
-    const old = this.tileProgress.get(key);
-    if (old) this._applyTileToRunning(old, -1);
-    this.tileProgress.delete(key);
+    this._progress.delete(key);
   }
 
   clearTileProgress(template) {
