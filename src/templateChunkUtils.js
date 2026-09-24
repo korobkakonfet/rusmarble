@@ -89,6 +89,28 @@ const paintablePackedRgbSet = (() => {
   }
   return set;
 })();
+// Open-addressed hash of the paintable colours for per-sample "is this exactly a palette colour"
+// checks: roughly half the cost of Set.has, and it lets the decode snap skip the nearest lookup.
+const PAINTABLE_HASH_SLOTS = 1024;
+const PAINTABLE_HASH_MASK = PAINTABLE_HASH_SLOTS - 1;
+const paintablePackedHash = (() => {
+  const table = new Int32Array(PAINTABLE_HASH_SLOTS).fill(-1);
+  for (const packed of paintablePackedRgbSet) {
+    let slot = (Math.imul(packed, 0x9E3779B1) >>> 22) & PAINTABLE_HASH_MASK;
+    while (table[slot] !== -1) slot = (slot + 1) & PAINTABLE_HASH_MASK;
+    table[slot] = packed;
+  }
+  return table;
+})();
+const isPaintablePacked = (packed) => {
+  let slot = (Math.imul(packed, 0x9E3779B1) >>> 22) & PAINTABLE_HASH_MASK;
+  for (;;) {
+    const value = paintablePackedHash[slot];
+    if (value === packed) return true;
+    if (value === -1) return false;
+    slot = (slot + 1) & PAINTABLE_HASH_MASK;
+  }
+};
 const paintablePaletteColors = [...paintablePackedRgbSet].map((packed) => ({
   packed,
   r: (packed >> 16) & 255,
@@ -544,18 +566,33 @@ export const decodeChunkSampleBuffer = (bufferValue) => {
     // Snap non-deface pixels to nearest palette color. This fixes templates stored
     // before snapping was applied at extraction time (e.g. remote templates, old local
     // templates, Brave-noise-affected data).
+    // Runs on every decode (every worker scan/render). Almost every sample is already a palette
+    // colour and matches its neighbour, so: reuse the previous answer, else accept exact palette
+    // colours from the hash, and only then pay for the nearest lookup. No per-sample objects.
+    const { r: sr, g: sg, b: sb, a: sa, flags: sf } = sampleData;
+    let lastPacked = -1;
+    let lastSnapped = -1;
     for (let i = 0; i < count; i++) {
-      if (sampleData.a[i] < 64) continue;
-      const r = sampleData.r[i], g = sampleData.g[i], b = sampleData.b[i];
-      const alreadyDeface = (sampleData.flags[i] & TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) !== 0;
-      if (alreadyDeface || isDefaceRgb(r, g, b)) {
-        sampleData.flags[i] |= TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE;
+      if (sa[i] < 64) continue;
+      const r = sr[i], g = sg[i], b = sb[i];
+      if ((sf[i] & TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) !== 0 || isDefaceRgb(r, g, b)) {
+        sf[i] |= TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE;
         continue;
       }
-      const snapped = snapRgbToNearestPalette(r, g, b);
-      sampleData.r[i] = snapped.r;
-      sampleData.g[i] = snapped.g;
-      sampleData.b[i] = snapped.b;
+      const packed = (r << 16) | (g << 8) | b;
+      let snapped;
+      if (packed === lastPacked) {
+        snapped = lastSnapped;
+      } else {
+        snapped = isPaintablePacked(packed) ? packed : getNearestPaintablePacked(r, g, b);
+        lastPacked = packed;
+        lastSnapped = snapped;
+      }
+      if (snapped !== packed) {
+        sr[i] = (snapped >> 16) & 255;
+        sg[i] = (snapped >> 8) & 255;
+        sb[i] = snapped & 255;
+      }
     }
   }
   return sampleData;
