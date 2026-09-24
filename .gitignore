@@ -411,3 +411,6 @@ dist/RusMarble.exp.user.js
 dist/RusMarble.exp.meta.js
 src/exp/
 build/exp.local.json
+
+# Machine-specific benchmark dumps (npm run benchmark -- --json bench/<name>.json)
+bench/*.json

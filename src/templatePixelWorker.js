@@ -691,9 +691,9 @@ const handlers = {
     const sampleData = decodeChunkSampleBuffer(payload.sampleData);
     if (!sampleData) return null;
     const liveTilePixels = toUint8Clamped(payload.liveTilePixels);
-    const displayedColorsPacked = payload.displayedColorsPacked instanceof Uint32Array
-      ? payload.displayedColorsPacked : new Uint32Array(0);
-    const displayedColorSet = new Set(displayedColorsPacked);
+    const displayedColorSet = new Set(
+      Array.isArray(payload.displayedColorKeys) ? payload.displayedColorKeys : []
+    );
     const mapWorldWidthPx = payload.mapWorldWidthPx | 0;
     const tileSize = payload.tileSize | 0;
 

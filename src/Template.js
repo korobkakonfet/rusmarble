@@ -471,10 +471,13 @@ export default class Template {
       const shreadSize = Math.max(1, Math.trunc(Number(this.shreadSize) || 1));
       let sampleData = null;
       if (templateWorkerManager.canUseWorkers()) {
+        // Without memory saving, getChunked hands back the bitmap it keeps in this.chunked, and
+        // transferring it would detach that cached copy (0x0) for every later getChunked caller.
+        const workerBitmap = memorySaving ? bitmap : await createImageBitmap(bitmap);
         const workerResult = await templateWorkerManager.runTask('extractChunkSamples', {
-          bitmap,
+          bitmap: workerBitmap,
           shreadSize,
-        }, { transferList: [bitmap] }).catch(() => null);
+        }, { transferList: [workerBitmap] }).catch(() => null);
         if (workerResult?.sampleData) {
           sampleData = { ...workerResult.sampleData, native: true };
         }
