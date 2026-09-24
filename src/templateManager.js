@@ -21,6 +21,7 @@ import {
 } from './templateChunkUtils.js';
 import { templateWorkerManager } from './templateWorkerManager.js';
 import { TemplateProgressAggregator } from './templateProgressAggregator.js';
+import { SampleResidencyHints, getResidentSampleId } from './templateSampleResidency.js';
 import { canUseTemplateBufferDb, readTemplateBuffers, writeTemplateBuffers, deleteTemplateBuffers, listTemplateBufferKeys, reportTemplateBufferBytes, estimateStorageQuota } from './templateBufferStore.js';
 
 const DEFAULT_TEMPLATE_SYNC_STREAM = 'root';
@@ -84,6 +85,9 @@ const knownPalettePackedColors = (() => {
 })();
 const knownColorsSorted = Uint32Array.from(knownPalettePackedColors).sort();
 const UI_WORK_SLICE_MS = 30;
+// What each template worker is believed to hold of the decoded chunk samples; see
+// templateSampleResidency.js.
+const sampleResidencyHints = new SampleResidencyHints();
 const getNowMs = () => (
   typeof performance !== 'undefined' && typeof performance.now === 'function'
     ? performance.now()
@@ -1301,50 +1305,83 @@ export default class TemplateManager {
     isErrorMapShown, exampleMax, errorMapOnlyEnabledColors, displayedColorList,
     currentMemorySavingMode,
   }) {
-    const entries = [];
-    const transferList = [];
-
+    const prepared = [];
     for (const templateTile of templatesTilesToHandle) {
       const template = templateTile.template;
       const sampleData = await template.getChunkSamples(templateTile.tileKey, {
         memorySaving: currentMemorySavingMode,
       });
       if (!sampleData) continue;
-      const sampleBytes = encodeChunkSampleBytes(sampleData);
-      if (!sampleBytes) continue;
-
       const templateTileEnabled = template.enabled ?? true;
-      entries.push({
-        sampleData: sampleBytes,
-        tileKey: templateTile.tileKey,
-        sortID: template.sortID,
-        templateKey: template.storageKey,
-        templateEnabled: templateTileEnabled,
-        offsetX: templateTile.pixelCoords[0],
-        offsetY: templateTile.pixelCoords[1],
-        includeErrorMap: isErrorMapShown && templateTileEnabled,
-        errorWidth: Math.max(0, Math.trunc(Number(sampleData.width) || 0)),
-        errorHeight: Math.max(0, Math.trunc(Number(sampleData.height) || 0)),
+      prepared.push({
+        sampleData,
+        entry: {
+          tileKey: templateTile.tileKey,
+          sortID: template.sortID,
+          templateKey: template.storageKey,
+          templateEnabled: templateTileEnabled,
+          offsetX: templateTile.pixelCoords[0],
+          offsetY: templateTile.pixelCoords[1],
+          includeErrorMap: isErrorMapShown && templateTileEnabled,
+          errorWidth: Math.max(0, Math.trunc(Number(sampleData.width) || 0)),
+          errorHeight: Math.max(0, Math.trunc(Number(sampleData.height) || 0)),
+        },
       });
-      transferList.push(sampleBytes.buffer);
     }
 
-    if (!entries.length) return null;
+    if (!prepared.length) return null;
 
-    const tileBytes = new Uint8Array(await tileBlob.arrayBuffer());
-    transferList.push(tileBytes.buffer);
+    // Scans of a tile always go to the same worker, which keeps the decoded samples between scans
+    // (templateSampleResidency.js); bytes are only encoded and sent when that worker lacks them.
+    // Memory-saving mode keeps nothing resident and always sends bytes.
+    const cacheSamples = !currentMemorySavingMode;
+    const slot = templateWorkerManager.getSlotForKey(`${tileCoords[0]},${tileCoords[1]}`);
+    sampleResidencyHints.syncPoolEpoch(templateWorkerManager.getPoolEpoch());
 
-    const result = await templateWorkerManager.runTask('scanTileProgressBatch', {
-      tileBytes,
-      tileSize,
-      tileCoords,
-      entries,
-      exampleMax,
-      errorMapOnlyEnabledColors,
-      displayedColors: displayedColorList,
-    }, { transferList });
+    const runScan = async (forceBytes) => {
+      const entries = [];
+      const transferList = [];
+      const sentSampleIds = [];
+      for (const { sampleData, entry } of prepared) {
+        const sampleId = cacheSamples ? getResidentSampleId(sampleData) : 0;
+        if (!forceBytes && sampleId && sampleResidencyHints.has(slot, sampleId)) {
+          entries.push({ ...entry, sampleId });
+          continue;
+        }
+        const sampleBytes = encodeChunkSampleBytes(sampleData);
+        if (!sampleBytes) continue;
+        entries.push({ ...entry, sampleId, sampleData: sampleBytes });
+        transferList.push(sampleBytes.buffer);
+        if (sampleId) sentSampleIds.push(sampleId);
+      }
+      if (!entries.length) return null;
+      const tileBytes = new Uint8Array(await tileBlob.arrayBuffer());
+      transferList.push(tileBytes.buffer);
+      const result = await templateWorkerManager.runTask('scanTileProgressBatch', {
+        tileBytes,
+        tileSize,
+        tileCoords,
+        entries,
+        exampleMax,
+        errorMapOnlyEnabledColors,
+        displayedColors: displayedColorList,
+        cacheSamples,
+      }, { transferList, slot });
+      if (result) {
+        for (const sampleId of sentSampleIds) sampleResidencyHints.add(slot, sampleId);
+        sampleResidencyHints.removeAll(slot, result.evictedSampleIds);
+        sampleResidencyHints.removeAll(slot, result.missingSampleIds);
+      }
+      return result;
+    };
 
-    if (!result) return null;
+    let result = await runScan(false);
+    if (result?.missingSampleIds?.length) {
+      profiler.record('worker:residentSamplesMiss', result.missingSampleIds.length);
+      result = await runScan(true);
+    }
+
+    if (!result || result.missingSampleIds?.length) return null;
 
     // The error map is an optional debug overlay; painting it is the only main-thread pixel work
     // left, and only when the user has it turned on.
