@@ -131,6 +131,33 @@ const wasmPaletteRgb = (() => {
   }
   return { r, g, b };
 })();
+// Packed RGB -> index into wasmPalettePackedColors, laid out for collectProgress.wat:
+// Int32 keys[1024] (-1 = empty) then Int32 values[1024], same hash as paintablePackedHash.
+const wasmPaletteIndexHash = (() => {
+  const table = new Int32Array(PAINTABLE_HASH_SLOTS * 2).fill(-1);
+  wasmPalettePackedColors.forEach((packed, index) => {
+    let slot = (Math.imul(packed, 0x9E3779B1) >>> 22) & PAINTABLE_HASH_MASK;
+    while (table[slot] !== -1) slot = (slot + 1) & PAINTABLE_HASH_MASK;
+    table[slot] = packed;
+    table[PAINTABLE_HASH_SLOTS + slot] = index;
+  });
+  return table;
+})();
+// Per-palette-index "shown in the filtered error map" flags, last slot = OTHER.
+const displayedByIndexCache = new WeakMap(); // displayedColors Set -> Uint8Array
+const getDisplayedByIndex = (displayedColors) => {
+  if (!(displayedColors instanceof Set)) return null;
+  const cached = displayedByIndexCache.get(displayedColors);
+  if (cached) return cached;
+  const packedSet = getDisplayedColorPackedSet(displayedColors);
+  const flags = new Uint8Array(wasmPalettePackedColors.length + 1);
+  for (let index = 0; index < wasmPalettePackedColors.length; index++) {
+    flags[index] = packedSet?.has(wasmPalettePackedColors[index]) ? 1 : 0;
+  }
+  flags[wasmPalettePackedColors.length] = displayedColors.has(TEMPLATE_OTHER_COLOR_KEY) ? 1 : 0;
+  displayedByIndexCache.set(displayedColors, flags);
+  return flags;
+};
 // Nearest-paintable snapping used to be a full palette scan behind an LRU Map, which cost a Map
 // hash on every hit and a 60-odd entry scan on every miss. The cube answers most colours with a
 // single array load and is proven to return the same index the scan would, including its tie-break.
@@ -1062,12 +1089,10 @@ export const collectTemplateProgressFromSamples = ({
 
   // --- WASM fast path ---
   if (useWasm && isCollectProgressWasmAvailable() && tilePixels instanceof Uint8ClampedArray) {
-    const displayedColorPackedArr = errorMapOnlyEnabledColors
-      ? getDisplayedColorPackedArray(displayedColors)
+    // Filtering with no displayed-colour set shows nothing, as the old empty packed list did.
+    const displayedByIndex = errorMapOnlyEnabledColors
+      ? (getDisplayedByIndex(displayedColors) ?? new Uint8Array(wasmPalettePackedColors.length + 1))
       : null;
-    const displayOtherInErrorMap = errorMapOnlyEnabledColors
-      ? (displayedColors?.has(TEMPLATE_OTHER_COLOR_KEY) === true)
-      : true;
     const paletteCount = wasmPalettePackedColors.length;
     const wasmResult = collectProgressWithWasm({
       sampleData,
@@ -1083,8 +1108,8 @@ export const collectTemplateProgressFromSamples = ({
       errorDataPtr0: errorData instanceof Uint8ClampedArray ? errorData : null,
       errorWidth,
       errorMapOnlyEnabled: errorMapOnlyEnabledColors,
-      displayedColorsPacked: displayedColorPackedArr,
-      displayOther: displayOtherInErrorMap,
+      displayedByIndex,
+      paletteHash: wasmPaletteIndexHash,
     });
     if (wasmResult) {
       const { paintedCount, wrongCount, requiredCount, paintedByIndex, paintedAndEnabledByIndex, missingByIndex, missingMask } = wasmResult;
