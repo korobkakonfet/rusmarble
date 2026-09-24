@@ -6084,9 +6084,11 @@ async function getLiveTilePixels(tileX, tileY) {
 }
 
 async function findNearestTemplatePixelInTile(tileCandidate, liveTilePixels, originPoint, displayedColorSet, excludedCoordsKeys, memorySavingMode) {
-  const displayedColorsPacked = Uint32Array.from(
-    typeof displayedColorSet?.values === 'function' ? displayedColorSet : []
-  );
+  // The worker matches 'r,g,b' keys. Packing them via Uint32Array.from turned every key into
+  // NaN -> 0, so the live-tile search never matched a colour and always came back empty.
+  const displayedColorKeys = typeof displayedColorSet?.values === 'function'
+    ? [...displayedColorSet].filter((key) => typeof key === 'string')
+    : [];
   const excludedCoordsKeySet = excludedCoordsKeys instanceof Set
     ? [...excludedCoordsKeys]
     : (Array.isArray(excludedCoordsKeys) ? excludedCoordsKeys : []);
@@ -6098,7 +6100,6 @@ async function findNearestTemplatePixelInTile(tileCandidate, liveTilePixels, ori
     if (!sampleData) continue;
     const encodedSampleData = encodeChunkSampleBytes(sampleData);
     const liveTilePixelsCopy = new Uint8ClampedArray(liveTilePixelsClone);
-    const displayedColorsCopy = new Uint32Array(displayedColorsPacked);
     const entryBest = await templateWorkerManager.runTask('findNearestUnpainted', {
       sampleData: encodedSampleData,
       liveTilePixels: liveTilePixelsCopy,
@@ -6108,11 +6109,11 @@ async function findNearestTemplatePixelInTile(tileCandidate, liveTilePixels, ori
       tileX: tileCandidate.tileX,
       tileY: tileCandidate.tileY,
       originPoint,
-      displayedColorsPacked: displayedColorsCopy,
+      displayedColorKeys,
       excludedCoordsKeySet,
       templateName: entry.template.displayName,
       mapWorldWidthPx: MAP_WORLD_WIDTH_PX,
-    }, { transferList: [encodedSampleData.buffer, liveTilePixelsCopy.buffer, displayedColorsCopy.buffer] }).catch(() => null);
+    }, { transferList: [encodedSampleData.buffer, liveTilePixelsCopy.buffer] }).catch(() => null);
     if (entryBest && (!bestCandidate || entryBest.distanceSq < bestCandidate.distanceSq)) {
       bestCandidate = entryBest;
     }

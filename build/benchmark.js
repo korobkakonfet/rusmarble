@@ -23,6 +23,24 @@ import { colorpalette, rgbToMeta, uint8ToBase64, base64ToUint8 } from '../src/ut
 import { createTemplateSampleExtractorWithWasm, isTemplateSampleExtractWasmAvailable } from '../src/templateSampleExtractWasm.js';
 import { filterBitmapPixelsWithWasm, isFilterBitmapPixelsWasmAvailable } from '../src/templateFilterWasm.js';
 
+import { writeFileSync } from 'node:fs';
+
+// CLI: --filter <regex> runs only matching benchmarks; --json <file> dumps results for
+// build/bench-compare.js; --quick skips the exhaustive 16M-colour equivalence scan.
+const CLI_ARGS = (() => {
+  const argv = process.argv.slice(2);
+  const valueOf = (flag) => {
+    const index = argv.indexOf(flag);
+    return index >= 0 && index + 1 < argv.length ? argv[index + 1] : null;
+  };
+  const filterSource = valueOf('--filter');
+  return {
+    filter: filterSource ? new RegExp(filterSource, 'i') : null,
+    jsonPath: valueOf('--json'),
+    quick: argv.includes('--quick'),
+  };
+})();
+
 const TEMPLATE_TILE_SIZE = 1000;
 const MAP_WORLD_WIDTH_PX = 2048 * TEMPLATE_TILE_SIZE;
 const IMAGE_WIDTH = 1024;
@@ -1003,6 +1021,7 @@ function measureTemplateCreationSimulation({
 }
 
 function runTemplateCreationBreakdownBenchmark(name, iterations, options, warmup = 1) {
+  if (!isBenchmarkSelected(name)) return null;
   let checksum = 0;
   let chunkCount = 0;
   for (let index = 0; index < warmup; index++) {
@@ -1502,15 +1521,24 @@ function formatOps(totalMs, iterations) {
 function summarizeTimes(samples) {
   const totalMs = samples.reduce((sum, value) => sum + value, 0);
   const avgMs = totalMs / samples.length;
+  const sorted = [...samples].sort((a, b) => a - b);
+  const percentile = (p) => sorted[Math.min(sorted.length - 1, Math.floor(p * (sorted.length - 1) + 0.5))];
   return {
     totalMs,
     avgMs,
-    minMs: Math.min(...samples),
-    maxMs: Math.max(...samples),
+    medianMs: percentile(0.5),
+    p95Ms: percentile(0.95),
+    minMs: sorted[0],
+    maxMs: sorted[sorted.length - 1],
   };
 }
 
+function isBenchmarkSelected(name) {
+  return !CLI_ARGS.filter || CLI_ARGS.filter.test(name);
+}
+
 function runBenchmark(name, iterations, fn, warmup = 2) {
+  if (!isBenchmarkSelected(name)) return null;
   let checksum = 0;
   for (let index = 0; index < warmup; index++) {
     checksum = (checksum + Number(fn()) + index) >>> 0;
@@ -1641,15 +1669,18 @@ async function createNearestWasmRunner({
   };
 }
 
-function printResults(results, fixture) {
+function printResults(allResults, fixture) {
+  const results = allResults.filter(Boolean);
   console.log('Template Performance Benchmark');
   console.log(`Fixture: source ${IMAGE_WIDTH}x${IMAGE_HEIGHT}, chunk ${CHUNK_WIDTH}x${CHUNK_HEIGHT}, sampled pixels ${fixture.sampleData.count}`);
   console.log('Scope: pure template creation/checking helpers plus optional WASM for nearest-pixel scan.');
   console.log('');
   const header = [
-    'Benchmark'.padEnd(36),
+    'Benchmark'.padEnd(48),
     'Iterations'.padStart(10),
     'Average'.padStart(14),
+    'Median'.padStart(14),
+    'p95'.padStart(14),
     'Min'.padStart(14),
     'Max'.padStart(14),
     'Ops/s'.padStart(12),
@@ -1659,9 +1690,11 @@ function printResults(results, fixture) {
   console.log('-'.repeat(header.length));
   for (const result of results) {
     console.log([
-      result.name.padEnd(36),
+      result.name.padEnd(48),
       String(result.iterations).padStart(10),
       formatMs(result.avgMs).padStart(14),
+      formatMs(result.medianMs).padStart(14),
+      formatMs(result.p95Ms).padStart(14),
       formatMs(result.minMs).padStart(14),
       formatMs(result.maxMs).padStart(14),
       formatOps(result.totalMs, result.iterations).padStart(12),
@@ -1670,8 +1703,9 @@ function printResults(results, fixture) {
   }
 }
 
-function printTemplateCreationBreakdown(breakdowns) {
-  if (!Array.isArray(breakdowns) || breakdowns.length === 0) {
+function printTemplateCreationBreakdown(allBreakdowns) {
+  const breakdowns = Array.isArray(allBreakdowns) ? allBreakdowns.filter(Boolean) : [];
+  if (breakdowns.length === 0) {
     return;
   }
   console.log('');
@@ -1901,6 +1935,11 @@ function runEquivalenceChecks() {
   const weighted = createExactNearestLookup(paletteChannels, { weightR: 0.2126, weightG: 0.7152, weightB: 0.0722 });
   const euclidean = createExactNearestLookup(paletteChannels);
   const paintable = createExactNearestLookup(paintablePaletteChannels);
+  if (CLI_ARGS.quick) {
+    console.log('Equivalence checks: exhaustive colour scan skipped (--quick)');
+    console.log('');
+    return { weighted, euclidean, paintable };
+  }
 
   checks.push(['templatePalette/weighted', assertNearestLookupExact(
     'templatePalette/weighted', weighted,
@@ -1918,6 +1957,38 @@ function runEquivalenceChecks() {
   return { weighted, euclidean, paintable };
 }
 
+
+// Guards the worker payload shapes the page actually sends, not just the helpers. The
+// jump-to-pixel search used to receive Uint32Array.from(Set<'r,g,b'>), i.e. all zeros, and
+// silently never found a live pixel; the benchmarks passed a string Set and missed it.
+function runPayloadShapeChecks({ sampleData, tilePixels, displayedColorSet, originPoint, excludedCoordsKey }) {
+  const search = (colorSet, useWasm) => findNearestUnpaintedSamplePixel({
+    sampleData,
+    liveTilePixels: tilePixels,
+    tileSize: TEMPLATE_TILE_SIZE,
+    offsetX: OFFSET_X,
+    offsetY: OFFSET_Y,
+    tileX: TILE_X,
+    tileY: TILE_Y,
+    originPoint,
+    displayedColorSet: colorSet,
+    excludedCoordsKeySet: new Set([excludedCoordsKey]),
+    templateName: 'Payload Shape Check',
+    distanceSqFn: getTilePixelDistanceSq,
+    useWasm,
+  });
+  // Mirrors findNearestTemplatePixelInTile (main.js) -> findNearestUnpainted (worker).
+  const workerSet = new Set(structuredClone([...displayedColorSet].filter((key) => typeof key === 'string')));
+  const reference = search(displayedColorSet, false);
+  const viaPayload = search(workerSet, false);
+  if (!reference) throw new Error('payload check: reference search found nothing; fixture broken');
+  if (!viaPayload || viaPayload.coordsKey !== reference.coordsKey) {
+    throw new Error(`payload check: jump-to-pixel payload lost colours (got ${viaPayload?.coordsKey ?? 'null'}, want ${reference.coordsKey})`);
+  }
+  console.log('Payload shape checks');
+  console.log(`  jumpToPixel displayedColorKeys  ok (${reference.coordsKey})`);
+  console.log('');
+}
 
 async function main() {
   const sourceData = buildSourceImageData();
@@ -2004,6 +2075,7 @@ async function main() {
   }
 
   const exactLookups = runEquivalenceChecks();
+  runPayloadShapeChecks({ sampleData, tilePixels, displayedColorSet, originPoint, excludedCoordsKey });
 
   const results = [
     runBenchmark('buildMaskRowSpans(cross-mask)', 5000, () => {
@@ -2471,6 +2543,19 @@ async function main() {
 
   printResults(results, { sampleData });
   printTemplateCreationBreakdown(templateCreationBreakdowns);
+
+  if (CLI_ARGS.jsonPath) {
+    const payload = {
+      version: 1,
+      createdAt: new Date().toISOString(),
+      node: process.version,
+      results: results.filter(Boolean).map(({ name, iterations, avgMs, medianMs, p95Ms, minMs, maxMs, checksum }) => (
+        { name, iterations, avgMs, medianMs, p95Ms, minMs, maxMs, checksum: checksum >>> 0 }
+      )),
+    };
+    writeFileSync(CLI_ARGS.jsonPath, JSON.stringify(payload, null, 2));
+    console.log(`\nWrote ${payload.results.length} results to ${CLI_ARGS.jsonPath}`);
+  }
 }
 
 main().catch((error) => {
