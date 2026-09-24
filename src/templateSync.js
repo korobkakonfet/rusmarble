@@ -943,8 +943,8 @@ export function createTemplateSync({
       const existingPalette = preferredTemplate?.colorPalette ? { ...preferredTemplate.colorPalette } : null;
       const existingRemoteManual = preferredTemplate?.remoteManual === true || existingStore?.remoteManual === true;
       const existingEnabled = matchingRemoteTemplates.length
-        ? matchingRemoteTemplates.some(t => t.enabled)
-        : (preferredTemplate?.enabled ?? existingStore?.enabled ?? defaultEnabled);
+        ? matchingRemoteTemplates.some(t => t.enabled || t.autoDisabled === true)
+        : ((preferredTemplate ? (preferredTemplate.enabled || preferredTemplate.autoDisabled === true) : undefined) ?? existingStore?.enabled ?? defaultEnabled);
       const existingUpdatedAt =
         existingStore?.remoteUpdatedAt ??
         preferredTemplate?.remoteUpdatedAt ??
@@ -1235,12 +1235,14 @@ export function createTemplateSync({
       }
 
       const matchingTemplates = replaceExistingMatches ? findLocalTemplatesByName(trimmedName) : [];
-      const preferredTemplate = matchingTemplates.find((template) => template?.enabled) ?? matchingTemplates[0] ?? null;
+      const preferredTemplate = matchingTemplates.find((template) => template?.enabled || template?.autoDisabled === true) ?? matchingTemplates[0] ?? null;
       const preferredStore = preferredTemplate?.storageKey
         ? templateManager.templatesJSON?.templates?.[preferredTemplate.storageKey]
         : null;
       const existingPalette = preferredTemplate?.colorPalette ? { ...preferredTemplate.colorPalette } : null;
-      const nextEnabled = preferredTemplate?.enabled ?? preferredStore?.enabled ?? defaultEnabled;
+      // autoDisabled = switched off only for being off-screen, so the user still wants it on.
+      const nextEnabled = (preferredTemplate ? (preferredTemplate.enabled || preferredTemplate.autoDisabled === true) : undefined)
+        ?? preferredStore?.enabled ?? defaultEnabled;
 
       const created = await templateManager.createTemplate(
         payload.file,

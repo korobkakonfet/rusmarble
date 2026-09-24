@@ -4545,6 +4545,216 @@ function resolveTemplateOverlayMapInstance() {
   return null;
 }
 
+/** Grey out template-list rows whose template has no tile in view, whether it is ticked or not.
+ * Only a class flip, so it is cheap enough to run on every moveend. Uses the same padded viewport
+ * as the auto enable/disable, so a ticked row is never greyed.
+ */
+function markOffscreenTemplateRows() {
+  const rows = document.querySelectorAll('#bm-templatefilter-list [data-sort-id]');
+  if (!rows.length) return;
+  const visiblePrefixes = templateManager?.isOffscreenCullingOn?.()
+    ? templateManager.getVisibleTilePrefixes()
+    : null;
+  const bySortID = new Map((templateManager?.templatesArray ?? []).map((template) => [String(template.sortID), template]));
+  rows.forEach((row) => {
+    const template = bySortID.get(row.dataset.sortId);
+    const offscreen = !!(visiblePrefixes?.size && template && !templateManager.isTemplateInPrefixes(template, visiblePrefixes));
+    row.classList.toggle('bm-template-offscreen', offscreen);
+  });
+}
+
+const OVERLAY_MIN_WIDTH = 220;
+const OVERLAY_MIN_HEIGHT = 160;
+let overlayResizeGrip = null;
+let overlayResizeCleanup = null;
+
+/** Apply a stored overlay size. The width/height live in custom properties read by the
+ * `.bm-overlay-resized` rule, so the minimize toggle's inline width/max-width can't undo them.
+ * @param {HTMLElement} overlay
+ * @param {{width: number, height: number}|null} size
+ */
+function applyOverlaySize(overlay, size) {
+  const width = Number(size?.width) || 0;
+  const height = Number(size?.height) || 0;
+  overlay.classList.toggle('bm-overlay-resized', width > 0);
+  if (width > 0) overlay.style.setProperty('--bm-overlay-width', `${Math.round(width)}px`);
+  else overlay.style.removeProperty('--bm-overlay-width');
+  if (height > 0) overlay.style.setProperty('--bm-overlay-height', `${Math.round(height)}px`);
+  else overlay.style.removeProperty('--bm-overlay-height');
+  fitOverlayListsToHeight(overlay);
+}
+
+const OVERLAY_LIST_BASE_HEIGHT = 125;
+
+/** Hand the height a resized overlay has over its content to the scrolling lists — templates
+ * first, then colours, each only up to what its content needs — instead of leaving it empty.
+ * @param {HTMLElement} overlay
+ */
+function fitOverlayListsToHeight(overlay) {
+  const lists = ['bm-templatefilter-list', 'bm-colorfilter-list']
+    .map((id) => document.getElementById(id))
+    .filter(Boolean);
+  for (const list of lists) {
+    list.style.maxHeight = `${OVERLAY_LIST_BASE_HEIGHT}px`;
+    list.style.minHeight = '';
+  }
+
+  const height = Number(templateManager.getOverlaySize()?.height) || 0;
+  const target = parseFloat(overlay.style.getPropertyValue('--bm-overlay-height')) || height;
+  if (!(target > 0) || overlay.classList.contains('bm-overlay-minimized') || isMobileLayout()) return;
+
+  // Natural height with the lists at their base size, measured by briefly letting it be auto.
+  overlay.style.setProperty('--bm-overlay-height', 'auto');
+  let spare = target - overlay.getBoundingClientRect().height;
+  overlay.style.setProperty('--bm-overlay-height', `${Math.round(target)}px`);
+
+  const openLists = lists.filter((list) => list.closest('details')?.open !== false);
+  const grants = new Map();
+  for (const list of openLists) {
+    if (spare <= 0) break;
+    const need = list.scrollHeight - list.clientHeight;
+    if (need <= 0) continue;
+    const give = Math.min(spare, need);
+    grants.set(list, give);
+    spare -= give;
+  }
+  // Whatever is still left would show as an empty band under the footer; stretch the first open
+  // list (templates, or colours when templates is collapsed) over it instead.
+  if (spare > 0 && openLists.length) {
+    const filler = openLists[0];
+    const current = grants.get(filler) ?? 0;
+    // A list shorter than the base height grows from its own height, not from the cap.
+    const base = Math.min(OVERLAY_LIST_BASE_HEIGHT, filler.getBoundingClientRect().height);
+    grants.set(filler, current + spare);
+    filler.style.minHeight = `${Math.floor(base + current + spare)}px`;
+  }
+  for (const [list, give] of grants) {
+    list.style.maxHeight = `${OVERLAY_LIST_BASE_HEIGHT + Math.floor(give)}px`;
+  }
+}
+
+/** Adds a bottom-right grip for resizing the main overlay; double-click it to reset.
+ * The grip lives on <body> and tracks the overlay's corner: inside the overlay it would scroll
+ * away with the content once a set height makes the overlay scroll.
+ */
+function initOverlayResize() {
+  const overlay = document.getElementById('bm-overlay');
+  if (!overlay) return;
+  overlayResizeCleanup?.();
+
+  applyOverlaySize(overlay, templateManager.getOverlaySize());
+
+  const grip = document.createElement('div');
+  grip.id = 'bm-overlay-resize-grip';
+  grip.title = t('overlay.resizeTitle');
+  document.body.appendChild(grip);
+  overlayResizeGrip = grip;
+
+  let frame = 0;
+  const placeGrip = () => {
+    frame = 0;
+    if (!overlay.isConnected) { overlayResizeCleanup?.(); return; }
+    // Not offsetParent: it is always null for a position:fixed element like the overlay.
+    const rect = overlay.getBoundingClientRect();
+    const hidden = overlay.classList.contains('bm-overlay-minimized')
+      || isMobileLayout()
+      || rect.width === 0
+      || rect.height === 0;
+    grip.style.display = hidden ? 'none' : '';
+    if (hidden) return;
+    grip.style.left = `${rect.right - 16}px`;
+    grip.style.top = `${rect.bottom - 16}px`;
+  };
+  const schedulePlace = () => { if (!frame) frame = requestAnimationFrame(placeGrip); };
+
+  // Dragging writes the overlay's transform every frame, minimize toggles a class, and the
+  // content can change size at any time — all of which move the corner.
+  const resizeObserver = new ResizeObserver(schedulePlace);
+  resizeObserver.observe(overlay);
+  const mutationObserver = new MutationObserver(schedulePlace);
+  mutationObserver.observe(overlay, { attributes: true, attributeFilter: ['style', 'class'] });
+  window.addEventListener('resize', schedulePlace);
+  document.addEventListener('bm-overlay-minimized-changed', schedulePlace);
+
+  // The lists' share of the height depends on how much they hold and which sections are open.
+  let refitFrame = 0;
+  const scheduleRefit = () => {
+    if (refitFrame || resizing) return;
+    refitFrame = requestAnimationFrame(() => { refitFrame = 0; fitOverlayListsToHeight(overlay); });
+  };
+  const contentObserver = new MutationObserver(scheduleRefit);
+  for (const id of ['bm-templatefilter-list', 'bm-colorfilter-list']) {
+    const list = document.getElementById(id);
+    if (list) contentObserver.observe(list, { childList: true, subtree: true });
+  }
+  overlay.addEventListener('toggle', scheduleRefit, true); // <details> open/close; doesn't bubble
+  window.addEventListener('resize', scheduleRefit);
+  document.addEventListener('bm-overlay-minimized-changed', scheduleRefit);
+
+  let resizing = null;
+  const onPointerDown = (event) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = overlay.getBoundingClientRect();
+    // Pin the top-left corner the way the drag handler does, so a right-anchored overlay grows
+    // towards the grip instead of away from it.
+    overlay.style.transform = `translate(${rect.left}px, ${rect.top}px)`;
+    overlay.style.left = '0px';
+    overlay.style.top = '0px';
+    overlay.style.right = '';
+    overlay.classList.add('bm-overlay-resizing');
+    resizing = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, width: rect.width, height: rect.height, left: rect.left, top: rect.top };
+    try { grip.setPointerCapture(event.pointerId); } catch (_) {}
+    document.body.style.userSelect = 'none';
+  };
+  const onPointerMove = (event) => {
+    if (!resizing || event.pointerId !== resizing.pointerId) return;
+    const maxWidth = Math.max(OVERLAY_MIN_WIDTH, window.innerWidth - resizing.left - 8);
+    const maxHeight = Math.max(OVERLAY_MIN_HEIGHT, window.innerHeight - resizing.top - 8);
+    const width = Math.min(maxWidth, Math.max(OVERLAY_MIN_WIDTH, resizing.width + event.clientX - resizing.startX));
+    const height = Math.min(maxHeight, Math.max(OVERLAY_MIN_HEIGHT, resizing.height + event.clientY - resizing.startY));
+    resizing.current = { width, height };
+    applyOverlaySize(overlay, resizing.current);
+  };
+  const onPointerUp = (event) => {
+    if (!resizing || event.pointerId !== resizing.pointerId) return;
+    const size = resizing.current;
+    resizing = null;
+    overlay.classList.remove('bm-overlay-resizing');
+    document.body.style.userSelect = '';
+    try { grip.releasePointerCapture(event.pointerId); } catch (_) {}
+    if (size) templateManager.setOverlaySize(size);
+  };
+  const onDoubleClick = (event) => {
+    event.preventDefault();
+    applyOverlaySize(overlay, null);
+    templateManager.setOverlaySize(null);
+  };
+  grip.addEventListener('pointerdown', onPointerDown);
+  grip.addEventListener('pointermove', onPointerMove);
+  grip.addEventListener('pointerup', onPointerUp);
+  grip.addEventListener('pointercancel', onPointerUp);
+  grip.addEventListener('dblclick', onDoubleClick);
+
+  overlayResizeCleanup = () => {
+    resizeObserver.disconnect();
+    mutationObserver.disconnect();
+    contentObserver.disconnect();
+    overlay.removeEventListener('toggle', scheduleRefit, true);
+    window.removeEventListener('resize', schedulePlace);
+    window.removeEventListener('resize', scheduleRefit);
+    document.removeEventListener('bm-overlay-minimized-changed', schedulePlace);
+    document.removeEventListener('bm-overlay-minimized-changed', scheduleRefit);
+    if (frame) cancelAnimationFrame(frame);
+    if (refitFrame) cancelAnimationFrame(refitFrame);
+    grip.remove();
+    if (overlayResizeGrip === grip) overlayResizeGrip = null;
+    overlayResizeCleanup = null;
+  };
+  placeGrip();
+}
+
 function bindTemplateViewportOverlayRefresh() {
   if (templateViewportOverlayRefreshBound || isSafeModeActive()) return;
   doAfterMapFound(() => {
@@ -4553,7 +4763,8 @@ function bindTemplateViewportOverlayRefresh() {
     if (!map || typeof map['on'] !== 'function') return;
     const refreshVisibleOverlay = () => {
       if (isSafeModeActive()) return;
-      if (!(templateManager?.templatesArray ?? []).some((template) => template?.enabled)) {
+      markOffscreenTemplateRows();
+      if (!(templateManager?.templatesArray ?? []).some((template) => templateManager.isTemplateUserEnabled(template))) {
         return;
       }
       templateManager.createOverlayOnMapVisibleOnly();
@@ -4894,7 +5105,7 @@ readBootStorageValue('bmTemplates', '{}').then(async storageTemplatesValue => {
       'enableKeybinds': false,
       'enableNextTemplatePixelShortcut': true,
       'ruspixelFlagEnabled': true,
-      'autoSyncTemplates': false,
+      'autoSyncTemplates': true,
       'templateSyncStreams': ['root'],
       'chatDisabled': false,
       'mapCommentsDisabled': false,
@@ -4936,6 +5147,7 @@ readBootStorageValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   applySafeModeState();
 
   overlayMain.handleDrag('#bm-overlay', '#bm-bar-drag'); // Creates dragging capability on the drag bar for dragging the overlay
+  initOverlayResize();
   initOverlayDodge(); // Moves the overlay aside when a wplace panel would be hidden behind it
   const rebuildOverlayIfMissing = async () => {
     if (overlayBuildInFlight || document.getElementById('bm-overlay')) return;
@@ -4943,6 +5155,7 @@ readBootStorageValue('bmTemplates', '{}').then(async storageTemplatesValue => {
     try {
       await buildOverlayMain();
       overlayMain.handleDrag('#bm-overlay', '#bm-bar-drag');
+      initOverlayResize();
       applyWplaceThemeState();
     } catch (err) {
       consoleWarn(`%c${name}%c: Failed to rebuild overlay`, consoleStyle, '', err);
@@ -6132,7 +6345,7 @@ async function jumpToNextUnpaintedTemplatePixel(options = null) {
     const originMode = normalizeTemplateJumpOriginMode(options?.originMode);
     const originLabel = getTemplateJumpOriginLabel(originMode);
     schedulePixelInfoCloseBurst();
-    const activeTemplates = (templateManager.templatesArray ?? []).filter((template) => template?.enabled);
+    const activeTemplates = (templateManager.templatesArray ?? []).filter((template) => templateManager.isTemplateUserEnabled(template));
     if (!activeTemplates.length) {
       overlayMain.handleDisplayStatus('No active templates enabled.');
       return;
@@ -7109,12 +7322,10 @@ const applyLayoutLanguage = (value = null) => {
   setCheckboxLabelText('bm-checkbox-colors-completed', t('settings.hideCompletedColors'));
   setCheckboxLabelText('bm-show-error-map', t('settings.showErrorMap'));
   setCheckboxLabelText('bm-show-only-enabled-colors-on-error-map', t('settings.onlyEnabledColorsOnErrorMap'));
-  const transparentEraseLabel = document.getElementById('bm-transparent-erase-color-label');
-  if (transparentEraseLabel) transparentEraseLabel.textContent = t('settings.transparentEraseColor.label');
-  const transparentEraseInput = document.getElementById('bm-transparent-erase-color');
-  if (transparentEraseInput) transparentEraseInput.title = t('settings.transparentEraseColor.title');
   setCheckboxLabelText('bm-background-mode-enabled', t('settings.backgroundMode'));
   setCheckboxLabelText('bm-memory-saving-enabled', t('settings.memorySaving'));
+  setCheckboxLabelText('bm-offscreen-culling-enabled', t('settings.offscreenCulling'));
+  if (overlayResizeGrip) overlayResizeGrip.title = t('overlay.resizeTitle');
   setCheckboxLabelText('bm-debug-logs-enabled', t('settings.debugLogs'));
 
   setSummaryText('bm-contain-colorfilter', t('section.colors'));
@@ -8160,7 +8371,8 @@ async function buildOverlayMain() {
         const key = t.storageKey;
         if (key && templateManager.templatesJSON?.templates?.[key]) {
           const templateJSON = templateManager.templatesJSON.templates[key]
-          templateJSON.enabled = t.enabled;
+          // Intent, not the live flag: a template off only for being off-screen stays on.
+          templateJSON.enabled = templateManager.isTemplateUserEnabled(t);
           templateJSON.palette = t.colorPalette;
         }
       })
@@ -9489,6 +9701,8 @@ async function buildOverlayMain() {
       const imageHeight = Number.isFinite(Number(template.imageHeight)) ? Number(template.imageHeight) : storedHeight;
       const isPositionEditing = templatePositionEditStorageKey === template.storageKey;
       let row = document.createElement('div');
+      row.dataset.sortId = String(template.sortID);
+      if (template.autoDisabled === true) row.title = t('templates.offscreenTitle');
       row.style.display = 'flex';
       row.style.alignItems = 'center';
       row.style.gap = '6px';
@@ -9722,7 +9936,10 @@ async function buildOverlayMain() {
 
       const toggle = document.createElement('input');
       toggle.type = 'checkbox';
-      toggle.checked = template.enabled;
+      // Off only for being off-screen: ticked in intent, shown as a dash. Clicking it unticks,
+      // which is a manual disable that the viewport will not undo.
+      toggle.checked = templateManager.isTemplateUserEnabled(template);
+      toggle.indeterminate = template.autoDisabled === true;
       // Hovering the checkbox is a strong hint the user is about to enable it. Start extracting
       // samples for the visible tiles now so the render has less to do once the click lands.
       toggle.addEventListener('pointerenter', () => {
@@ -9731,7 +9948,10 @@ async function buildOverlayMain() {
       });
       toggle.addEventListener('change', async () => {
         template.enabled = toggle.checked;
+        // A manual choice: unticked stays off even when in view; ticked is left to the viewport.
+        template.autoDisabled = false;
         row.classList.toggle('bm-template-inactive', !toggle.checked);
+        if (row.title === t('templates.offscreenTitle')) row.removeAttribute('title');
         overlayMain.handleDisplayStatus(
           toggle.checked
             ? `Enabled ${templateName}. Rendering visible crosses...`
@@ -9769,42 +9989,6 @@ async function buildOverlayMain() {
         scheduleProgressUiRefresh();
       });
 
-      const enforceTranspButton = document.createElement('a');
-      enforceTranspButton.className = 'bm-icon-link';
-      enforceTranspButton.style.fontSize = '12px';
-      enforceTranspButton.style.opacity = template.enforceTransparentAsDeface ? '1' : '0.35';
-      enforceTranspButton.title = template.enforceTransparentAsDeface
-        ? t('templates.enforceTransparentAsDeface.disableTitle')
-        : t('templates.enforceTransparentAsDeface.enableTitle');
-      enforceTranspButton.textContent = '⬜';
-      enforceTranspButton.onclick = async () => {
-        const next = !template.enforceTransparentAsDeface;
-        template.enforceTransparentAsDeface = next;
-        const templateJSON = templateManager.templatesJSON?.templates?.[template.storageKey];
-        if (templateJSON) {
-          if (next) {
-            templateJSON.enforceTransparentAsDeface = true;
-          } else {
-            delete templateJSON.enforceTransparentAsDeface;
-          }
-        }
-        // Invalidate raster cache for this template so crosses render on next draw
-        templateManager.invalidateOverlayRasterCacheForTemplate(template.sortID);
-        await templateManager.storeTemplates();
-        templateManager.clearTileProgress(template);
-        buildTemplateFilterList();
-        // The flag changes how the overlay itself is rasterized, so the mounted canvases have to be
-        // redrawn — skipExisting:false, since they are already mounted and would otherwise be left
-        // exactly as they are. forceRefreshTiles only refreshes wplace's tiles, not our crosses.
-        await templateManager.createOverlayOnMapVisibleOnly(template.sortID, { skipExisting: false });
-        forceRefreshTiles();
-        overlayMain.handleDisplayStatus(
-          next
-            ? `"${templateName}": transparent pixels will now be erased.`
-            : `"${templateName}": transparent pixels no longer enforced.`
-        );
-      };
-
       row.appendChild(toggle);
       deleteAnchor.appendChild(removeButton);
       deleteAnchor.appendChild(confirmWrap);
@@ -9813,7 +9997,6 @@ async function buildOverlayMain() {
       if (!isRemote) {
         row.appendChild(positionButton);
       }
-      row.appendChild(enforceTranspButton);
       row.appendChild(label);
       // Mirrors the grouping pass above: manual adds stay at root level.
       const isManualRemoteRow = template?.remoteManual === true || templateStore.remoteManual === true;
@@ -9823,6 +10006,7 @@ async function buildOverlayMain() {
       targetContainer.appendChild(row);
     }
     syncTemplatePositionJoystickWindow();
+    markOffscreenTemplateRows();
   };
   window.buildTemplateFilterList = buildTemplateFilterList;
 
@@ -10013,8 +10197,9 @@ async function buildOverlayMain() {
     let changedCount = 0;
     for (const template of safeTemplates) {
       const nextEnabled = Boolean(enabled);
-      if (template.enabled === nextEnabled) continue;
+      if (templateManager.isTemplateUserEnabled(template) === nextEnabled) continue;
       template.enabled = nextEnabled;
+      template.autoDisabled = false;
       changedCount += 1;
       templateManager.clearTileProgress(template);
       if (!nextEnabled) {
@@ -10254,7 +10439,7 @@ async function buildOverlayMain() {
         storageKey: template?.storageKey ?? null,
         displayName: template?.displayName ?? store?.name ?? null,
         remoteName: template?.remoteName ?? store?.remoteName ?? null,
-        enabled: template?.enabled ?? store?.enabled ?? true,
+        enabled: template ? templateManager.isTemplateUserEnabled(template) : (store?.enabled ?? true),
         isRemote,
         remoteStream: isRemote ? (template?.remoteStream ?? store?.remoteStream ?? null) : null,
         coords: Array.isArray(template?.coords) ? [...template.coords] : null,
