@@ -44,8 +44,8 @@ export const collectProgressWithWasm = ({
   errorDataPtr0 = null,  // Uint8ClampedArray for error map, or null
   errorWidth = 0,
   errorMapOnlyEnabled = false,
-  displayedColorsPacked = null, // Uint32Array of allowed packed colors for error filtering
-  displayOther = true,
+  displayedByIndex = null, // Uint8Array[paletteCount + 1]: 1 = shown in the filtered error map (last slot = OTHER)
+  paletteHash = null,      // Int32Array[2048]: packed -> index hash, see collectProgress.wat
 } = {}) => {
   const state = getWasmState();
   if (!state) return null;
@@ -61,6 +61,8 @@ export const collectProgressWithWasm = ({
     || !(sampleData.flags instanceof Uint8Array)
     || !(palettePackedColors instanceof Uint32Array)
     || !paletteRgb
+    || !(paletteHash instanceof Int32Array)
+    || paletteHash.length !== 2048
   ) {
     return null;
   }
@@ -69,7 +71,7 @@ export const collectProgressWithWasm = ({
   const slotCount = paletteCount + 1; // +1 for OTHER slot
   const resultBytes = 12 + slotCount * 12; // 3 totals + 3 arrays of slotCount i32s
   const errorDataBytes = errorDataPtr0 instanceof Uint8ClampedArray ? errorDataPtr0.byteLength : 0;
-  const dispColorsBytes = displayedColorsPacked instanceof Uint32Array ? displayedColorsPacked.byteLength : 0;
+  const displayedBytes = errorMapOnlyEnabled && displayedByIndex instanceof Uint8Array ? slotCount : 0;
 
   let cursor = 0;
   const alloc = (bytes, alignment = 1) => {
@@ -91,7 +93,8 @@ export const collectProgressWithWasm = ({
   const palRPtr = alloc(paletteCount);
   const palGPtr = alloc(paletteCount);
   const palBPtr = alloc(paletteCount);
-  const dispColorsPtr = dispColorsBytes > 0 ? alloc(dispColorsBytes, 4) : 0;
+  const paletteHashPtr = alloc(paletteHash.byteLength, 4);
+  const displayedByIndexPtr = displayedBytes > 0 ? alloc(displayedBytes) : 0;
   const errorDataWasmPtr = errorDataBytes > 0 ? alloc(errorDataBytes, 4) : 0;
   const resultPtr = alloc(resultBytes, 4);
   const missingMaskPtr = alloc(sampleCount);
@@ -113,11 +116,9 @@ export const collectProgressWithWasm = ({
   memU8.set(paletteRgb.r, palRPtr);
   memU8.set(paletteRgb.g, palGPtr);
   memU8.set(paletteRgb.b, palBPtr);
-  if (dispColorsBytes > 0) {
-    memU8.set(
-      new Uint8Array(displayedColorsPacked.buffer, displayedColorsPacked.byteOffset, displayedColorsPacked.byteLength),
-      dispColorsPtr,
-    );
+  memU8.set(new Uint8Array(paletteHash.buffer, paletteHash.byteOffset, paletteHash.byteLength), paletteHashPtr);
+  if (displayedBytes > 0) {
+    memU8.set(displayedByIndex.subarray(0, slotCount), displayedByIndexPtr);
   }
   // pre-zero result area and missingMask
   memU8.fill(0, resultPtr, resultPtr + resultBytes);
@@ -140,10 +141,9 @@ export const collectProgressWithWasm = ({
     templateEnabled ? 1 : 0,
     errorDataWasmPtr,
     errorWidth,
-    errorMapOnlyEnabled ? 1 : 0,
-    dispColorsPtr,
-    displayedColorsPacked instanceof Uint32Array ? displayedColorsPacked.length : 0,
-    displayOther ? 1 : 0,
+    displayedBytes > 0 ? 1 : 0,
+    displayedByIndexPtr,
+    paletteHashPtr,
     resultPtr,
     missingMaskPtr,
   );

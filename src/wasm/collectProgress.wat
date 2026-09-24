@@ -16,6 +16,15 @@
   ;; missingMaskPtr (pre-zeroed by caller): Uint8Array[sampleCount]
   ;;   0     = painted or skipped pixel
   ;;   idx+1 = missing pixel whose palette index is idx (1-based)
+  ;;
+  ;; paletteHashPtr: open-addressed packed-RGB -> palette index table, 1024 slots.
+  ;;   Int32 keys[1024] (-1 = empty) followed by Int32 values[1024]. Slot of a colour is
+  ;;   ((packed * 0x9E3779B1) >>> 22) & 1023, linear probing. Replaces per-sample linear scans
+  ;;   over the palette (template index lookup, and the live pixel's nearest colour when the live
+  ;;   pixel already is a palette colour).
+  ;;
+  ;; displayedByIndexPtr: Uint8Array[paletteCount + 1]; 1 = palette index shown in the error map
+  ;;   when errorMapOnlyEnabled, and slot paletteCount (OTHER) carries displayOther.
   (func (export "collect_progress")
     ;; --- Sample arrays ---
     (param $sampleCount i32)
@@ -43,10 +52,9 @@
     ;; --- Error map ---
     (param $errorDataPtr i32)         ;; RGBA buffer, or 0 to skip
     (param $errorWidth i32)           ;; error map width in pixels
-    (param $errorMapOnlyEnabled i32)  ;; 1 = filter by displayedColors
-    (param $displayedColorsPtr i32)   ;; Uint32Array of allowed packed colors
-    (param $displayedColorsCount i32)
-    (param $displayOther i32)         ;; 1 = include OTHER in error map when filtering
+    (param $errorMapOnlyEnabled i32)  ;; 1 = filter by displayedByIndex
+    (param $displayedByIndexPtr i32)  ;; Uint8Array[paletteCount + 1], see header
+    (param $paletteHashPtr i32)       ;; see header
     ;; --- Output ---
     (param $resultPtr i32)       ;; pre-zeroed; see layout above
     (param $missingMaskPtr i32)  ;; pre-zeroed Uint8Array[sampleCount]
@@ -83,10 +91,12 @@
     (local $paintedByIndexPtr i32)
     (local $paintedAndEnabledByIndexPtr i32)
     (local $missingByIndexPtr i32)
-    (local $displayInError i32)
-    (local $diI i32)
     (local $itemPtr i32)
     (local $slotCount i32)
+    (local $hashSlot i32)
+    (local $hashKey i32)
+    (local $livePacked i32)
+    (local $liveInPalette i32)
 
     ;; slotCount = paletteCount + 1  (slot N = OTHER)
     (local.set $slotCount (i32.add (local.get $paletteCount) (i32.const 1)))
@@ -173,28 +183,34 @@
             )
           )
 
-          ;; Find palette index for template color (linear scan; default = paletteCount = OTHER)
+          ;; Palette index for template color via the hash (default = paletteCount = OTHER)
           (local.set $templatePaletteIndex (local.get $paletteCount))
-          (local.set $palI (i32.const 0))
+          (local.set $hashSlot
+            (i32.and
+              (i32.shr_u (i32.mul (local.get $packedTemplate) (i32.const 0x9E3779B1)) (i32.const 22))
+              (i32.const 1023)
+            )
+          )
           (block $palFindEnd
             (loop $palFindLoop
-              (br_if $palFindEnd (i32.ge_u (local.get $palI) (local.get $paletteCount)))
-              (if
-                (i32.eq
-                  (i32.load
-                    (i32.add
-                      (local.get $palettePackedPtr)
-                      (i32.shl (local.get $palI) (i32.const 2))
+              (local.set $hashKey
+                (i32.load (i32.add (local.get $paletteHashPtr) (i32.shl (local.get $hashSlot) (i32.const 2))))
+              )
+              (br_if $palFindEnd (i32.eq (local.get $hashKey) (i32.const -1)))
+              (if (i32.eq (local.get $hashKey) (local.get $packedTemplate))
+                (then
+                  (local.set $templatePaletteIndex
+                    (i32.load
+                      (i32.add
+                        (i32.add (local.get $paletteHashPtr) (i32.const 4096))
+                        (i32.shl (local.get $hashSlot) (i32.const 2))
+                      )
                     )
                   )
-                  (local.get $packedTemplate)
-                )
-                (then
-                  (local.set $templatePaletteIndex (local.get $palI))
                   (br $palFindEnd)
                 )
               )
-              (local.set $palI (i32.add (local.get $palI) (i32.const 1)))
+              (local.set $hashSlot (i32.and (i32.add (local.get $hashSlot) (i32.const 1)) (i32.const 1023)))
               (br $palFindLoop)
             )
           )
@@ -239,42 +255,11 @@
             )
           )
 
-          ;; When filtering by displayed colors, refine shouldWriteError
+          ;; When filtering by displayed colors, refine shouldWriteError (OTHER slot = displayOther)
           (if (i32.and (local.get $shouldWriteError) (local.get $errorMapOnlyEnabled))
             (then
-              (if (i32.eq (local.get $templatePaletteIndex) (local.get $paletteCount))
-                (then
-                  (local.set $shouldWriteError (local.get $displayOther))
-                )
-                (else
-                  (local.set $displayInError (i32.const 0))
-                  (local.set $diI (i32.const 0))
-                  (block $diEnd
-                    (loop $diLoop
-                      (br_if $diEnd
-                        (i32.ge_u (local.get $diI) (local.get $displayedColorsCount))
-                      )
-                      (if
-                        (i32.eq
-                          (i32.load
-                            (i32.add
-                              (local.get $displayedColorsPtr)
-                              (i32.shl (local.get $diI) (i32.const 2))
-                            )
-                          )
-                          (local.get $packedTemplate)
-                        )
-                        (then
-                          (local.set $displayInError (i32.const 1))
-                          (br $diEnd)
-                        )
-                      )
-                      (local.set $diI (i32.add (local.get $diI) (i32.const 1)))
-                      (br $diLoop)
-                    )
-                  )
-                  (local.set $shouldWriteError (local.get $displayInError))
-                )
+              (local.set $shouldWriteError
+                (i32.load8_u (i32.add (local.get $displayedByIndexPtr) (local.get $templatePaletteIndex)))
               )
             )
           )
@@ -367,7 +352,43 @@
                   )
                 )
 
-                ;; 3. Palette-nearest match: find nearest paintable color for live pixel (L2)
+                ;; 3. Palette-nearest match: find nearest paintable color for live pixel (L2).
+                ;; A live pixel that already is a palette colour is its own nearest colour, and since
+                ;; the exact match above failed it can't be the template colour: skip the scan.
+                (local.set $livePacked
+                  (i32.or
+                    (i32.or
+                      (i32.shl (local.get $liveR) (i32.const 16))
+                      (i32.shl (local.get $liveG) (i32.const 8))
+                    )
+                    (local.get $liveB)
+                  )
+                )
+                (local.set $liveInPalette (i32.const 0))
+                (local.set $hashSlot
+                  (i32.and
+                    (i32.shr_u (i32.mul (local.get $livePacked) (i32.const 0x9E3779B1)) (i32.const 22))
+                    (i32.const 1023)
+                  )
+                )
+                (block $liveFindEnd
+                  (loop $liveFindLoop
+                    (local.set $hashKey
+                      (i32.load (i32.add (local.get $paletteHashPtr) (i32.shl (local.get $hashSlot) (i32.const 2))))
+                    )
+                    (br_if $liveFindEnd (i32.eq (local.get $hashKey) (i32.const -1)))
+                    (if (i32.eq (local.get $hashKey) (local.get $livePacked))
+                      (then
+                        (local.set $liveInPalette (i32.const 1))
+                        (br $liveFindEnd)
+                      )
+                    )
+                    (local.set $hashSlot (i32.and (i32.add (local.get $hashSlot) (i32.const 1)) (i32.const 1023)))
+                    (br $liveFindLoop)
+                  )
+                )
+                (br_if $matchEnd (local.get $liveInPalette))
+
                 (local.set $bestDist (i32.const 0x7fffffff))
                 (local.set $bestPacked (i32.const 0))
                 (local.set $palI (i32.const 0))

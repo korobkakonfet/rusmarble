@@ -21,6 +21,7 @@ import {
 } from '../src/templateChunkUtils.js';
 import { convertImageDataToWplacePalette } from '../src/Template.js';
 import { TemplateProgressAggregator } from '../src/templateProgressAggregator.js';
+import { isCollectProgressWasmAvailable } from '../src/templateProgressWasm.js';
 import { templatePaletteChannels } from '../src/templatePaletteConversion.js';
 import { createExactNearestLookup } from '../src/templateNearestPalette.js';
 import { colorpalette, rgbToMeta, uint8ToBase64, base64ToUint8 } from '../src/utils.js';
@@ -2343,6 +2344,57 @@ function runPayloadShapeChecks({ sampleData, tilePixels, displayedColorSet, orig
   console.log('');
 }
 
+// The WASM progress kernel must agree with the JS path byte for byte: per-colour stats and the
+// error map, with and without the enabled-colours filter (including OTHER).
+function runProgressWasmJsEquivalence({ sampleData, tilePixels, tilePixelsPaletteWrong, displayedColorSet }) {
+  if (!isCollectProgressWasmAvailable()) {
+    console.log('progress WASM/JS equivalence  skipped (WASM not ready)');
+    return;
+  }
+  const subset = new Set([...displayedColorSet].filter((_, index) => index % 3 !== 0));
+  const subsetWithOther = new Set([...subset, TEMPLATE_OTHER_COLOR_KEY]);
+  const cases = [];
+  for (const [tileLabel, tile] of [['offPaletteWrong', tilePixels], ['paletteWrong', tilePixelsPaletteWrong]]) {
+    cases.push([`${tileLabel}/noFilter`, tile, false, null]);
+    cases.push([`${tileLabel}/filter`, tile, true, subset]);
+    cases.push([`${tileLabel}/filter+other`, tile, true, subsetWithOther]);
+  }
+  for (const [label, tile, errorMapOnlyEnabledColors, displayedColors] of cases) {
+    const run = (useWasm) => {
+      const paletteStats = {};
+      const templateStats = {};
+      const errorData = new Uint8ClampedArray(sampleData.width * sampleData.height * 4);
+      const totals = collectTemplateProgressFromSamples({
+        sampleData, tilePixels: tile, tileSize: TEMPLATE_TILE_SIZE, offsetX: OFFSET_X, offsetY: OFFSET_Y,
+        tileCoords: [TILE_X, TILE_Y], templateEnabled: true, templateKey: 'eq', paletteStats, templateStats,
+        exampleMax: 0, errorMapOnlyEnabledColors, displayedColors, errorData, errorWidth: sampleData.width,
+        randomFn: makeReservoirRng(1), useWasm,
+      });
+      return { totals, paletteStats, templateStats, errorData };
+    };
+    const a = run(true);
+    const b = run(false);
+    const counts = (stats) => JSON.stringify(Object.keys(stats).sort().map((key) => (
+      [key, stats[key].painted, stats[key].paintedAndEnabled, stats[key].missing]
+    )));
+    if (JSON.stringify(a.totals) !== JSON.stringify(b.totals)) throw new Error(`progress WASM/JS totals differ (${label})`);
+    if (counts(a.paletteStats) !== counts(b.paletteStats)) throw new Error(`progress WASM/JS paletteStats differ (${label})`);
+    const templateCounts = (stats) => JSON.stringify(Object.keys(stats).sort().map((key) => (
+      [key, stats[key].painted, Object.keys(stats[key].palette).sort().map((colorKey) => [colorKey, Number(stats[key].palette[colorKey])])]
+    )));
+    if (templateCounts(a.templateStats) !== templateCounts(b.templateStats)) {
+      throw new Error(`progress WASM/JS templateStats differ (${label}): ${templateCounts(a.templateStats)} vs ${templateCounts(b.templateStats)}`);
+    }
+    // RGB exact; alpha only as written/unwritten -- the JS fallback has always drawn the error map
+    // opaque (255) while the WASM kernel uses translucent 160/200/224.
+    for (let i = 0; i < a.errorData.length; i++) {
+      const same = (i & 3) === 3 ? (a.errorData[i] > 0) === (b.errorData[i] > 0) : a.errorData[i] === b.errorData[i];
+      if (!same) throw new Error(`progress WASM/JS error map differs at byte ${i} (${label})`);
+    }
+  }
+  console.log(`progress WASM/JS equivalence  ok (${cases.length} cases)`);
+}
+
 async function main() {
   const sourceData = buildSourceImageData();
   const nonPaletteSourceData = buildNonPaletteSourceImageData();
@@ -2363,6 +2415,28 @@ async function main() {
     nonPaletteSourceData, IMAGE_WIDTH, CHUNK_SOURCE_X, CHUNK_SOURCE_Y, CHUNK_WIDTH, CHUNK_HEIGHT
   ));
   const tilePixels = buildTilePixels(sampleData);
+  // Same tile, but every wrong pixel is another palette colour -- what griefing or a misclick
+  // actually leaves on the map (the default fixture's wrong pixels are off-palette).
+  const tilePixelsPaletteWrong = (() => {
+    const palette = getBenchmarkPalette();
+    const pixels = new Uint8ClampedArray(tilePixels);
+    for (let index = 0; index < sampleData.count; index++) {
+      if (index % 8 !== 1) continue;
+      const pixelX = OFFSET_X + sampleData.x[index];
+      const pixelY = OFFSET_Y + sampleData.y[index];
+      if (pixelX < 0 || pixelX >= TEMPLATE_TILE_SIZE || pixelY < 0 || pixelY >= TEMPLATE_TILE_SIZE) continue;
+      const tileIndex = (pixelY * TEMPLATE_TILE_SIZE + pixelX) * 4;
+      let color = palette[index % palette.length];
+      if (color[0] === sampleData.r[index] && color[1] === sampleData.g[index] && color[2] === sampleData.b[index]) {
+        color = palette[(index + 1) % palette.length];
+      }
+      pixels[tileIndex] = color[0];
+      pixels[tileIndex + 1] = color[1];
+      pixels[tileIndex + 2] = color[2];
+      pixels[tileIndex + 3] = 255;
+    }
+    return pixels;
+  })();
   const displayedColorSet = buildDisplayedColorSet(sampleData);
   const tileCoords = [TILE_X, TILE_Y];
   const examplePool = createReservoirExamples(sampleData);
@@ -2434,6 +2508,7 @@ async function main() {
 
   const exactLookups = runEquivalenceChecks();
   runPayloadShapeChecks({ sampleData, tilePixels, displayedColorSet, originPoint, excludedCoordsKey });
+  runProgressWasmJsEquivalence({ sampleData, tilePixels, tilePixelsPaletteWrong, displayedColorSet });
 
   const results = [
     runBenchmark('buildMaskRowSpans(cross-mask)', 5000, () => {
@@ -2633,6 +2708,42 @@ async function main() {
       );
       return result.paintedCount + result.wrongCount + result.requiredCount + exampleCount + Object.keys(templateStats).length;
     }),
+    // scanTileProgressBatch shape: several template chunks counted against one decoded tile.
+    // Two tile buffers alternate per iteration so each batch starts on a "new" tile.
+    ...[[1, 'offPaletteWrong'], [4, 'offPaletteWrong'], [4, 'paletteWrong']].map(([chunksPerTile, variant]) => runBenchmark(`scanTileBatch(WASM,${chunksPerTile}chunks/tile,${variant})`, 30, (() => {
+      const baseTile = variant === 'paletteWrong' ? tilePixelsPaletteWrong : tilePixels;
+      const tiles = [baseTile, new Uint8ClampedArray(baseTile)];
+      let turn = 0;
+      return () => {
+        const tile = tiles[turn++ & 1];
+        const paletteStats = {};
+        const templateStats = {};
+        let sum = 0;
+        for (let chunk = 0; chunk < chunksPerTile; chunk++) {
+          const result = collectTemplateProgressFromSamples({
+            sampleData,
+            tilePixels: tile,
+            tileSize: TEMPLATE_TILE_SIZE,
+            offsetX: OFFSET_X,
+            offsetY: OFFSET_Y,
+            tileCoords,
+            templateEnabled: true,
+            templateKey: `bench-template-${chunk}`,
+            paletteStats,
+            templateStats,
+            exampleMax: EXAMPLE_LIMIT,
+            errorMapOnlyEnabledColors: false,
+            displayedColors: null,
+            errorData: null,
+            errorWidth: 0,
+            randomFn: makeReservoirRng(0xabc00002),
+            useWasm: true,
+          });
+          sum += result.paintedCount + result.wrongCount + result.requiredCount;
+        }
+        return sum + Object.keys(templateStats).length;
+      };
+    })())),
     runBenchmark('collectTemplateProgressFromSamples(JS)', 16, () => {
       const paletteStats = {};
       const templateStats = {};
