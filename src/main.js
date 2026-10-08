@@ -1779,6 +1779,9 @@ const applyLayoutTheme = (value) => {
  * keeps the editor's "Start from" in sync with overlay.css. The selector and `--bm-*` literals are
  * rewritten by the CSS mangler together with the stylesheet, so they still match after mangling.
  *
+ * A theme that also has a wplace skin (`html[data-rm-theme="x"]`, e.g. Halloween) contributes
+ * that skin's daisyUI `--color-*` values too, as the wplace-UI tokens.
+ *
  * @param {string} theme - A layout theme key other than `custom`.
  * @returns {Record<string, string>} Token key -> `#rrggbbaa`, only for tokens the theme defines.
  */
@@ -1788,7 +1791,10 @@ const getBuiltInThemePalette = (theme) => {
     { base: '#bm-notification-container', themed: `#bm-notification-container[data-layout-theme="${theme}"]` },
   ];
   const values = new Map();
-  for (const target of targets) {
+  const siteValues = new Map();
+  const skinSelector = `html[data-rm-theme="${theme}"]`;
+  for (const target of [...targets, { site: true, base: skinSelector, themed: skinSelector }]) {
+    const into = target.site ? siteValues : values;
     for (const wanted of [target.base, target.themed]) {
       for (const sheet of Array.from(document.styleSheets)) {
         let rules;
@@ -1799,7 +1805,7 @@ const getBuiltInThemePalette = (theme) => {
           if (!selectors.includes(wanted)) continue;
           for (let i = 0; i < rule.style.length; i++) {
             const name = rule.style[i];
-            if (name.startsWith('--')) values.set(name, rule.style.getPropertyValue(name).trim());
+            if (name.startsWith('--')) into.set(name, rule.style.getPropertyValue(name).trim());
           }
         }
       }
@@ -1820,6 +1826,12 @@ const getBuiltInThemePalette = (theme) => {
   };
   const palette = {};
   for (const token of CUSTOM_THEME_TOKENS) {
+    if (token.siteVar) {
+      const raw = siteValues.get(token.siteVar);
+      const color = raw ? resolveColor(raw, '') : '';
+      if (color) palette[token.key] = color;
+      continue;
+    }
     if (!token.cssVar) continue;
     const raw = values.get(token.cssVar);
     if (!raw) continue;

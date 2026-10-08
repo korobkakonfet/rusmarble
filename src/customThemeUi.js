@@ -148,9 +148,10 @@ export const createCustomThemeUi = (deps = {}) => {
       scroll.className = 'bm-custom-theme-scroll';
 
       /* ---- base theme ------------------------------------------------------ */
-      // Loads a built-in theme's colours into the editor as a starting point. Only the RusMarble
-      // tokens a theme defines are replaced; the wplace-UI tokens are left as they are, since the
-      // built-in themes do not repaint wplace. Nothing is stored until Save; Cancel restores.
+      // Loads a built-in theme's colours into the editor as a starting point. Only the tokens a
+      // theme defines are replaced. A theme with a wplace skin (Halloween) also brings the skin's
+      // wplace-UI colours and turns "Restyle the wplace UI too" on, so the custom theme repaints
+      // wplace the way the skin did. Nothing is stored until Save; Cancel restores.
 
       const baseThemes = getBaseThemes?.() ?? [];
       if (baseThemes.length && getBuiltInThemePalette) {
@@ -191,6 +192,7 @@ export const createCustomThemeUi = (deps = {}) => {
             return;
           }
           working = { ...working, ...palette };
+          if (CUSTOM_THEME_TOKENS.some((token) => token.siteVar && palette[token.key])) applyToSite = true;
           cancelPendingPreview();
           syncRows();
           preview();
@@ -473,6 +475,7 @@ export const createCustomThemeUi = (deps = {}) => {
           section.appendChild(sampleHost);
 
           const syncSiteRows = () => {
+            toggle.checked = applyToSite; // import / "Start from" can change it too
             for (const siteSection of siteSections) {
               siteSection.classList.toggle('bm-custom-theme-group--off', !applyToSite);
             }
