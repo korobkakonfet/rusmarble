@@ -743,8 +743,33 @@ div#bm-overlay {
    * Any possible monospace font (monospace)
    * Last resort (Arial) */
   /* font-family: 'Roboto Mono', 'Courier New', 'Monaco', 'DejaVu Sans Mono', monospace, 'Arial'; */
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Monaco', 'DejaVu Sans', sans-serif;
+  font-family: var(--rm-ui-font, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Monaco', 'DejaVu Sans', sans-serif);
   letter-spacing: 0.05em;
+}
+
+/* Custom UI font (theme editor -> Font). main.js puts the family in `--rm-ui-font` on <html> and
+ * sets `data-rm-ui-font`; neither name is `bm-` prefixed, so the CSS mangler leaves them alone.
+ * Every RusMarble element has a `bm-` id or class (mangled names keep the prefix), and floating
+ * windows live outside #bm-overlay, so match on that. Zero specificity: rules that deliberately
+ * pick a font (monospace code, emoji, symbols) still win, everything else inherits. */
+:where(html[data-rm-ui-font]) :where([id^="bm-"], [class^="bm-"], [class*=" bm-"]) {
+  font-family: var(--rm-ui-font);
+}
+/* wplace's pixel UI forces its own font on every button/heading from a (0,4,0) selector; our
+ * controls carry wplace classes like `.btn`, so they need to outrank it explicitly. */
+:root:root:root[data-rm-ui-font] :is([id^="bm-"], [class^="bm-"], [class*=" bm-"]) :is(button, select, h1, h2, h3, h4, h5, h6),
+:root:root:root[data-rm-ui-font] :is(button, select, h1, h2, h3, h4, h5, h6):is([id^="bm-"], [class^="bm-"], [class*=" bm-"]) {
+  font-family: var(--rm-ui-font);
+}
+/* "Use in the wplace UI too": both wplace UIs. The standard UI reads `--font-sans`; the pixel UI
+ * sets the font on body and on its controls directly, so those are overridden as well. Elements
+ * with their own font class (flags, emoji) keep it: only body and the listed controls are set. */
+html[data-rm-site-font] {
+  --font-sans: var(--rm-ui-font);
+}
+html[data-rm-site-font] body,
+html[data-rm-site-font] body :is(button, .btn, .game-button, .tab, .badge, select, input, textarea, h1, h2, h3, h4, h5, h6) {
+  font-family: var(--rm-ui-font) !important;
 }
 
 /* The drag bar */

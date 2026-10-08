@@ -17,7 +17,7 @@ import { createMapCommentManager } from './mapComments.js';
 import { createHqTemplateManager } from './hqTemplate.js';
 import { createTemplateCreationUi } from './templateCreationUi.js';
 import { createArchiveTemplateUi } from './archiveTemplateUi.js';
-import { CUSTOM_LAYOUT_THEME, CUSTOM_THEME_DRAG_BG_VAR, buildCustomThemeCssVars, buildCustomThemeSiteVars, customThemeColorToCss, getDefaultCustomTheme } from './customTheme.js';
+import { CUSTOM_LAYOUT_THEME, CUSTOM_THEME_DRAG_BG_VAR, buildCustomThemeCssVars, buildCustomThemeSiteVars, customThemeColorToCss, getDefaultCustomTheme, normalizeUiFont, buildUiFontFamily, buildUiFontFaceCss, UI_FONT_FILE_STORAGE_KEY } from './customTheme.js';
 import { createCustomThemeUi } from './customThemeUi.js';
 import { initOverlayDodge } from './overlayDodge.js';
 // Extension points. No-ops in this build; see src/extensionPoints.js.
@@ -1768,6 +1768,54 @@ const applyLayoutTheme = (value) => {
   }
   applyCustomThemeVars(nextTheme);
   document.dispatchEvent(new CustomEvent('bm-layout-theme-changed', { detail: { layoutTheme: nextTheme } }));
+};
+
+/** The uploaded UI font file (`{name, dataUrl}`), read from GM storage once. */
+let uiFontFile = null;
+let uiFontFileLoaded = null;
+const loadUiFontFile = () => {
+  uiFontFileLoaded ??= GM.getValue(UI_FONT_FILE_STORAGE_KEY, '')
+    .then((raw) => {
+      try { uiFontFile = raw ? JSON.parse(raw) : null; } catch (_) { uiFontFile = null; }
+      return uiFontFile;
+    })
+    .catch(() => null);
+  return uiFontFileLoaded;
+};
+
+/** Applies a UI font choice to the live page (RusMarble windows, optionally wplace too).
+ *
+ * The family goes into `--rm-ui-font` on <html>, which overlay.css reads behind
+ * `data-rm-ui-font` / `data-rm-site-font`. Neither name is `bm-` prefixed, so the CSS
+ * mangler leaves both alone. An uploaded file is registered with its own `@font-face`.
+ *
+ * @param {object} font - `{source, family, applyToSite}`
+ * @param {object|null} file - The uploaded file, used when `font.source === 'file'`.
+ */
+const applyUiFont = (font, file = uiFontFile) => {
+  const root = document.documentElement;
+  if (!root) return;
+  const normalized = normalizeUiFont(font);
+  let faceStyle = document.getElementById('rm-ui-font-face');
+  const faceCss = normalized.source === 'file' ? buildUiFontFaceCss(file) : '';
+  if (faceCss) {
+    if (!faceStyle) {
+      faceStyle = document.createElement('style');
+      faceStyle.id = 'rm-ui-font-face';
+      document.head.appendChild(faceStyle);
+    }
+    if (faceStyle.textContent !== faceCss) faceStyle.textContent = faceCss;
+  } else {
+    faceStyle?.remove();
+  }
+  const family = (normalized.source === 'file' && !faceCss) ? '' : buildUiFontFamily(normalized);
+  if (family) {
+    root.style.setProperty('--rm-ui-font', family);
+  } else {
+    root.style.removeProperty('--rm-ui-font');
+  }
+  root.toggleAttribute('data-rm-ui-font', !!family);
+  root.toggleAttribute('data-rm-site-font', !!family && normalized.applyToSite);
 };
 
 /** Applies a whole palette to the live UI without persisting it (editor preview).
@@ -4809,6 +4857,21 @@ const { openCustomThemeEditor } = createCustomThemeUi({
     await templateManager?.setCustomThemeApplyToSite?.(applyToSite);
     applyLayoutTheme(CUSTOM_LAYOUT_THEME);
   },
+  getUiFont: () => normalizeUiFont(templateManager?.getUiFont?.()),
+  loadUiFontFile,
+  previewUiFont: (font, file) => applyUiFont(font, file),
+  saveUiFont: async (font, file) => {
+    const normalized = normalizeUiFont(font);
+    // Only touch the stored file when a new one was picked; switching to another source
+    // keeps the old upload so flipping back does not require uploading it again.
+    if (normalized.source === 'file' && file && file !== uiFontFile) {
+      await GM.setValue(UI_FONT_FILE_STORAGE_KEY, JSON.stringify(file));
+      uiFontFile = file;
+      uiFontFileLoaded = Promise.resolve(file);
+    }
+    await templateManager?.setUiFont?.(normalized);
+    applyUiFont(normalized);
+  },
 });
 
 const {
@@ -5126,6 +5189,14 @@ readBootStorageValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   ensureHqTemplateManager();
   if (templateManager.isArchiveBackgroundEnabled()) applyArchiveBackground(true);
   applyWidePalette(templateManager.isWidePaletteEnabled());
+  {
+    const uiFont = normalizeUiFont(templateManager.getUiFont?.());
+    if (uiFont.source === 'file') {
+      loadUiFontFile().then((file) => applyUiFont(uiFont, file));
+    } else {
+      applyUiFont(uiFont);
+    }
+  }
 
   // load templates after user settings
   let storageTemplates;

@@ -3542,6 +3542,23 @@ export default class TemplateManager {
     await this.storeUserSettings();
   }
 
+  /** The UI font choice from the theme editor: `{source, family, applyToSite}`.
+   * The uploaded font file itself lives in its own GM key (see customTheme.js).
+   * @returns {object} The raw stored value; callers normalize it.
+   */
+  getUiFont() {
+    const stored = this.userSettings?.uiFont;
+    return (stored && typeof stored === 'object') ? stored : {};
+  }
+
+  /** Stores the UI font choice.
+   * @param {object} value - `{source, family, applyToSite}`
+   */
+  async setUiFont(value) {
+    this.userSettings.uiFont = (value && typeof value === 'object') ? { ...value } : {};
+    await this.storeUserSettings();
+  }
+
   /** Whether the custom theme also repaints wplace's own UI.
    * @returns {boolean}
    * @since 0.87.76
