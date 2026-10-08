@@ -623,13 +623,13 @@ export default class ApiManager {
       // background. On the button itself that wiped wplace's own chip/bevel look (both UIs), so the
       // label's text node is wrapped in a span that carries the effect instead. Svelte keeps updating
       // the same text node, so a reused panel just shows the new name in an unstyled span.
-      let label = allianceButton.querySelector(':scope > span[data-bm-alliance-label]');
+      let label = allianceButton.querySelector(':scope > span[data-rm-alliance-label]');
       if (!label) {
         const textNode = Array.from(allianceButton.childNodes)
           .find(node => node.nodeType === Node.TEXT_NODE && this.#isRuspixelAllianceText(node.textContent || ''));
         if (textNode) {
           label = document.createElement('span');
-          label.dataset.bmAllianceLabel = '1';
+          label.dataset.rmAllianceLabel = '1';
           textNode.replaceWith(label);
           label.appendChild(textNode);
         }
