@@ -2916,3 +2916,30 @@ span.bm-templatename:hover, a.bm-templatename:focus {
 :root[data-game-ui] .game-paint-panel .paint-toolbar > .paint-tools {
   flex-shrink: 0;
 }
+/* Our paint-panel controls (Move Up, Smart Place…) share the title line; on narrow screens that
+ * squeezed them into a tall column of clipped square buttons. Give them a full-width row below
+ * the title line instead, with buttons sized to their labels. */
+#rm-paint-toolbar-extra > .btn {
+  width: auto !important;
+  min-width: 2rem !important;
+  padding-inline: 6px !important;
+}
+@media (max-width: 767px) {
+  .paint-toolbar:has(> #rm-paint-toolbar-extra) {
+    flex-wrap: wrap !important;
+    row-gap: 6px !important;
+  }
+  #rm-paint-toolbar-extra {
+    order: 99 !important;
+    flex: 1 0 100% !important;
+    margin-inline: 0 !important;
+  }
+  #rm-paint-toolbar-extra > .btn {
+    height: 28px !important;
+    min-height: 28px !important;
+    font-size: 12px !important;
+  }
+  #rm-paint-toolbar-extra > input {
+    height: 28px;
+  }
+}
