@@ -619,7 +619,22 @@ export default class ApiManager {
     infoCard.classList.toggle('bm-ruspixel-flag', isRuspixel);
     infoRoot.querySelectorAll('.bm-ruspixel-flag-text').forEach(el => el.classList.remove('bm-ruspixel-flag-text'));
     if (isRuspixel) {
-      allianceButton.classList.add('bm-ruspixel-flag-text');
+      // The tricolour text is painted with `background-clip: text`, which takes over the element's
+      // background. On the button itself that wiped wplace's own chip/bevel look (both UIs), so the
+      // label's text node is wrapped in a span that carries the effect instead. Svelte keeps updating
+      // the same text node, so a reused panel just shows the new name in an unstyled span.
+      let label = allianceButton.querySelector(':scope > span[data-bm-alliance-label]');
+      if (!label) {
+        const textNode = Array.from(allianceButton.childNodes)
+          .find(node => node.nodeType === Node.TEXT_NODE && this.#isRuspixelAllianceText(node.textContent || ''));
+        if (textNode) {
+          label = document.createElement('span');
+          label.dataset.bmAllianceLabel = '1';
+          textNode.replaceWith(label);
+          label.appendChild(textNode);
+        }
+      }
+      (label || allianceButton).classList.add('bm-ruspixel-flag-text');
     }
   }
 
