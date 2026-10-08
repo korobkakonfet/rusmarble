@@ -761,11 +761,15 @@ div#bm-overlay {
 :root:root:root[data-rm-ui-font] :is(button, select, h1, h2, h3, h4, h5, h6):is([id^="bm-"], [class^="bm-"], [class*=" bm-"]) {
   font-family: var(--rm-ui-font);
 }
-/* "Use in the wplace UI too": both wplace UIs. The standard UI reads `--font-sans`; the pixel UI
- * sets the font on body and on its controls directly, so those are overridden as well. Elements
- * with their own font class (flags, emoji) keep it: only body and the listed controls are set. */
-html[data-rm-site-font] {
-  --font-sans: var(--rm-ui-font);
+/* "Use in the wplace UI too": both wplace UIs. wplace draws almost all text with `--font-sans`, but
+ * redefines it at several levels: `:root[data-standard-ui]` / `:root[data-pixel-fonts=false]`
+ * (Geist, more specific than a plain root rule) and wrappers like `.font-readable` inside dialogs
+ * (store, leaderboard). Setting it with `!important` on every element beats all of those, in both
+ * UIs. Flags keep their emoji font: `.font-flag` lists "Noto Color Emoji" before the variable.
+ * The pixel UI also sets the font on body and controls directly, so those are overridden too. */
+html[data-rm-site-font],
+html[data-rm-site-font] * {
+  --font-sans: var(--rm-ui-font) !important;
 }
 html[data-rm-site-font] body,
 html[data-rm-site-font] body :is(button, .btn, .game-button, .tab, .badge, select, input, textarea, h1, h2, h3, h4, h5, h6) {
