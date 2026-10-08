@@ -623,10 +623,13 @@
  * "custom-winter" -- so we cannot express Halloween through data-theme at all.
  * setTheme() instead pairs data-theme="dark" with our own data-rm-theme="halloween",
  * and this block repaints the site's --color-* tokens on top of the dark theme.
- * The html[...] selector outranks daisyUI's [data-theme=dark], so these win.
+ * The html[...] selector outranks daisyUI's [data-theme=dark], so these win. wplace's pixel UI
+ * (Oct 2026) redefines the same tokens from `:root[data-game-ui]:not([data-standard-ui])[data-theme=dark]`
+ * (0,4,0), so the repeated `:root` form is there to outrank it as well.
  * @since 0.87.76
  */
-html[data-rm-theme="halloween"] {
+html[data-rm-theme="halloween"],
+:root:root:root:root[data-rm-theme="halloween"] {
   color-scheme: dark;
   --color-base-100: #221430;
   --color-base-200: #1b0f26;
@@ -656,6 +659,31 @@ html[data-rm-theme="halloween"] {
   --border: 2px;
   --depth: 1;
   --noise: 0;
+}
+
+/* Skins in wplace's pixel UI: most of that UI is painted from its own `--pixel-*` palette (neutral
+ * buttons and their bevels, the bevel of primary buttons such as the big Paint button, wells,
+ * titles, muted text), which a skin's `--color-*` tokens never reach. Derive it from them. The
+ * custom theme writes the same derivation inline (customTheme.js buildCustomThemeSiteVars). */
+:root:root:root:root[data-game-ui]:not([data-standard-ui])[data-rm-theme] {
+  --pixel-page: var(--color-base-200);
+  --pixel-title: var(--color-base-content);
+  --pixel-muted: color-mix(in srgb, var(--color-base-content) 68%, var(--color-base-100));
+  --pixel-placeholder: color-mix(in srgb, var(--color-base-content) 45%, var(--color-base-100));
+  --pixel-button: color-mix(in srgb, var(--color-base-100) 82%, var(--color-base-content));
+  --pixel-button-light: color-mix(in srgb, var(--color-base-100) 62%, var(--color-base-content));
+  --pixel-button-shade: color-mix(in srgb, var(--color-base-100) 72%, black);
+  --pixel-button-frame: color-mix(in srgb, var(--color-base-content) 55%, var(--color-base-100));
+  --pixel-primary-light: color-mix(in srgb, var(--color-primary) 65%, white);
+  --pixel-primary-shade: color-mix(in srgb, var(--color-primary) 62%, black);
+  --pixel-soft: color-mix(in srgb, var(--color-primary) 25%, var(--color-base-100));
+  --pixel-soft-ink: color-mix(in srgb, var(--color-primary) 70%, var(--color-base-content));
+  --pixel-soft-frame: var(--color-primary);
+  --pixel-soft-light: color-mix(in srgb, var(--color-primary) 15%, var(--color-base-100));
+  --pixel-soft-shade: color-mix(in srgb, var(--color-primary) 40%, var(--color-base-300));
+  --pixel-well: var(--color-base-300);
+  --pixel-well-shade: color-mix(in srgb, var(--color-base-300) 78%, black);
+  --pixel-field-shade: color-mix(in srgb, var(--color-base-300) 88%, black);
 }
 
 html[data-rm-theme="halloween"] .bg-base-content\/10 {
