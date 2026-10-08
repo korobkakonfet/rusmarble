@@ -14,6 +14,15 @@ const EASTER_EGG_WAVE_PAUSE_BEFORE_LOOP_MS = 3000;
 const EASTER_EGG_WAVE_STEP_DURATION_MS = 1800;
 const EASTER_EGG_WAVE_STAGGER_MS = 90;
 
+/** Start of the SVG path wplace uses for its pixel "X" close icon. Language-independent, unlike
+ * the button's aria-label. */
+export const WPLACE_CLOSE_ICON_PATH_PREFIX = 'M7 19H5v-2h2v2Z';
+
+/** Whether a button shows wplace's close icon. */
+export function isWplaceCloseIcon(button) {
+  return !!button?.querySelector?.(`path[d^="${WPLACE_CLOSE_ICON_PATH_PREFIX}"]`);
+}
+
 export default class ApiManager {
 
   /** Constructor for ApiManager class
@@ -295,7 +304,10 @@ export default class ApiManager {
 
     // Oct 2026 UI: the panel is a floating `.game-panel-surface` card holding `.selected-pixel`,
     // with no `.rounded-t-box`/dialog around it and a `btn-square` (not `btn-circle`) close button.
+    // The aria-label is localized ("Закрыть" in Russian), so the new card's close button is also
+    // matched by its icon: wplace's pixel "X" path, which is the same in every language.
     const selectors = [
+      `.selected-pixel button:has(path[d^="${WPLACE_CLOSE_ICON_PATH_PREFIX}"])`,
       '.selected-pixel button[aria-label="Close"]',
       '.rounded-t-box button[aria-label="Close"]',
       'dialog.modal button[aria-label="Close"]',
@@ -333,7 +345,7 @@ export default class ApiManager {
         ].join(' ');
         const root = this.getPixelInfoRoot(button);
         let score = 0;
-        if (/close/i.test(label)) score += 12;
+        if (/close/i.test(label) || isWplaceCloseIcon(button)) score += 12;
         if (this.#isVisibleElement(button)) score += 4;
         if (root && this.#hasPixelInfoContent(root)) score += 3;
         if (button.parentElement?.lastElementChild === button) score += 1;
