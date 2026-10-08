@@ -14,7 +14,14 @@ import {
   joinCustomThemeColor,
   normalizeCustomTheme,
   splitCustomThemeColor,
+  normalizeUiFont,
+  buildUiFontFamily,
+  UI_FONT_FILE_MAX_BYTES,
 } from './customTheme.js';
+import { BUNDLED_FONTS } from './fonts.js';
+
+/** MIME types for the font files the picker accepts; `File.type` is often empty for fonts. */
+const FONT_FILE_TYPES = { ttf: 'font/ttf', otf: 'font/otf', woff: 'font/woff', woff2: 'font/woff2' };
 
 /**
  * Builds the custom theme editor.
@@ -27,6 +34,10 @@ import {
  * @param {Function} deps.getCustomTheme Returns the stored palette.
  * @param {Function} deps.getCustomThemeApplyToSite Returns whether wplace's own UI is restyled.
  * @param {Function} deps.saveCustomTheme Persists a palette and the site flag (async).
+ * @param {Function} deps.getUiFont Returns the stored UI font choice.
+ * @param {Function} deps.loadUiFontFile Resolves to the stored uploaded font file, or null.
+ * @param {Function} deps.previewUiFont Applies a font choice live, without persisting it.
+ * @param {Function} deps.saveUiFont Persists a font choice and, if new, its file (async).
  * @returns {{openCustomThemeEditor: Function, closeCustomThemeEditor: Function}}
  */
 export const createCustomThemeUi = (deps = {}) => {
@@ -38,6 +49,10 @@ export const createCustomThemeUi = (deps = {}) => {
     getCustomTheme,
     getCustomThemeApplyToSite,
     saveCustomTheme,
+    getUiFont,
+    loadUiFontFile,
+    previewUiFont,
+    saveUiFont,
   } = deps;
 
   const tt = (key, fallback) => {
@@ -127,6 +142,177 @@ export const createCustomThemeUi = (deps = {}) => {
 
       const scroll = document.createElement('div');
       scroll.className = 'bm-custom-theme-scroll';
+
+      /* ---- font ------------------------------------------------------------ */
+      // New elements use `rm-` ids and inline styles rather than new `bm-` classes: the CSS
+      // mangler can hand a brand-new `bm-` name a code that an existing selector already owns.
+
+      /** The font choice being edited, committed on Save like the palette. */
+      let workingFont = normalizeUiFont(getUiFont?.());
+      const originalFont = { ...workingFont };
+      /** The stored upload (loaded async) and a newly picked one, not yet saved. */
+      let storedFontFile = null;
+      let pickedFontFile = null;
+      const currentFontFile = () => pickedFontFile ?? storedFontFile;
+      const previewFont = () => { previewUiFont?.(workingFont, currentFontFile()); syncFontRows(); };
+
+      const fontSection = document.createElement('div');
+      fontSection.className = 'bm-custom-theme-group';
+      const fontTitle = document.createElement('div');
+      fontTitle.className = 'bm-custom-theme-group-title';
+      fontTitle.textContent = tt('customTheme.font.title', 'Font');
+      fontSection.appendChild(fontTitle);
+
+      const fontRowStyle = 'display:flex;align-items:center;gap:6px;margin:4px 0;font-size:0.78rem;';
+      const fontSelectRow = document.createElement('div');
+      fontSelectRow.style.cssText = fontRowStyle;
+      const fontSelect = document.createElement('select');
+      fontSelect.id = 'rm-ui-font-select';
+      fontSelect.style.cssText = 'flex:1;min-width:0;';
+      const addFontOption = (value, label) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        fontSelect.appendChild(option);
+      };
+      addFontOption('default', tt('customTheme.font.default', 'Default'));
+      for (const { family } of BUNDLED_FONTS) addFontOption('bundled:' + family, family);
+      addFontOption('system', tt('customTheme.font.system', 'Installed font (by name)…'));
+      addFontOption('file', tt('customTheme.font.file', 'Upload a font file…'));
+      fontSelectRow.appendChild(fontSelect);
+      fontSection.appendChild(fontSelectRow);
+
+      const fontNameRow = document.createElement('div');
+      fontNameRow.style.cssText = fontRowStyle;
+      const fontNameInput = document.createElement('input');
+      fontNameInput.type = 'text';
+      fontNameInput.id = 'rm-ui-font-name';
+      fontNameInput.spellcheck = false;
+      fontNameInput.setAttribute('autocomplete', 'off');
+      fontNameInput.placeholder = tt('customTheme.font.namePlaceholder', 'e.g. Comic Sans MS, Roboto Mono');
+      fontNameInput.style.cssText = 'flex:1;min-width:0;';
+      fontNameRow.appendChild(fontNameInput);
+      fontSection.appendChild(fontNameRow);
+
+      const fontFileRow = document.createElement('div');
+      fontFileRow.style.cssText = fontRowStyle;
+      const fontFileInput = document.createElement('input');
+      fontFileInput.type = 'file';
+      fontFileInput.accept = '.ttf,.otf,.woff,.woff2';
+      fontFileInput.hidden = true;
+      const fontFileBtn = document.createElement('button');
+      fontFileBtn.type = 'button';
+      fontFileBtn.textContent = tt('customTheme.font.chooseFile', 'Choose file');
+      const fontFileName = document.createElement('span');
+      fontFileName.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:0.8;';
+      fontFileRow.appendChild(fontFileInput);
+      fontFileRow.appendChild(fontFileBtn);
+      fontFileRow.appendChild(fontFileName);
+      fontSection.appendChild(fontFileRow);
+
+      const fontSiteRow = document.createElement('label');
+      fontSiteRow.className = 'bm-custom-theme-site-toggle';
+      const fontSiteToggle = document.createElement('input');
+      fontSiteToggle.type = 'checkbox';
+      const fontSiteText = document.createElement('span');
+      fontSiteText.textContent = tt('customTheme.font.applyToSite', 'Use it in the wplace UI too');
+      fontSiteRow.appendChild(fontSiteToggle);
+      fontSiteRow.appendChild(fontSiteText);
+      fontSection.appendChild(fontSiteRow);
+
+      const fontSample = document.createElement('div');
+      fontSample.id = 'rm-ui-font-sample';
+      fontSample.textContent = tt('customTheme.font.sample', 'Пример текста · Sample text 0123');
+      fontSample.style.cssText = 'margin:4px 0 2px;padding:6px 8px;border-radius:6px;background:var(--bm-subtle-bg);font-size:0.95rem;';
+      fontSection.appendChild(fontSample);
+
+      function syncFontRows() {
+        const selectValue = workingFont.source === 'bundled' ? 'bundled:' + workingFont.family : workingFont.source;
+        if (fontSelect.value !== selectValue) fontSelect.value = selectValue;
+        fontNameRow.hidden = workingFont.source !== 'system';
+        fontFileRow.hidden = workingFont.source !== 'file';
+        if (workingFont.source === 'system' && document.activeElement !== fontNameInput) {
+          fontNameInput.value = workingFont.family;
+        }
+        fontFileName.textContent = currentFontFile()?.name
+          ?? tt('customTheme.font.noFile', 'No file chosen');
+        fontSiteToggle.checked = workingFont.applyToSite;
+        fontSiteRow.style.opacity = workingFont.source === 'default' ? '0.4' : '';
+        fontSample.style.fontFamily = buildUiFontFamily(workingFont) || '';
+      }
+
+      /** The family typed for an installed font; kept while switching sources. */
+      let typedFamily = workingFont.source === 'system' ? workingFont.family : '';
+      fontSelect.addEventListener('change', () => {
+        const value = fontSelect.value;
+        const applyToSiteNow = workingFont.applyToSite;
+        if (value.startsWith('bundled:')) {
+          workingFont = normalizeUiFont({ source: 'bundled', family: value.slice(8), applyToSite: applyToSiteNow });
+        } else if (value === 'system') {
+          // An empty name normalizes back to the default font, so keep the raw choice visible.
+          workingFont = { source: 'system', family: typedFamily, applyToSite: applyToSiteNow };
+          fontNameInput.value = typedFamily;
+          if (!typedFamily) { syncFontRows(); fontNameInput.focus(); return; }
+        } else if (value === 'file') {
+          workingFont = { source: 'file', family: '', applyToSite: applyToSiteNow };
+          if (!currentFontFile()) { syncFontRows(); fontFileInput.click(); return; }
+          workingFont = normalizeUiFont(workingFont);
+        } else {
+          workingFont = { source: 'default', family: '', applyToSite: applyToSiteNow };
+        }
+        previewFont();
+      });
+      fontNameInput.addEventListener('change', () => {
+        typedFamily = fontNameInput.value.trim();
+        workingFont = normalizeUiFont({ source: 'system', family: typedFamily, applyToSite: workingFont.applyToSite });
+        if (workingFont.source !== 'system') workingFont = { source: 'system', family: '', applyToSite: workingFont.applyToSite };
+        previewFont();
+      });
+      fontSiteToggle.addEventListener('change', () => {
+        workingFont = { ...workingFont, applyToSite: fontSiteToggle.checked };
+        previewFont();
+      });
+      fontFileBtn.addEventListener('click', () => fontFileInput.click());
+      fontFileInput.addEventListener('change', () => {
+        const file = fontFileInput.files?.[0];
+        fontFileInput.value = '';
+        if (!file) return;
+        const extension = (file.name.split('.').pop() || '').toLowerCase();
+        if (!FONT_FILE_TYPES[extension]) {
+          setStatus(tt('customTheme.font.badType', 'Pick a .ttf, .otf, .woff or .woff2 file.'), true);
+          return;
+        }
+        if (file.size > UI_FONT_FILE_MAX_BYTES) {
+          setStatus(tt('customTheme.font.tooBig', 'That font file is too large (max 4 MB).'), true);
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = async () => {
+          const base64 = String(reader.result || '').split(',')[1] || '';
+          const dataUrl = `data:${FONT_FILE_TYPES[extension]};base64,${base64}`;
+          // Make sure the browser can actually read it before offering it as the UI font.
+          try {
+            const FontFaceCtor = window.FontFace;
+            if (FontFaceCtor) await new FontFaceCtor('RusMarbleFontCheck', `url("${dataUrl}")`).load();
+          } catch (_) {
+            setStatus(tt('customTheme.font.unreadable', 'The browser could not read that font file.'), true);
+            return;
+          }
+          pickedFontFile = { name: file.name.slice(0, 80), dataUrl };
+          workingFont = normalizeUiFont({ source: 'file', applyToSite: workingFont.applyToSite });
+          previewFont();
+          setStatus(tt('customTheme.font.loaded', 'Font loaded. Press Save to keep it.'));
+        };
+        reader.onerror = () => setStatus(tt('customTheme.font.unreadable', 'The browser could not read that font file.'), true);
+        reader.readAsDataURL(file);
+      });
+
+      scroll.appendChild(fontSection);
+      syncFontRows();
+      Promise.resolve(loadUiFontFile?.()).then((file) => {
+        storedFontFile = file || null;
+        if (!closed) syncFontRows();
+      });
 
       /** Sections gated behind the "restyle wplace UI" toggle. */
       const siteSections = [];
@@ -366,7 +552,7 @@ export const createCustomThemeUi = (deps = {}) => {
       };
 
       exportBtn.addEventListener('click', async () => {
-        const code = encodeCustomThemeCode(working, '', applyToSite);
+        const code = encodeCustomThemeCode(working, '', applyToSite, workingFont);
         shareInput.value = code;
         shareInput.focus();
         shareInput.select();
@@ -390,6 +576,11 @@ export const createCustomThemeUi = (deps = {}) => {
         cancelPendingPreview();
         syncRows();
         preview();
+        if (decoded.uiFont) {
+          workingFont = decoded.uiFont;
+          if (workingFont.source === 'system') typedFamily = workingFont.family;
+          previewFont();
+        }
         setStatus(decoded.name
           ? tt('customTheme.importedNamed', 'Imported theme: {name}').replace('{name}', decoded.name)
           : tt('customTheme.imported', 'Theme code imported. Press Save to keep it.'));
@@ -438,6 +629,7 @@ export const createCustomThemeUi = (deps = {}) => {
         // Drop the live preview and restore what was stored when we opened.
         cancelPendingPreview();
         previewCustomTheme?.(original, { applyToSite: originalApplyToSite });
+        previewUiFont?.(originalFont, storedFontFile);
         close(null);
       };
 
@@ -469,6 +661,8 @@ export const createCustomThemeUi = (deps = {}) => {
         saveBtn.disabled = true;
         try {
           await saveCustomTheme?.(working, applyToSite);
+          // An installed-font choice with no name, or "upload" with no file, saves as the default font.
+          await saveUiFont?.(normalizeUiFont(workingFont.source === 'file' && !currentFontFile() ? {} : workingFont), currentFontFile());
           close({ colors: working });
         } catch (error) {
           saveBtn.disabled = false;

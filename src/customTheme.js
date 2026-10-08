@@ -293,6 +293,56 @@ export const buildCustomThemeCssVars = (colors) => {
 };
 
 /* -------------------------------------------------------------------------- */
+/* UI font                                                                    */
+/* -------------------------------------------------------------------------- */
+
+/** Font sources the editor offers.
+ * `default` - RusMarble's normal stack, nothing overridden.
+ * `bundled` - one of the fonts shipped in the userscript (fonts.js), by family name.
+ * `system`  - a font installed on the device, typed in by name.
+ * `file`    - a font file the user uploaded; its data URL is stored separately from
+ *             the settings (it can be megabytes) under UI_FONT_FILE_STORAGE_KEY.
+ */
+export const UI_FONT_SOURCES = ['default', 'bundled', 'system', 'file'];
+
+/** Family name the uploaded file is registered under with `@font-face`. */
+export const UI_FONT_FILE_FAMILY = 'RusMarbleCustomFont';
+
+/** GM storage key of the uploaded font file: `{name, dataUrl}`. */
+export const UI_FONT_FILE_STORAGE_KEY = 'bmUiFontFile';
+
+/** Largest font file accepted, in bytes. GM storage copes, but every page load reads it. */
+export const UI_FONT_FILE_MAX_BYTES = 4 * 1024 * 1024;
+
+/** Appended after the chosen family so missing glyphs (Cyrillic, emoji) still render. */
+const UI_FONT_FALLBACK = "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+
+/** Coerces a stored/imported font choice into `{source, family, applyToSite}`. */
+export const normalizeUiFont = (value) => {
+  const source = UI_FONT_SOURCES.includes(value?.source) ? value.source : 'default';
+  // Quotes and semicolons/braces would let a family name break out of the CSS value.
+  const family = String(value?.family ?? '').replace(/["'\\;{}<>]/g, '').trim().slice(0, 64);
+  if (source !== 'default' && source !== 'file' && !family) {
+    return { source: 'default', family: '', applyToSite: !!value?.applyToSite };
+  }
+  return { source, family: source === 'file' ? UI_FONT_FILE_FAMILY : family, applyToSite: !!value?.applyToSite };
+};
+
+/** The CSS `font-family` value for a font choice, or '' for the default font. */
+export const buildUiFontFamily = (value) => {
+  const font = normalizeUiFont(value);
+  if (font.source === 'default') return '';
+  return `"${font.family}", ${UI_FONT_FALLBACK}`;
+};
+
+/** The `@font-face` rule for an uploaded font file, or '' when there is none. */
+export const buildUiFontFaceCss = (file) => {
+  const dataUrl = String(file?.dataUrl ?? '');
+  if (!/^data:[\w.+/-]*;base64,[A-Za-z0-9+/=]+$/.test(dataUrl)) return '';
+  return `@font-face{font-family:"${UI_FONT_FILE_FAMILY}";src:url("${dataUrl}");font-display:swap;}`;
+};
+
+/* -------------------------------------------------------------------------- */
 /* Share codes                                                                */
 /* -------------------------------------------------------------------------- */
 
@@ -324,15 +374,22 @@ const CODE_PREFIX = 'RMTHEME1:';
  * @param {string} [name] - Optional human-readable theme name.
  * @returns {string} The share code.
  */
-export const encodeCustomThemeCode = (colors, name = '', applyToSite = false) => {
+export const encodeCustomThemeCode = (colors, name = '', applyToSite = false, uiFont = null) => {
   const palette = normalizeCustomTheme(colors);
+  const font = normalizeUiFont(uiFont);
   const payload = {
     v: CUSTOM_THEME_CODE_VERSION,
     n: String(name ?? '').trim().slice(0, 48),
     s: applyToSite ? 1 : 0,
     c: CUSTOM_THEME_TOKENS.map((token) => palette[token.key].slice(1)),
+    // Only fonts the receiver can resolve by name travel in the code; an uploaded
+    // file would make it far too long to paste.
+    f: (font.source === 'bundled' || font.source === 'system')
+      ? { k: font.source, n: font.family, s: font.applyToSite ? 1 : 0 }
+      : undefined,
   };
   if (!payload.n) { delete payload.n; }
+  if (!payload.f) { delete payload.f; }
   return CODE_PREFIX + encodeBase64(JSON.stringify(payload));
 };
 
@@ -375,8 +432,14 @@ export const decodeCustomThemeCode = (code) => {
     return null;
   }
 
+  const font = payload.f && typeof payload.f === 'object'
+    ? normalizeUiFont({ source: payload.f.k, family: payload.f.n, applyToSite: !!payload.f.s })
+    : null;
+
   return {
     colors,
+    // null when the code carries no font, so importing it leaves the current font alone.
+    uiFont: font && (font.source === 'bundled' || font.source === 'system') ? font : null,
     name: String(payload.n ?? payload.name ?? '').trim().slice(0, 48),
     // Absent in codes made before the wplace-UI tokens existed; default off so
     // an old code never unexpectedly repaints the whole site.
