@@ -5295,6 +5295,7 @@ readBootStorageValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   await waitForBody();
   initMobileLayout(); // Mirrors the mobile flag onto <html> before any UI is built
   observeStaleSelectionPins();
+  installCanvasTintFilter();
   await loadHiddenAllianceHqIds();
   observeHiddenAllianceHqMarkers();
   observeWplaceTheme();
@@ -5528,6 +5529,32 @@ function createZoomButtons() {
   };
 
   [0, 1, 2, 3, 4, 5, 10, 25].forEach( zoom => createZoomButton(zoom) );
+}
+
+/** Adds the hidden SVG filter overlay.css uses to recolour wplace's Paint-button charge counter.
+ *
+ * wplace draws those digits on a <canvas> with a hard-coded `#ffffff` fill, so no CSS colour
+ * reaches them. `filter: url(#rm-canvas-tint)` floods the canvas with `--color-primary-content`
+ * and keeps only the drawn pixels (their alpha, so the faded disabled state survives). The flood
+ * colour is a CSS property on <feFlood>, so it follows the active theme live.
+ */
+function installCanvasTintFilter() {
+  if (document.getElementById('rm-canvas-tint')) return;
+  const svgNs = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNs, 'svg');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden;pointer-events:none;';
+  const filter = document.createElementNS(svgNs, 'filter');
+  filter.id = 'rm-canvas-tint';
+  filter.setAttribute('color-interpolation-filters', 'sRGB');
+  const flood = document.createElementNS(svgNs, 'feFlood');
+  flood.style.floodColor = 'var(--color-primary-content, #ffffff)';
+  const composite = document.createElementNS(svgNs, 'feComposite');
+  composite.setAttribute('in2', 'SourceAlpha');
+  composite.setAttribute('operator', 'in');
+  filter.append(flood, composite);
+  svg.appendChild(filter);
+  document.body.appendChild(svg);
 }
 
 let staleSelectionPinObserver = null;

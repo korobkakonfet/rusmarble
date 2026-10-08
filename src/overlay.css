@@ -661,6 +661,15 @@ html[data-rm-theme="halloween"],
   --noise: 0;
 }
 
+/* wplace's Paint-button charge counter is drawn on a <canvas> in hard-coded white, so a skin or a
+ * custom theme that changes the button colours left it unreadable or off-palette. Tint it with the
+ * theme's primary text colour through the SVG filter main.js installs (installCanvasTintFilter).
+ * Only while RusMarble recolours wplace: a skin, or custom-theme tokens written inline on <html>. */
+html[data-rm-theme] .paint-button-balance canvas,
+html[style*="--color-primary-content"] .paint-button-balance canvas {
+  filter: url(#rm-canvas-tint);
+}
+
 /* Skins in wplace's pixel UI: most of that UI is painted from its own `--pixel-*` palette (neutral
  * buttons and their bevels, the bevel of primary buttons such as the big Paint button, wells,
  * titles, muted text), which a skin's `--color-*` tokens never reach. Derive it from them. The
