@@ -269,6 +269,36 @@ export const buildCustomThemeSiteVars = (colors) => {
     if (!token.siteVar) continue;
     vars.push([token.siteVar, customThemeColorToCss(palette[token.key])]);
   }
+  // wplace's pixel UI (`:root[data-game-ui]:not([data-standard-ui])`) paints most of itself from its
+  // own `--pixel-*` palette rather than daisyUI's tokens: neutral buttons, their bevels and frames,
+  // the bevel of primary buttons, wells, titles, muted text, the "soft" accent. Derive all of those
+  // from the tokens above so the theme reaches that UI too. The standard UI never reads them.
+  const mix = (a, pa, b) => `color-mix(in srgb, ${a} ${pa}%, ${b})`;
+  const base100 = 'var(--color-base-100)';
+  const base200 = 'var(--color-base-200)';
+  const base300 = 'var(--color-base-300)';
+  const content = 'var(--color-base-content)';
+  const primary = 'var(--color-primary)';
+  vars.push(
+    ['--pixel-page', base200],
+    ['--pixel-title', content],
+    ['--pixel-muted', mix(content, 68, base100)],
+    ['--pixel-placeholder', mix(content, 45, base100)],
+    ['--pixel-button', mix(base100, 82, content)],
+    ['--pixel-button-light', mix(base100, 62, content)],
+    ['--pixel-button-shade', mix(base100, 72, 'black')],
+    ['--pixel-button-frame', mix(content, 55, base100)],
+    ['--pixel-primary-light', mix(primary, 65, 'white')],
+    ['--pixel-primary-shade', mix(primary, 62, 'black')],
+    ['--pixel-soft', mix(primary, 25, base100)],
+    ['--pixel-soft-ink', mix(primary, 70, content)],
+    ['--pixel-soft-frame', primary],
+    ['--pixel-soft-light', mix(primary, 15, base100)],
+    ['--pixel-soft-shade', mix(primary, 40, base300)],
+    ['--pixel-well', base300],
+    ['--pixel-well-shade', mix(base300, 78, 'black')],
+    ['--pixel-field-shade', mix(base300, 88, 'black')],
+  );
   return vars;
 };
 
