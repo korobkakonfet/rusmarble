@@ -839,6 +839,24 @@ export const themeList = {
   "halloween": ["Fiord (Halloween)", "dark", "halloween"],
 };
 
+/** Layout themes that also restyle wplace's own UI with the skin of the same name. */
+const LAYOUT_THEME_SKINS = { halloween: 'halloween' };
+
+/** Sets `data-rm-theme` (the wplace skin overlay.css keys on) from the two places that can ask
+ * for one: the map theme (setTheme, recorded in `data-rm-map-skin`) and RusMarble's layout theme
+ * (`data-layout-theme` on #bm-overlay). The map theme's skin wins when both are set.
+ */
+export function syncSiteSkin() {
+  const root = document.documentElement;
+  const layoutTheme = document.getElementById('bm-overlay')?.dataset?.layoutTheme ?? '';
+  const skin = root.dataset["rmMapSkin"] || LAYOUT_THEME_SKINS[layoutTheme] || '';
+  if (skin) {
+    if (root.dataset["rmTheme"] !== skin) root.dataset["rmTheme"] = skin;
+  } else if (root.dataset["rmTheme"] !== undefined) {
+    delete root.dataset["rmTheme"];
+  }
+}
+
 /** Override the map theme
  * @since 0.85.40
  */
@@ -848,10 +866,11 @@ export function setTheme(themeName) {
   const skin = themeList[themeName][2];
   document.documentElement.dataset["theme"] = dataTheme;
   if (skin) {
-    document.documentElement.dataset["rmTheme"] = skin;
+    document.documentElement.dataset["rmMapSkin"] = skin;
   } else {
-    delete document.documentElement.dataset["rmTheme"];
+    delete document.documentElement.dataset["rmMapSkin"];
   }
+  syncSiteSkin();
   return controlMapTiler((map, themeName, bmCanvas) => {
     document.head["__bmCanvas"] = bmCanvas; // sync bmCanvas to document
     // The default pixel-hover styledata callback only triggers once that we cannot reset
