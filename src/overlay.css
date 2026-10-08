@@ -761,18 +761,22 @@ div#bm-overlay {
 :root:root:root[data-rm-ui-font] :is(button, select, h1, h2, h3, h4, h5, h6):is([id^="bm-"], [class^="bm-"], [class*=" bm-"]) {
   font-family: var(--rm-ui-font);
 }
-/* "Use in the wplace UI too": both wplace UIs. wplace draws almost all text with `--font-sans`, but
- * redefines it at several levels: `:root[data-standard-ui]` / `:root[data-pixel-fonts=false]`
- * (Geist, more specific than a plain root rule) and wrappers like `.font-readable` inside dialogs
- * (store, leaderboard). Setting it with `!important` on every element beats all of those, in both
- * UIs. Flags keep their emoji font: `.font-flag` lists "Noto Color Emoji" before the variable.
- * The pixel UI also sets the font on body and controls directly, so those are overridden too. */
+/* "Use in the wplace UI too": both wplace UIs. wplace mostly draws text through `--font-sans` /
+ * `--font-mono`, but redefines them at several levels (`:root[data-standard-ui]`, `.font-readable`
+ * wrappers in dialogs) and some parts name fonts directly (toasts, `font-[...]` utilities, Svelte
+ * component styles). So: force the variables everywhere, and set the font on every wplace element.
+ * Kept as they are: flags (`.font-flag`, emoji font), SVG icons, and RusMarble's own elements, which
+ * follow the rules above. Canvas-drawn text (the charge bar in the Paint button) and map labels
+ * (WebGL) are images, not text, and cannot be reached by CSS. */
 html[data-rm-site-font],
 html[data-rm-site-font] * {
   --font-sans: var(--rm-ui-font) !important;
+  --font-mono: var(--rm-ui-font) !important;
+  --default-font-family: var(--rm-ui-font) !important;
+  --default-mono-font-family: var(--rm-ui-font) !important;
 }
 html[data-rm-site-font] body,
-html[data-rm-site-font] body :is(button, .btn, .game-button, .tab, .badge, select, input, textarea, h1, h2, h3, h4, h5, h6) {
+html[data-rm-site-font] body *:not(.font-flag, svg, svg *, [id^="bm-"], [id^="bm-"] *, [class^="bm-"], [class^="bm-"] *, [class*=" bm-"], [class*=" bm-"] *) {
   font-family: var(--rm-ui-font) !important;
 }
 
