@@ -696,11 +696,10 @@ html[data-rm-theme="halloween"] .bg-base-content\/10 {
   text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
 }
 
-/* wplace's pixel UI (Oct 2026) paints `.btn` and `.game-panel-surface` with a layered `background`
- * shorthand from a higher-specificity selector. On the alliance chip that replaced the tricolour
- * our transparent text shows through, so "Ruspixel" became invisible; on the card it hid the flag
- * background. Re-assert both over it (the text rule in either UI: daisyUI's `.btn` sets a
- * background-image of its own too). */
+/* wplace's pixel UI (Oct 2026) paints `.game-panel-surface` with a layered `background` shorthand
+ * from a higher-specificity selector, which hid the flag background on the card. Re-assert it. The
+ * alliance name itself is styled on a span inside the button (see apiManager), so the button keeps
+ * wplace's own look; the `!important` here only guards that span against inherited overrides. */
 :root .bm-ruspixel-flag-text.bm-ruspixel-flag-text {
   background: linear-gradient(90deg, #f0f0f0 0%, #f0f0f0 33.33%, #0039a6 33.33%, #0039a6 66.66%, #d52b1e 66.66%, #d52b1e 100%) !important;
   -webkit-background-clip: text !important;
