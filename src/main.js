@@ -56,7 +56,7 @@ const hostContext = {
 };
 import { layoutLanguageOptions, normalizeLayoutLanguage, translateLayout, getLayoutThemeLabel as getLocalizedLayoutThemeLabel, getTemplateDisplayLabel as getLocalizedTemplateDisplayLabel, getTemplateCreateModeLabel, getChatBanTypeLabel, getColorSortLabel } from './layoutI18n.js';
 import { encodeChunkSampleBytes } from './templateChunkUtils.js';
-import { consoleLog, consoleWarn, consoleError, isDebugLoggingEnabled, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels, initMobileLayout, isMobileLayout, makePanelDraggable, registerFloatingPanel, findPaintPanelHeading, insertIntoPaintPanelToolbar } from './utils.js';
+import { consoleLog, consoleWarn, consoleError, isDebugLoggingEnabled, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels, initMobileLayout, isMobileLayout, makePanelDraggable, registerFloatingPanel, findPaintPanelHeading, insertIntoPaintPanelToolbar, applyWidePalette } from './utils.js';
 import { getCenterGeoCoords, getPixelPerWplacePixel, isMapMoving, getMapBounds, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getZoom, getCurrentTileSize, getMountedTemplateCanvasSourceIDs, setForcedTileRefreshSuppressed, applyArchiveBgLayerToMap, getArchiveBgDiag, loadArchiveTile, setTemplateSortIDLayersOpacity, registerBmCanvasRestoreOnStyleChange, projectGeoToScreen, unprojectScreenToGeo, getMapCanvasElement, findMapHandleButton} from './utilsMaptiler.js';
 import { buildFontFaceCss } from './fonts.js';
 // import { getCenterGeoCoords, addTemplate } from './utilsMaptiler.js';
@@ -138,6 +138,8 @@ function getPaletteShiftPanel(anchor) {
   for (let depth = 0; depth < 12 && node instanceof HTMLElement; depth++, node = node.parentElement) {
     const rect = node.getBoundingClientRect();
     if (!rect.width || !rect.height) continue;
+    // Oct 2026 UI: the paint panel is a floating card that need not sit flush with the bottom.
+    if (node.classList.contains('game-paint-panel')) return node;
     // Bottom-anchored: the sheet sits flush with the bottom edge of the viewport.
     if (rect.bottom < viewportHeight - 4) continue;
     if (rect.height > viewportHeight * PALETTE_PANEL_MAX_VIEWPORT_RATIO) continue;
@@ -5123,6 +5125,7 @@ readBootStorageValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   setMapCommentsEnabled(templateManager.isMapCommentsEnabled());
   ensureHqTemplateManager();
   if (templateManager.isArchiveBackgroundEnabled()) applyArchiveBackground(true);
+  applyWidePalette(templateManager.isWidePaletteEnabled());
 
   // load templates after user settings
   let storageTemplates;
@@ -5387,7 +5390,9 @@ let staleSelectionPinObserver = null;
 function observeStaleSelectionPins() {
   if (staleSelectionPinObserver) return;
   const PIN_SELECTOR = '.maplibregl-marker.z-20[role="button"]';
-  const INFO_WINDOW_SELECTOR = '.absolute.bottom-0.left-0.z-30.w-full';
+  // Oct 2026 UI: the bottom sheet became floating cards — `.selected-pixel` for pixel info,
+  // `.game-paint-panel` while painting. Without them every pin was removed on sight.
+  const INFO_WINDOW_SELECTOR = '.absolute.bottom-0.left-0.z-30.w-full, .selected-pixel, .game-paint-panel';
   const prune = () => {
     const pins = Array.from(document.querySelectorAll(PIN_SELECTOR));
     if (pins.length === 0) return;
@@ -5557,6 +5562,23 @@ function observeBlack() {
         move.textContent = 'Move Up';
         move.className = 'btn btn-soft';
         move.onclick = function() {
+          // Oct 2026 UI: the paint panel is a floating card positioned by wplace's CSS, so there
+          // is no `bottom-*` class to swap; pin it to the top with inline styles instead.
+          const floatingPanel = this.closest('.game-paint-panel');
+          if (floatingPanel) {
+            const shouldMoveUp = !floatingPanel.dataset.bmMovedUp;
+            if (shouldMoveUp) {
+              floatingPanel.dataset.bmMovedUp = '1';
+              floatingPanel.style.setProperty('top', '0', 'important');
+              floatingPanel.style.setProperty('bottom', 'auto', 'important');
+            } else {
+              delete floatingPanel.dataset.bmMovedUp;
+              floatingPanel.style.removeProperty('top');
+              floatingPanel.style.removeProperty('bottom');
+            }
+            this.textContent = shouldMoveUp ? 'Move Down' : 'Move Up';
+            return;
+          }
           const roundedBox = this.parentNode.parentNode.parentNode.parentNode; // Obtains the rounded box
           const shouldMoveUp = (this.textContent === 'Move Up');
           roundedBox.parentNode.className = roundedBox.parentNode.className.replace(shouldMoveUp ? 'bottom' : 'top', shouldMoveUp ? 'top' : 'bottom'); // Moves the rounded box to the top
@@ -5926,7 +5948,7 @@ function getPaintPaletteRoot() {
     .filter((heading) => isElementActuallyVisible(heading))
     .filter((heading) => getNormalizedElementText(heading).startsWith('paint pixel'));
   for (const heading of headings) {
-    const root = heading.closest('.rounded-t-box');
+    const root = heading.closest('.game-paint-panel, .rounded-t-box');
     if (root instanceof HTMLElement && isElementActuallyVisible(root)) {
       return root;
     }
@@ -5964,7 +5986,7 @@ function getPaintPaletteRootFromSwatches() {
     if (node.querySelector('div.relative.h-12')) break;
   }
   if (!candidate) return null;
-  return candidate.closest('.rounded-t-box') ?? candidate;
+  return candidate.closest('.game-paint-panel, .rounded-t-box') ?? candidate;
 }
 
 function isExtendedPaintPaletteOpen(root = getPaintPaletteRoot()) {
@@ -5978,6 +6000,9 @@ function isExtendedPaintPaletteOpen(root = getPaintPaletteRoot()) {
 
 function getPaintPaletteExpandButton(root = getPaintPaletteRoot()) {
   if (!(root instanceof HTMLElement)) return null;
+  // Oct 2026 UI: a labelled expand/collapse toggle in `.paint-actions`.
+  const paletteToggle = root.querySelector('.paint-actions button[aria-expanded="false"][aria-label*="palette" i]');
+  if (paletteToggle instanceof HTMLButtonElement && !paletteToggle.disabled) return paletteToggle;
   const footerRow = Array.from(root.querySelectorAll('div.relative.h-12'))
     .find((row) => row instanceof HTMLElement && isElementActuallyVisible(row));
   if (!(footerRow instanceof HTMLElement)) return null;
@@ -6027,12 +6052,12 @@ function closePixelInfoWindows() {
   } catch (_) {}
 
   const directCloseCandidates = Array.from(document.querySelectorAll(
-    '.rounded-t-box button[aria-label="Close"], dialog.modal button[aria-label="Close"], dialog button[aria-label="Close"], .modal button[aria-label="Close"]'
+    '.selected-pixel button[aria-label="Close"], .rounded-t-box button[aria-label="Close"], dialog.modal button[aria-label="Close"], dialog button[aria-label="Close"], .modal button[aria-label="Close"]'
   ))
     .filter((button) => button instanceof HTMLElement)
     .filter((button) => isElementActuallyVisible(button))
     .map((button) => {
-      const container = button.closest('.rounded-t-box, dialog.modal, dialog, .modal');
+      const container = button.closest('.selected-pixel, .rounded-t-box, dialog.modal, dialog, .modal');
       const text = getNormalizedElementText(container);
       let score = scoreCloseLikeControl(button);
       if (container && isElementActuallyVisible(container)) score += 4;

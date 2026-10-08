@@ -96,7 +96,9 @@ while IFS= read -r legacy; do
   [[ "$legacy" == "$PUBLIC_PATH" ]] || ALL_PATHS="$ALL_PATHS $legacy"
 done <<<"$LEGACY_PATHS"
 
-ssh "$HOST" bash -s -- "$STATIC_DIR" "$NGINX_SITE" "$ALL_PATHS" <<'REMOTE'
+# ssh flattens its arguments into one command line for the remote shell, so the
+# space-separated path list must be re-quoted or only the first path survives.
+ssh "$HOST" bash -s -- "$(printf '%q %q %q' "$STATIC_DIR" "$NGINX_SITE" "$ALL_PATHS")" <<'REMOTE'
 set -euo pipefail
 
 STATIC_DIR="$1"
