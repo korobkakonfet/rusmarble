@@ -17,7 +17,7 @@ import { createMapCommentManager } from './mapComments.js';
 import { createHqTemplateManager } from './hqTemplate.js';
 import { createTemplateCreationUi } from './templateCreationUi.js';
 import { createArchiveTemplateUi } from './archiveTemplateUi.js';
-import { CUSTOM_LAYOUT_THEME, CUSTOM_THEME_DRAG_BG_VAR, buildCustomThemeCssVars, buildCustomThemeSiteVars, customThemeColorToCss, getDefaultCustomTheme, normalizeUiFont, buildUiFontFamily, buildUiFontFaceCss, UI_FONT_FILE_STORAGE_KEY } from './customTheme.js';
+import { CUSTOM_LAYOUT_THEME, CUSTOM_THEME_DRAG_BG_VAR, CUSTOM_THEME_TOKENS, normalizeCustomThemeColor, buildCustomThemeCssVars, buildCustomThemeSiteVars, customThemeColorToCss, getDefaultCustomTheme, normalizeUiFont, buildUiFontFamily, buildUiFontFaceCss, UI_FONT_FILE_STORAGE_KEY } from './customTheme.js';
 import { createCustomThemeUi } from './customThemeUi.js';
 import { initOverlayDodge } from './overlayDodge.js';
 // Extension points. No-ops in this build; see src/extensionPoints.js.
@@ -1768,6 +1768,71 @@ const applyLayoutTheme = (value) => {
   }
   applyCustomThemeVars(nextTheme);
   document.dispatchEvent(new CustomEvent('bm-layout-theme-changed', { detail: { layoutTheme: nextTheme } }));
+};
+
+/** Reads a built-in layout theme's palette out of the live stylesheet, as custom-theme tokens.
+ *
+ * Built-in themes are `#bm-overlay[data-layout-theme="x"]` blocks layered over the base
+ * `#bm-overlay` rule (and the same for `#bm-notification-container`), so the palette is the base
+ * values overridden by the theme's own. Reading the CSSOM rather than duplicating the colours here
+ * keeps the editor's "Start from" in sync with overlay.css. The selector and `--bm-*` literals are
+ * rewritten by the CSS mangler together with the stylesheet, so they still match after mangling.
+ *
+ * @param {string} theme - A layout theme key other than `custom`.
+ * @returns {Record<string, string>} Token key -> `#rrggbbaa`, only for tokens the theme defines.
+ */
+const getBuiltInThemePalette = (theme) => {
+  const targets = [
+    { base: '#bm-overlay', themed: `#bm-overlay[data-layout-theme="${theme}"]` },
+    { base: '#bm-notification-container', themed: `#bm-notification-container[data-layout-theme="${theme}"]` },
+  ];
+  const values = new Map();
+  for (const target of targets) {
+    for (const wanted of [target.base, target.themed]) {
+      for (const sheet of Array.from(document.styleSheets)) {
+        let rules;
+        try { rules = sheet.cssRules; } catch (_) { continue; } // cross-origin sheet
+        for (const rule of Array.from(rules || [])) {
+          if (!rule.selectorText || !rule.style) continue;
+          const selectors = rule.selectorText.split(',').map((part) => part.trim().replace(/'/g, '"'));
+          if (!selectors.includes(wanted)) continue;
+          for (let i = 0; i < rule.style.length; i++) {
+            const name = rule.style[i];
+            if (name.startsWith('--')) values.set(name, rule.style.getPropertyValue(name).trim());
+          }
+        }
+      }
+    }
+  }
+  // Named colours ("lightgray") aren't understood by the token parser; let the browser resolve them.
+  const probe = document.createElement('span');
+  const resolveColor = (raw, fallback) => {
+    const direct = normalizeCustomThemeColor(raw, '');
+    if (direct) return direct;
+    probe.style.color = '';
+    probe.style.color = raw;
+    if (!probe.style.color) return fallback;
+    document.body.appendChild(probe);
+    const computed = getComputedStyle(probe).color;
+    probe.remove();
+    return normalizeCustomThemeColor(computed, fallback);
+  };
+  const palette = {};
+  for (const token of CUSTOM_THEME_TOKENS) {
+    if (!token.cssVar) continue;
+    const raw = values.get(token.cssVar);
+    if (!raw) continue;
+    const color = resolveColor(raw, '');
+    if (color) palette[token.key] = color;
+  }
+  // The drag handle dots are composed into `--bm-drag-bg`; take the gradient's first colour.
+  const dragBg = values.get(CUSTOM_THEME_DRAG_BG_VAR) || '';
+  const dot = dragBg.match(/(rgba?\([^)]*\)|#[0-9a-f]{3,8}\b)/i);
+  if (dot) {
+    const color = resolveColor(dot[1], '');
+    if (color) palette['drag-dot'] = color;
+  }
+  return palette;
 };
 
 /** The uploaded UI font file (`{name, dataUrl}`), read from GM storage once. */
@@ -4857,6 +4922,10 @@ const { openCustomThemeEditor } = createCustomThemeUi({
     await templateManager?.setCustomThemeApplyToSite?.(applyToSite);
     applyLayoutTheme(CUSTOM_LAYOUT_THEME);
   },
+  getBaseThemes: () => Object.keys(layoutThemeOptions)
+    .filter((key) => key !== CUSTOM_LAYOUT_THEME)
+    .map((key) => ({ value: key, label: getLayoutThemeLabel(key) })),
+  getBuiltInThemePalette,
   getUiFont: () => normalizeUiFont(templateManager?.getUiFont?.()),
   loadUiFontFile,
   previewUiFont: (font, file) => applyUiFont(font, file),
