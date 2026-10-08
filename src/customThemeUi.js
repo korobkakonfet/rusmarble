@@ -168,6 +168,8 @@ export const createCustomThemeUi = (deps = {}) => {
       fontSelectRow.style.cssText = fontRowStyle;
       const fontSelect = document.createElement('select');
       fontSelect.id = 'rm-ui-font-select';
+      // Existing class: themes the option list (it rendered light text on a white popup).
+      fontSelect.className = 'bm-text-template-window-select';
       fontSelect.style.cssText = 'flex:1;min-width:0;';
       const addFontOption = (value, label) => {
         const option = document.createElement('option');
