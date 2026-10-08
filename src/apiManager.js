@@ -293,7 +293,10 @@ export default class ApiManager {
     Button Class List: btn btn-sm btn-primary btn-soft
     */
 
+    // Oct 2026 UI: the panel is a floating `.game-panel-surface` card holding `.selected-pixel`,
+    // with no `.rounded-t-box`/dialog around it and a `btn-square` (not `btn-circle`) close button.
     const selectors = [
+      '.selected-pixel button[aria-label="Close"]',
       '.rounded-t-box button[aria-label="Close"]',
       'dialog.modal button[aria-label="Close"]',
       'dialog button[aria-label="Close"]',
@@ -349,6 +352,8 @@ export default class ApiManager {
    */
   getPixelInfoRoot(closeButton = this.getCloseButton()) {
     if (!closeButton) return null;
+    const selectedPixel = closeButton.closest('.selected-pixel');
+    if (selectedPixel) return selectedPixel.closest('.game-panel-surface') || selectedPixel;
     const roundedBox = closeButton.closest('.rounded-t-box');
     if (roundedBox) return roundedBox;
     const dialog = closeButton.closest('dialog.modal, dialog');
@@ -507,6 +512,11 @@ export default class ApiManager {
       displayCoordsContainer.id = 'bm-display-coords-container';
       displayCoordsContainer.style = 'width: 100%; margin: 4px 0 2px; padding: 0 12px; box-sizing: border-box; line-height: 1.15; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; text-align: left;';
       coordRow.insertAdjacentElement('beforebegin', displayCoordsContainer);
+      // The new card's location row sits in an already-padded column next to the avatar.
+      if (coordRow.closest('.selected-pixel')) {
+        displayCoordsContainer.style.padding = '0';
+        displayCoordsContainer.style.margin = '6px 0 0';
+      }
     } else if (displayCoordsContainer.nextElementSibling !== coordRow) {
       coordRow.insertAdjacentElement('beforebegin', displayCoordsContainer);
     }
@@ -576,6 +586,7 @@ export default class ApiManager {
     const closeButton = this.getCloseButton();
     const infoRoot = this.getPixelInfoRoot(closeButton);
     const infoCard =
+      closeButton?.closest('.selected-pixel')?.closest('.game-panel-surface') ||
       closeButton?.closest('.rounded-t-box') ||
       infoRoot?.querySelector('.rounded-t-box') ||
       infoRoot;
@@ -592,9 +603,10 @@ export default class ApiManager {
     if (!closeButton) return;
     if (!infoRoot) return;
     if (!infoCard) return;
-    const allianceButton = Array.from(infoRoot.querySelectorAll('button'))
+    // The new card shows the alliance as a plain chip `<div>` rather than a `.btn`.
+    const allianceButton = Array.from(infoRoot.querySelectorAll('button, .selected-pixel div.h-6'))
       .find(button => {
-        if (!button.classList.contains('btn')) return false;
+        if (button.tagName === 'BUTTON' && !button.classList.contains('btn')) return false;
         if (button.classList.contains('btn-circle')) return false;
         const possibleText = [
           button.textContent || '',

@@ -2864,3 +2864,55 @@ span.bm-templatename:hover, a.bm-templatename:focus {
     display: none !important;
   }
 }
+
+/* Legacy palette (Oct 2026 UI): wplace now draws large square swatches. Restore the old look in
+ * both the standard and the pixel UI — short, wide rectangles, 32 per row on desktop.
+ * Gated on `data-rm-wide-palette` (settings: "Legacy wide paint palette", on by default). */
+:root[data-game-ui][data-rm-wide-palette] .game-paint-panel .paint-palette {
+  gap: 4px !important;
+  grid-auto-rows: auto !important;
+  align-content: start !important;
+}
+/* The grid cell may be a wrapper around the swatch that keeps the square aspect on its own. */
+:root[data-game-ui][data-rm-wide-palette] .game-paint-panel .paint-palette > *,
+:root[data-game-ui][data-rm-wide-palette] .game-paint-panel .paint-palette .game-color-swatch {
+  aspect-ratio: auto !important;
+  height: auto !important;
+  min-height: 0 !important;
+}
+:root[data-game-ui][data-rm-wide-palette] .game-paint-panel .paint-palette .game-color-swatch {
+  width: 100% !important;
+  height: 32px !important;
+  padding: 0 !important;
+  border-radius: 4px !important;
+}
+/* The taller swatches add 2 × 8px; take it back from the shell's py-3 so the panel keeps its height. */
+:root[data-game-ui][data-rm-wide-palette] .game-paint-panel .paint-panel-shell {
+  padding-top: 4px !important;
+  padding-bottom: 4px !important;
+}
+/* Only the expanded grid: the collapsed palette is a single scrolling row (grid-auto-flow: column). */
+@media (min-width: 768px) {
+  :root[data-game-ui][data-rm-wide-palette] .game-paint-panel [data-palette-expanded]:not([data-palette-expanded="false"]) .paint-palette {
+    grid-template-columns: repeat(32, minmax(0, 1fr)) !important;
+  }
+}
+
+/* Legacy-size paint panel. The Oct 2026 UI floats it as a centred card (700px, 1380px with the
+ * palette expanded) 18px above the bottom edge; restore the old full-width bottom sheet. */
+:root[data-game-ui][data-rm-wide-palette] .game-floating-panel.game-paint-panel {
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  width: 100% !important;
+  max-width: none !important;
+  margin-inline: 0 !important;
+}
+:root[data-game-ui][data-rm-wide-palette] .game-paint-panel:is(.game-panel-surface),
+:root[data-game-ui][data-rm-wide-palette] .game-paint-panel .game-panel-surface {
+  border-bottom-left-radius: 0 !important;
+  border-bottom-right-radius: 0 !important;
+}
+:root[data-game-ui] .game-paint-panel .paint-toolbar > .paint-tools {
+  flex-shrink: 0;
+}

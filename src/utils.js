@@ -1004,9 +1004,37 @@ export function findPaintPanelHeading(swatch) {
  * @param {Element|null|undefined} heading - The paint panel heading from findPaintPanelHeading().
  * @param {...Element} elements - Controls to insert, in the order they should appear.
  */
+/** Turns the legacy wide paint palette styling in overlay.css on or off; it is keyed on
+ * `data-rm-wide-palette` on <html>.
+ * @param {boolean} enabled
+ */
+export function applyWidePalette(enabled) {
+  document.documentElement.toggleAttribute('data-rm-wide-palette', !!enabled);
+}
+
 export function insertIntoPaintPanelToolbar(heading, ...elements) {
   const row = heading?.parentNode;
   if (!row) return;
+  // wplace's pixel UI (Oct 2026) made the title row a non-wrapping `.paint-toolbar` with no
+  // `ml-auto` child: appending there overflowed the panel and crushed wplace's own `.paint-tools`
+  // (min-w-0) to nothing. Our controls get a shrinkable, wrapping group right after the heading,
+  // so on the full-width legacy panel they share the title line instead of adding a row.
+  if (row.classList?.contains('paint-toolbar')) {
+    let extra = heading.nextElementSibling;
+    if (extra?.id !== 'rm-paint-toolbar-extra') {
+      extra = document.createElement('div');
+      extra.id = 'rm-paint-toolbar-extra';
+      extra.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:4px;flex:1 1 0;min-width:0;margin-inline:8px;';
+      heading.after(extra);
+    }
+    for (const element of elements) {
+      element.style.whiteSpace = 'nowrap';
+      element.style.flexShrink = '0';
+      if (element.classList.contains('btn')) element.classList.add('btn-sm');
+      extra.appendChild(element);
+    }
+    return;
+  }
   const anchor = Array.from(row.children).find(
     (child) => /(?:^|[\s:])ml-auto(?:\s|$)/.test(child.className || '')
   ) ?? null;

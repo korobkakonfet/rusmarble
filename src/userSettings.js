@@ -1,4 +1,5 @@
 import { CUSTOM_LAYOUT_THEME } from './customTheme.js';
+import { applyWidePalette } from './utils.js';
 
 /**
  * Builds the User Settings section of the overlay.
@@ -287,6 +288,13 @@ export function buildUserSettingsSection({
             } else {
               instance.handleDisplayStatus("Progress Bar Disabled.");
             }
+          });
+        }).buildElement()
+        .addCheckbox({'id': 'rm-wide-palette-enabled', 'textContent': t('settings.widePalette'), 'checked': templateManager.isWidePaletteEnabled()}, (instance, label, checkbox) => {
+          checkbox.addEventListener('change', async () => {
+            await templateManager.setWidePaletteEnabled(checkbox.checked);
+            applyWidePalette(checkbox.checked);
+            instance.handleDisplayStatus(checkbox.checked ? 'Wide palette enabled.' : 'Wide palette disabled.');
           });
         }).buildElement()
         .addCheckbox({'id': 'bm-archive-background-enabled', 'textContent': 'Show latest archive as background', 'checked': templateManager.isArchiveBackgroundEnabled()}, (instance, label, checkbox) => {

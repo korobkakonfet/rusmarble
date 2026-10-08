@@ -3601,6 +3601,21 @@ export default class TemplateManager {
     await this.storeUserSettings();
   }
 
+  /** Whether wplace's paint panel is restyled to the legacy full-width sheet with rectangular swatches.
+   * @returns {boolean}
+   */
+  isWidePaletteEnabled() {
+    return this.userSettings?.widePalette ?? true;
+  }
+
+  /** Sets the widePalette setting.
+   * @param {boolean} value - The value
+   */
+  async setWidePaletteEnabled(value) {
+    this.userSettings.widePalette = value;
+    await this.storeUserSettings();
+  }
+
   /** A utility to check whether the hidden alliance HQ markers are being hidden.
    * @returns {boolean}
    * @since 0.90.3
