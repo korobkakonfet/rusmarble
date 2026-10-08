@@ -34,6 +34,8 @@ const FONT_FILE_TYPES = { ttf: 'font/ttf', otf: 'font/otf', woff: 'font/woff', w
  * @param {Function} deps.getCustomTheme Returns the stored palette.
  * @param {Function} deps.getCustomThemeApplyToSite Returns whether wplace's own UI is restyled.
  * @param {Function} deps.saveCustomTheme Persists a palette and the site flag (async).
+ * @param {Function} deps.getBaseThemes Returns the built-in themes as `[{value, label}]`.
+ * @param {Function} deps.getBuiltInThemePalette Returns a built-in theme's colours as token values.
  * @param {Function} deps.getUiFont Returns the stored UI font choice.
  * @param {Function} deps.loadUiFontFile Resolves to the stored uploaded font file, or null.
  * @param {Function} deps.previewUiFont Applies a font choice live, without persisting it.
@@ -49,6 +51,8 @@ export const createCustomThemeUi = (deps = {}) => {
     getCustomTheme,
     getCustomThemeApplyToSite,
     saveCustomTheme,
+    getBaseThemes,
+    getBuiltInThemePalette,
     getUiFont,
     loadUiFontFile,
     previewUiFont,
@@ -142,6 +146,59 @@ export const createCustomThemeUi = (deps = {}) => {
 
       const scroll = document.createElement('div');
       scroll.className = 'bm-custom-theme-scroll';
+
+      /* ---- base theme ------------------------------------------------------ */
+      // Loads a built-in theme's colours into the editor as a starting point. Only the RusMarble
+      // tokens a theme defines are replaced; the wplace-UI tokens are left as they are, since the
+      // built-in themes do not repaint wplace. Nothing is stored until Save; Cancel restores.
+
+      const baseThemes = getBaseThemes?.() ?? [];
+      if (baseThemes.length && getBuiltInThemePalette) {
+        const baseSection = document.createElement('div');
+        baseSection.className = 'bm-custom-theme-group';
+        const baseTitle = document.createElement('div');
+        baseTitle.className = 'bm-custom-theme-group-title';
+        baseTitle.textContent = tt('customTheme.base.title', 'Start from');
+        baseSection.appendChild(baseTitle);
+
+        const baseRow = document.createElement('div');
+        baseRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin:4px 0;font-size:0.78rem;';
+        const baseSelect = document.createElement('select');
+        baseSelect.id = 'rm-base-theme-select';
+        baseSelect.className = 'bm-text-template-window-select';
+        baseSelect.style.cssText = 'flex:1;min-width:0;';
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = tt('customTheme.base.placeholder', 'Pick a theme to copy its colours…');
+        baseSelect.appendChild(placeholder);
+        for (const { value, label } of baseThemes) {
+          const option = document.createElement('option');
+          option.value = value;
+          option.textContent = label;
+          baseSelect.appendChild(option);
+        }
+        baseRow.appendChild(baseSelect);
+        baseSection.appendChild(baseRow);
+
+        baseSelect.addEventListener('change', () => {
+          const theme = baseSelect.value;
+          if (!theme) return;
+          const palette = getBuiltInThemePalette(theme);
+          const label = baseSelect.selectedOptions[0]?.textContent || theme;
+          baseSelect.value = '';
+          if (!palette || !Object.keys(palette).length) {
+            setStatus(tt('customTheme.base.failed', 'Could not read that theme.'), true);
+            return;
+          }
+          working = { ...working, ...palette };
+          cancelPendingPreview();
+          syncRows();
+          preview();
+          setStatus(tt('customTheme.base.loaded', 'Loaded {name}. Adjust it, then press Save.').replace('{name}', label));
+        });
+
+        scroll.appendChild(baseSection);
+      }
 
       /* ---- font ------------------------------------------------------------ */
       // New elements use `rm-` ids and inline styles rather than new `bm-` classes: the CSS
