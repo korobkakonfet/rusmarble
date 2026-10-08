@@ -696,6 +696,36 @@ html[data-rm-theme="halloween"] .bg-base-content\/10 {
   text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
 }
 
+/* wplace's pixel UI (Oct 2026) paints `.btn` and `.game-panel-surface` with a layered `background`
+ * shorthand from a higher-specificity selector. On the alliance chip that replaced the tricolour
+ * our transparent text shows through, so "Ruspixel" became invisible; on the card it hid the flag
+ * background. Re-assert both over it (the text rule in either UI: daisyUI's `.btn` sets a
+ * background-image of its own too). */
+:root .bm-ruspixel-flag-text.bm-ruspixel-flag-text {
+  background: linear-gradient(90deg, #f0f0f0 0%, #f0f0f0 33.33%, #0039a6 33.33%, #0039a6 66.66%, #d52b1e 66.66%, #d52b1e 100%) !important;
+  -webkit-background-clip: text !important;
+  background-clip: text !important;
+  color: transparent !important;
+}
+:root[data-game-ui] .game-panel-surface.bm-ruspixel-flag {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9) 0% 33.33%, rgba(0, 57, 166, 0.24) 33.33% 66.66%, rgba(213, 43, 30, 0.24) 66.66% 100%),
+    linear-gradient(0deg, rgba(255, 255, 255, 0.975), rgba(255, 255, 255, 0.975)) !important;
+  background-clip: padding-box !important;
+}
+:root[data-game-ui]:not([data-standard-ui]) .game-panel-surface.bm-ruspixel-flag {
+  /* The pixel UI draws its frame with background layers over a transparent border; we just
+   * replaced those layers, so give the border the frame colour instead. */
+  border-color: var(--pixel-ink) !important;
+}
+:root[data-game-ui][data-theme="dark"] .game-panel-surface.bm-ruspixel-flag,
+:root[data-game-ui][data-rm-theme="halloween"] .game-panel-surface.bm-ruspixel-flag {
+  background:
+    linear-gradient(180deg, rgba(240, 245, 255, 0.12) 0% 33.33%, rgba(0, 57, 166, 0.28) 33.33% 66.66%, rgba(213, 43, 30, 0.28) 66.66% 100%),
+    linear-gradient(0deg, rgba(14, 19, 29, 0.94), rgba(14, 19, 29, 0.94)) !important;
+  background-clip: padding-box !important;
+}
+
 /* Smooth transitions for minimize/maximize functionality */
 #bm-contain-userinfo,
 #bm-overlay hr,
@@ -2884,6 +2914,10 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   width: 100% !important;
   height: 32px !important;
   padding: 0 !important;
+}
+/* The standard UI rounds swatches fully, which turns the short rectangles into pills. The pixel
+ * UI keeps its own square-cornered swatches. */
+:root[data-game-ui][data-standard-ui][data-rm-wide-palette] .game-paint-panel .paint-palette .game-color-swatch {
   border-radius: 4px !important;
 }
 /* The taller swatches add 2 × 8px; take it back from the shell's py-3 so the panel keeps its height. */
