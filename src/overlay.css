@@ -535,30 +535,10 @@
   z-index: 0;
 }
 
-#bm-overlay::after,
-#bm-contain-chat.bm-chat-floating::after,
-#bm-chat-bans-window::after,
-#bm-text-template-window::after,
-#bm-flag-template-window::after,
-#bm-remote-template-window::after,
-.bm-template-position-joystick::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  pointer-events: none;
-  background:
-    linear-gradient(118deg, transparent 18%, rgba(255, 255, 255, 0.06) 34%, rgba(255, 255, 255, 0.36) 46%, rgba(255, 255, 255, 0.14) 55%, transparent 70%),
-    radial-gradient(circle at 14% 16%, rgba(255, 255, 255, 0.22), transparent 28%),
-    radial-gradient(circle at 82% 6%, rgba(146, 213, 255, 0.2), transparent 20%);
-  background-size: 240% 240%, 150% 150%, 140% 140%;
-  background-position: -120% 10%, 0% 0%, 100% 0%;
-  opacity: var(--bm-glass-sheen-opacity);
-  filter: blur(var(--bm-glass-sheen-blur));
-  mix-blend-mode: screen;
-  z-index: 0;
-  animation: bm-liquid-glass-sheen 16s ease-in-out infinite alternate;
-}
+/* The animated "liquid glass" sheen that used to live on ::after was always invisible
+ * (--bm-glass-sheen-opacity is 0 in every theme), but its infinite background-position animation
+ * with blur + blend mode still made every panel restyle, repaint and recommit on every frame.
+ * Removed; re-add it as a transform/opacity animation if a theme ever wants a visible sheen. */
 
 #bm-overlay > *,
 #bm-contain-chat.bm-chat-floating > *,
@@ -567,6 +547,7 @@
 #bm-flag-template-window > *,
 #bm-remote-template-window > *,
 #bm-custom-theme-window > *,
+#rm-pixel-effects-window > *,
 .bm-template-position-joystick > * {
   position: relative;
   z-index: 1;
@@ -578,6 +559,7 @@
 #bm-flag-template-window,
 #bm-remote-template-window,
 #bm-custom-theme-window,
+#rm-pixel-effects-window,
 .bm-template-position-joystick {
   border: 1px solid var(--bm-glass-border);
   box-shadow: var(--bm-glass-shadow), var(--bm-glass-inner-shadow);
@@ -595,27 +577,6 @@
   box-shadow: var(--bm-glass-header-shadow);
   backdrop-filter: blur(var(--bm-glass-blur)) saturate(var(--bm-glass-saturate));
   -webkit-backdrop-filter: blur(var(--bm-glass-blur)) saturate(var(--bm-glass-saturate));
-}
-
-@keyframes bm-liquid-glass-sheen {
-  0% {
-    background-position: -120% 10%, 0% 0%, 100% 0%;
-  }
-  100% {
-    background-position: 140% 26%, 12% 20%, 86% 10%;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  #bm-overlay::after,
-  #bm-contain-chat.bm-chat-floating::after,
-  #bm-chat-bans-window::after,
-  #bm-text-template-window::after,
-  #bm-flag-template-window::after,
-  #bm-remote-template-window::after,
-  .bm-template-position-joystick::after {
-    animation: none;
-  }
 }
 
 /* wplace only ships daisyUI theme blocks for data-theme "dark" and "custom-winter",
@@ -1272,6 +1233,7 @@ input[type="file"][id*="template"] {
 #bm-flag-template-window button,
 #bm-remote-template-window button,
 #bm-custom-theme-window button,
+#rm-pixel-effects-window button,
 .bm-template-position-joystick button {
   background: var(--bm-btn-bg);
   color: var(--bm-btn-text);
@@ -1345,8 +1307,10 @@ input[type="file"][id*="template"] {
 #bm-flag-template-window button:focus-visible,
 #bm-remote-template-window button:hover,
 #bm-custom-theme-window button:hover,
+#rm-pixel-effects-window button:hover,
 #bm-remote-template-window button:focus-visible,
 #bm-custom-theme-window button:focus-visible,
+#rm-pixel-effects-window button:focus-visible,
 .bm-template-position-joystick button:hover,
 .bm-template-position-joystick button:focus-visible {
   background: var(--bm-btn-hover);
@@ -1364,8 +1328,10 @@ input[type="file"][id*="template"] {
 #bm-flag-template-window button:disabled,
 #bm-remote-template-window button:active,
 #bm-custom-theme-window button:active,
+#rm-pixel-effects-window button:active,
 #bm-remote-template-window button:disabled,
 #bm-custom-theme-window button:disabled,
+#rm-pixel-effects-window button:disabled,
 .bm-template-position-joystick button:active,
 .bm-template-position-joystick button:disabled {
   background: var(--bm-btn-active);
@@ -2072,7 +2038,8 @@ span.bm-templatename:hover, a.bm-templatename:focus {
 #bm-text-template-window,
 #bm-flag-template-window,
 #bm-remote-template-window,
-#bm-custom-theme-window {
+#bm-custom-theme-window,
+#rm-pixel-effects-window {
   position: fixed;
   z-index: 9103;
   display: flex;
@@ -2114,6 +2081,7 @@ span.bm-templatename:hover, a.bm-templatename:focus {
 #bm-flag-template-window .bm-text-template-window-close,
 #bm-remote-template-window .bm-text-template-window-close,
 #bm-custom-theme-window .bm-text-template-window-close,
+#rm-pixel-effects-window .bm-text-template-window-close,
 .bm-text-template-window-close {
   margin-left: auto;
   display: flex;
@@ -2391,7 +2359,8 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   #bm-text-template-window,
   #bm-flag-template-window,
   #bm-remote-template-window,
-  #bm-custom-theme-window {
+  #bm-custom-theme-window,
+  #rm-pixel-effects-window {
     right: 8px !important;
     left: 8px !important;
     width: auto !important;
@@ -2848,7 +2817,8 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   #bm-text-template-window,
   #bm-flag-template-window,
   #bm-remote-template-window,
-  #bm-custom-theme-window {
+  #bm-custom-theme-window,
+  #rm-pixel-effects-window {
     max-height: 86dvh;
     padding-bottom: env(safe-area-inset-bottom);
   }
@@ -3019,9 +2989,9 @@ span.bm-templatename:hover, a.bm-templatename:focus {
 :root[data-game-ui] .game-paint-panel .paint-toolbar > .paint-tools {
   flex-shrink: 0;
 }
-/* Our paint-panel controls (Move Up, Smart Place…) share the title line; on narrow screens that
- * squeezed them into a tall column of clipped square buttons. Give them a full-width row below
- * the title line instead, with buttons sized to their labels. */
+/* Our paint-panel controls (Move Up, Smart Place…) sit on a full-width row below the title line
+ * (insertIntoPaintPanelToolbar sets that inline, at any width), with buttons sized to their
+ * labels. Narrow screens additionally get compact buttons. */
 #rm-paint-toolbar-extra > .btn {
   width: auto !important;
   min-width: 2rem !important;

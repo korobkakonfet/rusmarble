@@ -7,7 +7,7 @@ installGmStorageInstrumentation();
 import { profiler, initProfiler } from './profiler.js';
 import Overlay from './Overlay.js';
 // import Observers from './observers.js';
-import ApiManager, { WPLACE_CLOSE_ICON_PATH_PREFIX } from './apiManager.js';
+import ApiManager, { WPLACE_CLOSE_ICON_PATH_PREFIX, prewarmPixelEffects } from './apiManager.js';
 import TemplateManager from './templateManager.js';
 import { normalizeTemplatePaletteConversionOptions, templatePaletteConversionDefaults } from './Template.js';
 import { templateWorkerManager } from './templateWorkerManager.js';
@@ -19,6 +19,8 @@ import { createTemplateCreationUi } from './templateCreationUi.js';
 import { createArchiveTemplateUi } from './archiveTemplateUi.js';
 import { CUSTOM_LAYOUT_THEME, CUSTOM_THEME_DRAG_BG_VAR, CUSTOM_THEME_TOKENS, normalizeCustomThemeColor, buildCustomThemeCssVars, buildCustomThemeSiteVars, customThemeColorToCss, getDefaultCustomTheme, normalizeUiFont, buildUiFontFamily, buildUiFontFaceCss, UI_FONT_FILE_STORAGE_KEY } from './customTheme.js';
 import { createCustomThemeUi } from './customThemeUi.js';
+import { createPixelEffectsStore } from './pixelEffects.js';
+import { createPixelEffectsUi } from './pixelEffectsUi.js';
 import { initOverlayDodge } from './overlayDodge.js';
 // Extension points. No-ops in this build; see src/extensionPoints.js.
 import * as ext from './extensionPoints.js';
@@ -3357,13 +3359,19 @@ function initChat() {
 
   const getModCode = () => modCodeInput?.value?.trim() || '';
   const getUserName = () => normalizeUser(userInput?.value || document.getElementById('bm-user-name')?.textContent);
-  const getDeviceId = () => {
+  /* `device_id` in localStorage is wplace's own device identifier. The chat only needs a stable
+   * per-device value for moderation, so it sends SHA-256("rusmarble-chat:" + id) instead and the
+   * raw id never leaves the browser. The server hashes raw ids from older clients the same way. */
+  let chatDeviceIdHash = null;
+  const chatDeviceIdReady = (async () => {
     try {
-      return localStorage.getItem('device_id') || '';
-    } catch (_) {
-      return '';
-    }
-  };
+      const raw = localStorage.getItem('device_id') || '';
+      if (!raw || !crypto?.subtle) return;
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`rusmarble-chat:${raw}`));
+      chatDeviceIdHash = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+    } catch (_) {}
+  })();
+  const getDeviceId = () => chatDeviceIdHash || '';
   let rateLimitUntilTs = 0;
   let rateLimitTimer = null;
   let bannedInfo = null;
@@ -3898,6 +3906,14 @@ function initChat() {
 
   const connect = () => {
     if (chatSocket && (chatSocket.readyState === WebSocket.OPEN || chatSocket.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+    if (chatDeviceIdHash === null) {
+      // Hashing is async and takes a moment once; connect as soon as it is done (or failed).
+      void chatDeviceIdReady.then(() => {
+        if (chatDeviceIdHash === null) chatDeviceIdHash = '';
+        connect();
+      });
       return;
     }
     clearRateLimitState();
@@ -4657,6 +4673,18 @@ const templateManager = new TemplateManager(name, version, overlayMain); // Cons
 templateManagerRef = templateManager;
 templateManager.setLivePixelsFetcher(getLiveTilePixels);
 const apiManager = new ApiManager(templateManager); // Constructs a new ApiManager object
+// Effects that play when someone opens a pixel painted by a user who set them up.
+const pixelEffectsStore = createPixelEffectsStore({
+  baseUrl: TEMPLATE_SYNC_BASE_URL,
+  onUpdate: () => {
+    apiManager.refreshPixelEffects();
+    prewarmPixelEffects(pixelEffectsStore.all());
+  },
+});
+apiManager.getPixelEffects = (userId) => pixelEffectsStore.getFor(userId);
+void pixelEffectsStore.refresh();
+// Built-in configs are known right away; get their sprites ready before anyone opens a pixel.
+prewarmPixelEffects(pixelEffectsStore.all());
 let templateViewportOverlayRefreshBound = false;
 let templateViewportOverlayRefreshMap = null;
 let templateViewportOverlayRefreshHandler = null;
@@ -4954,6 +4982,20 @@ const { openCustomThemeEditor } = createCustomThemeUi({
     await templateManager?.setUiFont?.(normalized);
     applyUiFont(normalized);
   },
+});
+
+const { openPixelEffectsEditor } = createPixelEffectsUi({
+  t,
+  store: pixelEffectsStore,
+  getUserId: () => {
+    const id = Number(templateManager?.userID);
+    return Number.isSafeInteger(id) && id > 0 ? id : null;
+  },
+  getSelectedPixel: () => (apiManager.coordsTilePixel?.length === 4 ? [...apiManager.coordsTilePixel].map(Number) : null),
+  getUserName: () => String(apiManager.lastMe?.name ?? ''),
+  previewPixelEffects: (card, config) => apiManager.previewPixelEffects(card, config),
+  stopPixelEffectsPreview: () => apiManager.stopPixelEffectsPreview(),
+  applyOverlayVarsToFloatingElement,
 });
 
 const {
@@ -8011,6 +8053,7 @@ async function buildOverlayMain() {
       applySafeMode: () => applySafeModeState(),
       themeList,
       openCustomThemeEditor,
+      openPixelEffectsEditor,
       outputStatusId: overlayMain.outputStatusId,
       t,
     });

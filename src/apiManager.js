@@ -7,12 +7,114 @@
 import TemplateManager from "./templateManager.js";
 import { consoleError, escapeHTML, numberToEncoded, serverTPtoDisplayTP, cleanUpCanvas, copyToClipboard, downloadTile, consoleLog } from "./utils.js";
 import { coordsTileCoordsToGeoCoords, overrideRandom, getZoom } from "./utilsMaptiler.js";
+import { createParticleCanvas } from "./particleCanvas.js";
 
-const EASTER_EGG_USER_ID = 11728406;
 const EASTER_EGG_WAVE_FIRST_DELAY_MS = 2000;
 const EASTER_EGG_WAVE_PAUSE_BEFORE_LOOP_MS = 3000;
 const EASTER_EGG_WAVE_STEP_DURATION_MS = 1800;
 const EASTER_EGG_WAVE_STAGGER_MS = 90;
+const EASTER_EGG_BURST_PARTICLES = 120;
+const EASTER_EGG_LOOP_BURST_PARTICLES = 40;
+const EASTER_EGG_BURST_GLYPHS = ['✦', '★', '♥', '👑'];
+/** Shared by every card and the editor preview; only one effects run plays at a time anyway. */
+const particleCanvas = createParticleCanvas();
+
+/** Pre-draws the confetti/firework sprites for these configs while the browser is idle, so
+ * the first open of a profile doesn't pay for it.
+ * @param {object[]} configs Normalized effects configs. */
+export function prewarmPixelEffects(configs) {
+  const colors = new Set();
+  const glowColors = new Set();
+  configs.forEach(config => {
+    if (config?.confetti) config.confettiColors.forEach(color => colors.add(color));
+    if (config?.fireworks) config.fireworkColors.forEach(color => glowColors.add(color));
+  });
+  if (!colors.size && !glowColors.size) return;
+  const run = () => particleCanvas.prewarm({ colors: [...colors], glyphs: EASTER_EGG_BURST_GLYPHS, glowColors: [...glowColors] });
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 4000 });
+  else setTimeout(run, 1500);
+}
+const EASTER_EGG_FIREWORK_ROCKETS = 3;
+const EASTER_EGG_FIREWORK_SPARKS = 30;
+/** Click-to-explode on the name: minimum gap between clicks and the most effect layers allowed
+ * on screen at once, so spam-clicking can't pile up thousands of particles. */
+const EASTER_EGG_CLICK_COOLDOWN_MS = 250;
+/** One full turn of the spinning border, per `borderSpeed`. */
+const EASTER_EGG_BORDER_SPIN_MS = { slow: 5200, normal: 2800, fast: 1300 };
+const EASTER_EGG_SPARKLE_COUNT = 7;
+const EASTER_EGG_BADGE_SIZE_PX = { small: 14, medium: 20, large: 28 };
+const EASTER_EGG_AMBIENT_COUNT = 12;
+/** Ambient particle kinds: glyphs, direction, sideways sway (px), fall/rise time (ms), size (px). */
+const EASTER_EGG_AMBIENT = {
+  snow: { glyphs: ['❄', '•', '✻'], up: false, sway: 12, time: [5000, 8000], size: [7, 12] },
+  hearts: { glyphs: ['♥'], up: true, sway: 9, time: [3800, 6000], size: [8, 13] },
+  bubbles: { glyphs: ['○', '◦', '°'], up: true, sway: 7, time: [3200, 5200], size: [8, 14] },
+  embers: { glyphs: ['•', '·'], up: true, sway: 5, time: [2200, 3800], size: [5, 9], glow: true },
+  stars: { glyphs: ['✦', '✧', '⋆'], up: false, sway: 16, time: [7000, 11000], size: [7, 12], glow: true },
+};
+/** Name animations: keyframes + timing, all transform-only except shimmer/glitch (handled below). */
+const EASTER_EGG_NAME_ANIMATIONS = {
+  float: [
+    [{ transform: 'translateY(0)' }, { transform: 'translateY(-3px)' }, { transform: 'translateY(0)' }],
+    { duration: 2600, easing: 'ease-in-out' },
+  ],
+  heartbeat: [
+    [
+      { transform: 'scale(1)', offset: 0 },
+      { transform: 'scale(1.12)', offset: 0.14 },
+      { transform: 'scale(1)', offset: 0.28 },
+      { transform: 'scale(1.08)', offset: 0.42 },
+      { transform: 'scale(1)', offset: 0.7 },
+      { transform: 'scale(1)', offset: 1 },
+    ],
+    { duration: 1400, easing: 'ease-in-out' },
+  ],
+  jelly: [
+    [
+      { transform: 'scale(1, 1)', offset: 0 },
+      { transform: 'scale(1.15, .85)', offset: 0.3 },
+      { transform: 'scale(.9, 1.1)', offset: 0.45 },
+      { transform: 'scale(1.05, .95)', offset: 0.6 },
+      { transform: 'scale(1, 1)', offset: 0.75 },
+      { transform: 'scale(1, 1)', offset: 1 },
+    ],
+    { duration: 1800 },
+  ],
+  // Still most of the time, then a short burst of jitter with red/cyan split.
+  glitch: [
+    [
+      { transform: 'translate(0, 0)', textShadow: 'none', offset: 0 },
+      { transform: 'translate(0, 0)', textShadow: 'none', offset: 0.86 },
+      { transform: 'translate(-2px, 1px) skewX(-8deg)', textShadow: '2px 0 #ff2a55, -2px 0 #2af5ff', offset: 0.88 },
+      { transform: 'translate(2px, -1px)', textShadow: '-2px 0 #ff2a55, 2px 0 #2af5ff', offset: 0.91 },
+      { transform: 'translate(-1px, 0) skewX(6deg)', textShadow: '1px 0 #ff2a55, -1px 0 #2af5ff', offset: 0.94 },
+      { transform: 'translate(0, 0)', textShadow: 'none', offset: 0.97 },
+      { transform: 'translate(0, 0)', textShadow: 'none', offset: 1 },
+    ],
+    { duration: 2800, easing: 'steps(1, end)' },
+  ],
+};
+const EASTER_EGG_CARD_ENTRANCES = {
+  pop: [[{ transform: 'scale(.85)', opacity: 0 }, { transform: 'scale(1.04)', opacity: 1, offset: 0.6 }, { transform: 'scale(1)', opacity: 1 }], { duration: 480, easing: 'ease-out' }],
+  slide: [[{ transform: 'translateY(18px)', opacity: 0 }, { transform: 'translateY(0)', opacity: 1 }], { duration: 420, easing: 'cubic-bezier(.2,.8,.3,1)' }],
+  flip: [
+    [
+      { transform: 'perspective(700px) rotateX(-80deg)', transformOrigin: '50% 0', opacity: 0 },
+      { transform: 'perspective(700px) rotateX(12deg)', transformOrigin: '50% 0', opacity: 1, offset: 0.65 },
+      { transform: 'perspective(700px) rotateX(0deg)', transformOrigin: '50% 0', opacity: 1 },
+    ],
+    { duration: 650, easing: 'ease-out' },
+  ],
+};
+const EASTER_EGG_CARD_TINT_ALPHA = { subtle: 0.14, strong: 0.3 };
+const EASTER_EGG_NAME_FONTS = {
+  bold: { fontWeight: '800' },
+  italic: { fontStyle: 'italic' },
+  mono: { fontFamily: 'ui-monospace, "Cascadia Mono", Consolas, monospace' },
+  serif: { fontFamily: 'Georgia, "Times New Roman", serif' },
+  rounded: { fontFamily: '"Comic Sans MS", "Trebuchet MS", "Segoe Print", cursive' },
+};
+const EASTER_EGG_MAX_PARTICLES = 600;
 
 /** Start of the SVG path wplace uses for its pixel "X" close icon. Language-independent, unlike
  * the button's aria-label. */
@@ -441,6 +543,68 @@ export default class ApiManager {
     return anchorElement.parentElement?.parentElement?.lastElementChild;
   }
 
+  /** Put the coords container just above the card's location row, creating it if needed.
+   *
+   * @param {HTMLElement} closeButton
+   * @param {HTMLElement} infoRoot
+   * @param {HTMLElement | null} displayCoordsContainer - the existing container, if any
+   * @returns {HTMLElement | null} the placed container, or null while the location row isn't rendered yet
+   */
+  #placeDisplayCoordsContainer(closeButton, infoRoot, displayCoordsContainer) {
+    const coordRow = this.getDisplayCoordsAnchor(closeButton, infoRoot);
+    if (!coordRow) return null;
+    const coordPattern = /\b\d{1,7}\s*,\s*\d{1,7}\b/;
+    const isLikelyHeaderFallback =
+      coordRow === closeButton.parentElement &&
+      !coordPattern.test(coordRow.textContent || '');
+    if (isLikelyHeaderFallback) return null;
+    if (!displayCoordsContainer) {
+      displayCoordsContainer = document.createElement('div');
+      displayCoordsContainer.id = 'bm-display-coords-container';
+      displayCoordsContainer.style = 'width: 100%; margin: 4px 0 2px; padding: 0 12px; box-sizing: border-box; line-height: 1.15; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; text-align: left;';
+      coordRow.insertAdjacentElement('beforebegin', displayCoordsContainer);
+      // The new card's location row sits in an already-padded column next to the avatar.
+      if (coordRow.closest('.selected-pixel')) {
+        displayCoordsContainer.style.padding = '0';
+        displayCoordsContainer.style.margin = '6px 0 0';
+      }
+    } else if (displayCoordsContainer.nextElementSibling !== coordRow) {
+      coordRow.insertAdjacentElement('beforebegin', displayCoordsContainer);
+    }
+    return displayCoordsContainer;
+  }
+
+  /** Reserve the coords row as soon as wplace renders a pixel-info card.
+   * The pixel data only reaches us through an async postMessage, after wplace has already
+   * painted the card, so adding the row then made the whole card jump by its height. A
+   * MutationObserver callback runs before the next paint, so an empty row of the same height
+   * goes in first and `updateDisplayCoords` just fills it.
+   */
+  #observePixelInfoCards() {
+    if (this.pixelInfoCardObserver) return;
+    const reserve = () => {
+      const card = document.querySelector('.selected-pixel');
+      if (!card) return;
+      const existing = document.getElementById('bm-display-coords-container');
+      if (existing && card.contains(existing)) return;
+      const closeButton = card.querySelector(`button:has(path[d^="${WPLACE_CLOSE_ICON_PATH_PREFIX}"]), button[aria-label="Close"]`);
+      if (!(closeButton instanceof HTMLElement)) return;
+      const infoRoot = this.getPixelInfoRoot(closeButton);
+      if (!infoRoot) return;
+      const container = this.#placeDisplayCoordsContainer(closeButton, infoRoot, null);
+      if (!container) return;
+      // Same text classes as the real coords, so the placeholder takes exactly their height.
+      const placeholder = document.createElement('span');
+      placeholder.className = 'text-xs';
+      placeholder.style = 'display: block; visibility: hidden;';
+      placeholder.textContent = ' ';
+      container.append(placeholder);
+    };
+    this.pixelInfoCardObserver = new MutationObserver(reserve);
+    this.pixelInfoCardObserver.observe(document.documentElement, { childList: true, subtree: true });
+    reserve();
+  }
+
   /** Update the texts and related functions shown on the pixel info overlay
    * 
    * @since 0.85.28
@@ -504,34 +668,13 @@ export default class ApiManager {
       });
     };
   
-    const coordRow = this.getDisplayCoordsAnchor(closeButton, infoRoot);
-    if (!coordRow) {
-      this.#scheduleDisplayCoordsRetry(retryCount);
-      return;
-    }
-    const coordPattern = /\b\d{1,7}\s*,\s*\d{1,7}\b/;
-    const isLikelyHeaderFallback =
-      coordRow === closeButton.parentElement &&
-      !coordPattern.test(coordRow.textContent || '');
-    if (isLikelyHeaderFallback) {
+    displayCoordsContainer = this.#placeDisplayCoordsContainer(closeButton, infoRoot, displayCoordsContainer);
+    if (!displayCoordsContainer) {
       this.#scheduleDisplayCoordsRetry(retryCount);
       return;
     }
     clearTimeout(this.displayCoordsRetryTimeout);
     this.displayCoordsRetryTimeout = null;
-    if (!displayCoordsContainer) {
-      displayCoordsContainer = document.createElement('div');
-      displayCoordsContainer.id = 'bm-display-coords-container';
-      displayCoordsContainer.style = 'width: 100%; margin: 4px 0 2px; padding: 0 12px; box-sizing: border-box; line-height: 1.15; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; text-align: left;';
-      coordRow.insertAdjacentElement('beforebegin', displayCoordsContainer);
-      // The new card's location row sits in an already-padded column next to the avatar.
-      if (coordRow.closest('.selected-pixel')) {
-        displayCoordsContainer.style.padding = '0';
-        displayCoordsContainer.style.margin = '6px 0 0';
-      }
-    } else if (displayCoordsContainer.nextElementSibling !== coordRow) {
-      coordRow.insertAdjacentElement('beforebegin', displayCoordsContainer);
-    }
 
     displayCoordsContainer.textContent = '';
 
@@ -655,6 +798,98 @@ export default class ApiManager {
     if (!closeButton) return;
     const infoRoot = this.getPixelInfoRoot(closeButton);
     if (!infoRoot) return;
+    this.#watchPixelInfo(infoRoot);
+    this.easterEggPainterKey = this.#currentPainterKey(infoRoot);
+    this.#runPixelEffects(infoRoot, closeButton, (userId) => this.getPixelEffects?.(userId));
+  }
+
+  /** The painter ID currently shown on a card ('' while none is shown). */
+  #currentPainterKey(root) {
+    return (root.textContent || '').match(/#\s*(\d{4,})\b/)?.[1] || '';
+  }
+
+  /** wplace fills in (or swaps) the painter a moment after the pixel request this hooks into,
+   * and reuses the same card for the next pixel. So while a card is open, watch it and re-run
+   * the effects whenever the painter shown changes. Our own DOM edits (wave letters, motto,
+   * typewriter) don't change the painter, so they never re-trigger. */
+  #watchPixelInfo(root) {
+    if (this.easterEggObservedRoot === root) return;
+    this.easterEggObserver?.disconnect();
+    this.easterEggObservedRoot = root;
+    let scheduled = false;
+    // Changes made by the effects themselves (motto, typewriter, wave letters) are tagged
+    // `data-rm-fx` and skipped, so they don't wake the alliance check for nothing.
+    const isOwnMutation = (record) => {
+      const element = record.target.nodeType === Node.ELEMENT_NODE ? record.target : record.target.parentElement;
+      if (element?.closest?.('[data-rm-fx]')) return true;
+      if (record.type !== 'childList') return false;
+      const nodes = [...record.addedNodes, ...record.removedNodes];
+      return nodes.length > 0 && nodes.every(node => node.nodeType === Node.ELEMENT_NODE && node.hasAttribute('data-rm-fx'));
+    };
+    const observer = new MutationObserver((records) => {
+      if (records.every(isOwnMutation)) return;
+      if (scheduled) return;
+      scheduled = true;
+      requestAnimationFrame(() => {
+        scheduled = false;
+        if (!root.isConnected) {
+          observer.disconnect();
+          if (this.easterEggObserver === observer) {
+            this.easterEggObserver = null;
+            this.easterEggObservedRoot = null;
+          }
+          return;
+        }
+        // The alliance chip can also arrive late, so keep the Ruspixel flag in sync here too.
+        // The card tint is layered over the flag background, so it is re-applied when the flag flips.
+        const hasFlag = () => root.classList.contains('bm-ruspixel-flag') || !!root.querySelector('.bm-ruspixel-flag');
+        const flagBefore = hasFlag();
+        this.updatePixelInfoAllianceBackground();
+        const flagChanged = hasFlag() !== flagBefore;
+        if (flagChanged || this.#currentPainterKey(root) !== this.easterEggPainterKey) this.#maybeTriggerEasterEgg();
+      });
+    });
+    observer.observe(root, { childList: true, subtree: true, characterData: true });
+    this.easterEggObserver = observer;
+  }
+
+  /** Called when the effects list (re)loads: a card that opened before it arrived gets its
+   * effects now. A card already playing is left alone. */
+  refreshPixelEffects() {
+    if (!this.easterEggStop && this.easterEggObservedRoot?.isConnected) this.#maybeTriggerEasterEgg();
+  }
+
+  /** Plays `config` on a mock pixel-info card (the effects editor's preview). The card must
+   * contain the "#<id>" text like wplace's does. Stop it with `stopPixelEffects`.
+   * @param {HTMLElement} card
+   * @param {object} config Normalized effects config (pixelEffects.js).
+   */
+  previewPixelEffects(card, config) {
+    this.#runPixelEffects(card, null, () => config);
+    this.easterEggIsPreview = true;
+  }
+
+  /** Stops the preview, but leaves a real pixel-info card that started playing since alone. */
+  stopPixelEffectsPreview() {
+    if (this.easterEggIsPreview) this.stopPixelEffects();
+  }
+
+  /** Stops whatever effects are playing (real pixel info or preview) and restores the text. */
+  stopPixelEffects() {
+    this.easterEggStop?.();
+    this.easterEggStop = null;
+  }
+
+  #runPixelEffects(infoRoot, closeButton, resolveConfig) {
+    // Only one card plays at a time; the previous run cleans up its own card.
+    this.stopPixelEffects();
+    this.easterEggIsPreview = false;
+    /** The painter's effects config (see pixelEffects.js), set once the painter is known. */
+    let fx = null;
+    /** Everything read from the page's styles, gathered in one pass before any effect writes a
+     * style. Interleaving reads and writes made the browser recalculate styles several times in
+     * the first frame. */
+    let measured = {};
     const clearFlowTimeouts = () => {
       clearTimeout(this.easterEggPulseTimeout);
       clearTimeout(this.easterEggWaveTimeout); // legacy timer name (compat)
@@ -668,24 +903,562 @@ export default class ApiManager {
       }
       this.easterEggCloseButton = null;
       this.easterEggCloseHandler = null;
+      if (this.easterEggClickTarget && this.easterEggClickHandler) {
+        this.easterEggClickTarget.removeEventListener('click', this.easterEggClickHandler);
+        this.easterEggClickTarget.style.cursor = this.easterEggClickPrevCursor || '';
+      }
+      this.easterEggClickTarget = null;
+      this.easterEggClickHandler = null;
+    };
+    /** Undoes the name colouring: puts back the exact style attribute wplace had. */
+    const clearNameStyle = () => {
+      // Newest first, so an element styled twice ends up with its original style.
+      (this.easterEggStyleRestores || []).slice().reverse().forEach(restore => restore());
+      this.easterEggStyleRestores = [];
+    };
+    /** Gradient or glowing name text. Only inline styles on wplace's own element, restored on stop. */
+    /** Remembers an element's exact style attribute so stop() can put it back. */
+    const saveStyle = (element) => {
+      const previous = element.getAttribute('style');
+      this.easterEggStyleRestores = this.easterEggStyleRestores || [];
+      this.easterEggStyleRestores.push(() => {
+        if (previous === null) element.removeAttribute('style');
+        else element.setAttribute('style', previous);
+      });
+    };
+    const glowShadow = () => `0 0 6px ${fx.nameColors[0]}, 0 0 14px ${fx.nameColors[0]}99`;
+    const applyNameStyle = (element) => {
+      const font = EASTER_EGG_NAME_FONTS[fx.nameFont];
+      if (!element || (fx.nameStyle === 'none' && !font)) return;
+      saveStyle(element);
+      if (font) Object.assign(element.style, font);
+      if (fx.nameStyle === 'none') return;
+      const colors = fx.nameColors;
+      if (fx.nameStyle === 'glow') {
+        element.style.textShadow = glowShadow();
+        return;
+      }
+      if (colors.length === 1) {
+        element.style.color = colors[0];
+        return;
+      }
+      // background-clip:text also covers the per-letter spans the wave adds inside it.
+      element.style.backgroundImage = `linear-gradient(90deg, ${colors.join(', ')})`;
+      element.style.webkitBackgroundClip = 'text';
+      element.style.backgroundClip = 'text';
+      element.style.webkitTextFillColor = 'transparent';
+      element.style.color = 'transparent';
+    };
+    /** A translucent wash over wplace's card background (the text stays readable). */
+    const applyCardTint = (card) => {
+      const alpha = EASTER_EGG_CARD_TINT_ALPHA[fx.cardTint];
+      if (!card || !alpha) return;
+      saveStyle(card);
+      const [from, to = from] = fx.cardColors;
+      const tint = `linear-gradient(135deg, ${withAlpha(from, alpha)}, ${withAlpha(to, alpha)})`;
+      // Layer the tint on top of the card's current background instead of replacing it: the
+      // Ruspixel flag and wplace's pixel-UI frame are background layers too, and the flag rule is
+      // `!important`, which used to win over a plain inline tint (or the tint wiped the flag).
+      // Every background list gets one matching entry prepended so the existing layers keep
+      // their own size/position/clip.
+      const layer = (property, value) => {
+        const current = measured.cardBackground?.[property] || '';
+        card.style.setProperty(property, current && current !== 'none' ? `${value}, ${current}` : value, 'important');
+      };
+      const hadImages = (measured.cardBackground?.['background-image'] || 'none') !== 'none';
+      layer('background-image', tint);
+      if (hadImages) {
+        layer('background-size', '100% 100%');
+        layer('background-position', '0% 0%');
+        layer('background-repeat', 'no-repeat');
+        layer('background-clip', 'padding-box');
+        layer('background-origin', 'padding-box');
+      }
+    };
+    /** The owner's motto as one tiny plain-text line under the name. wplace nests the name in
+     * horizontal flex rows (name | More/Close buttons), so climb to the first ancestor whose
+     * parent stacks its children vertically and insert after that, never beside the name. */
+    const findMottoRow = (nameAnchor) => {
+      let row = nameAnchor;
+      while (row.parentElement && row.parentElement !== infoRoot) {
+        const parentStyle = getComputedStyle(row.parentElement);
+        const stacksVertically = !parentStyle.display.includes('flex') || parentStyle.flexDirection.startsWith('column');
+        if (stacksVertically) break;
+        row = row.parentElement;
+      }
+      return row;
+    };
+    const showMotto = (row) => {
+      if (!row?.parentNode || !fx.motto) return;
+      const motto = document.createElement('div');
+      motto.setAttribute('data-rm-fx', '');
+      motto.textContent = `“${fx.motto}”`;
+      motto.style.cssText = 'font-size:10px;line-height:1.3;font-style:italic;opacity:.7;margin:1px 0 0;'
+        + 'max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+      row.after(motto);
+      onStop(() => motto.remove());
+      if (prefersReducedMotion) return;
+      if (fx.mottoAnimation === 'typewriter') {
+        const full = motto.textContent;
+        motto.textContent = '';
+        const chars = Array.from(full);
+        chars.forEach((_, index) => later(() => { motto.textContent = chars.slice(0, index + 1).join(''); }, 350 + index * 55));
+      } else if (fx.mottoAnimation === 'fade') {
+        motto.animate?.(
+          [{ opacity: 0, transform: 'translateY(4px)' }, { opacity: 0.7, transform: 'translateY(0)' }],
+          { duration: 700, delay: 250, easing: 'ease-out', fill: 'backwards' }
+        );
+      }
+    };
+    /** Undoable: registers a cleanup that stop() runs. */
+    const onStop = (cleanup) => {
+      this.easterEggStyleRestores = this.easterEggStyleRestores || [];
+      this.easterEggStyleRestores.push(cleanup);
+    };
+    /** A looping animation on the name itself (on top of the per-letter wave, which moves the
+     * letters inside it). Transforms need a box, so an inline name becomes inline-block. */
+    const applyNameAnimation = (element) => {
+      if (!element || prefersReducedMotion || fx.nameAnimation === 'none' || typeof element.animate !== 'function') return;
+      if (measured.nameDisplay === 'inline') {
+        saveStyle(element);
+        element.style.display = 'inline-block';
+      }
+      if (fx.nameAnimation === 'shimmer') {
+        saveStyle(element);
+        // A light band sweeping through the text. Uses the gradient colours when the name has a
+        // gradient, otherwise the name's own colour.
+        const base = fx.nameStyle === 'gradient' && fx.nameColors.length > 1
+          ? null
+          : (fx.nameStyle === 'none' ? measured.nameColor : fx.nameColors[0]);
+        const stops = base
+          ? `${base} 35%, #ffffff 50%, ${base} 65%`
+          : `${fx.nameColors.join(', ')}, #ffffff, ${fx.nameColors.join(', ')}`;
+        element.style.backgroundImage = `linear-gradient(110deg, ${stops})`;
+        element.style.backgroundSize = '250% 100%';
+        element.style.webkitBackgroundClip = 'text';
+        element.style.backgroundClip = 'text';
+        element.style.webkitTextFillColor = 'transparent';
+        const shimmer = element.animate(
+          [{ backgroundPosition: '100% 0' }, { backgroundPosition: '-50% 0' }],
+          { duration: 2600, iterations: Infinity, easing: 'ease-in-out' }
+        );
+        onStop(() => shimmer.cancel());
+        return;
+      }
+      const preset = EASTER_EGG_NAME_ANIMATIONS[fx.nameAnimation];
+      if (!preset) return;
+      // Glitch's calm frames return to the name's own shadow (e.g. the glow), not to none.
+      const baseShadow = fx.nameStyle === 'glow' ? glowShadow() : (measured.nameShadow || 'none');
+      const frames = preset[0].map(frame => (frame.textShadow === 'none' ? { ...frame, textShadow: baseShadow } : frame));
+      const animation = element.animate(frames, { ...preset[1], iterations: Infinity });
+      onStop(() => animation.cancel());
+    };
+    /** One-off entrance of the whole card when it opens. */
+    const playCardEntrance = (card) => {
+      const preset = EASTER_EGG_CARD_ENTRANCES[fx.cardEntrance];
+      if (!card || !preset || prefersReducedMotion || typeof card.animate !== 'function') return;
+      const animation = card.animate(preset[0], preset[1]);
+      onStop(() => animation.cancel());
+    };
+    const clearBursts = () => {
+      (this.easterEggTimers || []).forEach(timer => clearTimeout(timer));
+      this.easterEggTimers = [];
+      if (this.easterEggDecorFrame) cancelAnimationFrame(this.easterEggDecorFrame);
+      this.easterEggDecorFrame = 0;
+      this.easterEggDecorCleanup?.();
+      this.easterEggDecorCleanup = null;
+      (this.easterEggBursts || []).forEach(layer => layer.remove());
+      this.easterEggBursts = [];
+      particleCanvas.clear();
+    };
+    const prefersReducedMotion = !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const pick = (list) => list[Math.floor(Math.random() * list.length)];
+    /** `#rrggbb` (already validated) + alpha -> `rgba(...)`. */
+    const withAlpha = (hex, alpha) => {
+      const n = parseInt(hex.slice(1), 16);
+      return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+    };
+    const randomColor = () => pick(fx.confettiColors);
+    const later = (callback, ms) => {
+      this.easterEggTimers = this.easterEggTimers || [];
+      const timer = setTimeout(() => {
+        this.easterEggTimers = (this.easterEggTimers || []).filter(item => item !== timer);
+        callback();
+      }, ms);
+      this.easterEggTimers.push(timer);
+    };
+    /** A fixed, click-through layer on <body>. Everything here uses inline styles only, so Svelte
+     * re-renders and the CSS mangler can't touch it. `lifetimeMs` auto-removes it.
+     * `contain:strict` keeps its layout/paint isolated from the page, and every moving part is
+     * animated with transform/opacity only, so the work stays on the compositor. */
+    const createLayer = (lifetimeMs) => {
+      const layer = document.createElement('div');
+      layer.setAttribute('aria-hidden', 'true');
+      layer.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483646;overflow:hidden;contain:strict;';
+      document.body.appendChild(layer);
+      this.easterEggBursts = this.easterEggBursts || [];
+      this.easterEggBursts.push(layer);
+      if (lifetimeMs) {
+        later(() => {
+          layer.remove();
+          this.easterEggBursts = (this.easterEggBursts || []).filter(item => item !== layer);
+        }, lifetimeMs);
+      }
+      return layer;
+    };
+    /** Rockets climb out of the top of the card and each one pops into a ring of single-colour
+     * pixel sparks that sag under gravity. Drawn on the shared particle canvas. */
+    const launchFireworks = (anchor) => {
+      if (prefersReducedMotion || !anchor?.isConnected) return;
+      const rect = anchor.getBoundingClientRect();
+      if (!rect.width && !rect.height) return;
+      const rockets = Math.max(EASTER_EGG_FIREWORK_ROCKETS, fx.fireworkColors.length);
+      for (let r = 0; r < rockets; r++) {
+        const startX = rect.left + rect.width * (0.15 + Math.random() * 0.7);
+        const startY = rect.top;
+        const peakX = startX + (Math.random() - 0.5) * 120;
+        const peakY = Math.max(30, startY - 140 - Math.random() * 140);
+        const color = fx.fireworkColors[r % fx.fireworkColors.length];
+        particleCanvas.add({
+          sprite: particleCanvas.pixel('#fff8d0', 4, color),
+          x: startX,
+          y: startY,
+          dx: peakX - startX,
+          dy: peakY - startY,
+          life: 650 + Math.random() * 250,
+          delay: r * 380 + Math.random() * 120,
+          fadeFrom: 1,
+          ease: 'out2',
+          onDone: () => {
+            if (document.hidden) return;
+            for (let i = 0; i < EASTER_EGG_FIREWORK_SPARKS; i++) {
+              const angle = (i / EASTER_EGG_FIREWORK_SPARKS) * Math.PI * 2 + Math.random() * 0.15;
+              const speed = 70 + Math.random() * 35;
+              particleCanvas.add({
+                sprite: particleCanvas.pixel(color, 4 + Math.round(Math.random() * 2), color),
+                x: peakX,
+                y: peakY,
+                dx: Math.cos(angle) * speed,
+                dy: Math.sin(angle) * speed,
+                gravity: 60,
+                life: 1100 + Math.random() * 500,
+                fadeFrom: 0.55,
+                ease: 'out3', // fast pop, then hang in the air
+              });
+            }
+          },
+        });
+      }
+    };
+    /** A ring that spins around the card, a badge that drops onto the name and sparkles around
+     * it. All live on a layer that follows the card every frame and goes once the card is gone. */
+    const showDecor = (card, nameAnchor) => {
+      if (!card?.isConnected || (!fx.border && !fx.crown && !fx.sparkles && fx.ambient === 'none')) return;
+      const layer = createLayer(0);
+      const ringWidth = fx.borderWidth;
+      const radius = measured.radius || '12px';
+      // Positioned/sized by `follow`. The glow is a static box-shadow on its own element: a CSS
+      // filter here would be re-rendered every frame because the spinner inside it keeps moving.
+      const glow = document.createElement('div');
+      glow.style.cssText = `position:absolute;left:0;top:0;opacity:0;border-radius:${radius};`;
+      const halo = document.createElement('div');
+      const haloColor = fx.haloColors[0];
+      halo.style.cssText = `position:absolute;inset:0;border-radius:${radius};box-shadow:0 0 8px 1px ${withAlpha(haloColor, 0.75)},0 0 18px 2px ${withAlpha(haloColor, 0.4)};`;
+      const ring = document.createElement('div');
+      ring.style.cssText = `position:absolute;inset:0;padding:${ringWidth}px;overflow:hidden;border-radius:${radius};`
+        + '-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;'
+        + 'mask:linear-gradient(#000 0 0) content-box exclude,linear-gradient(#000 0 0);';
+      // Only as big as the card's diagonal (it just has to cover the ring while rotating).
+      const spinner = document.createElement('div');
+      spinner.style.cssText = 'position:absolute;left:50%;top:50%;will-change:transform;'
+        + `background:conic-gradient(${[...fx.borderColors, fx.borderColors[0]].join(',')});`;
+      ring.appendChild(spinner);
+      glow.append(halo, ring);
+      layer.appendChild(glow);
+      glow.animate?.([{ opacity: 0 }, { opacity: 1 }], { duration: 600, fill: 'forwards' });
+      if (!fx.border) {
+        glow.style.display = 'none';
+      } else if (!prefersReducedMotion) {
+        spinner.animate?.([{ transform: 'translate(-50%, -50%) rotate(0deg)' }, { transform: 'translate(-50%, -50%) rotate(360deg)' }], { duration: EASTER_EGG_BORDER_SPIN_MS[fx.borderSpeed] || 2800, iterations: Infinity });
+      } else {
+        spinner.style.transform = 'translate(-50%, -50%)';
+      }
+
+      const crown = document.createElement('div');
+      crown.style.cssText = 'position:absolute;left:0;top:0;width:0;height:0;';
+      const crownGlyph = document.createElement('div');
+      crownGlyph.textContent = fx.badge;
+      crownGlyph.style.cssText = `position:absolute;left:0;bottom:0;font-size:${EASTER_EGG_BADGE_SIZE_PX[fx.badgeSize] || 20}px;line-height:1;transform-origin:50% 100%;filter:drop-shadow(0 0 4px rgba(255,215,0,.9));`;
+      crown.appendChild(crownGlyph);
+      layer.appendChild(crown);
+      if (!fx.crown) {
+        crown.style.display = 'none';
+      } else if (prefersReducedMotion) {
+        crownGlyph.style.transform = 'translateX(-50%) rotate(-14deg)';
+      } else {
+        crownGlyph.animate?.(
+          [
+            { transform: 'translate(-50%, -60px) rotate(-40deg)', opacity: 0, offset: 0 },
+            { transform: 'translate(-50%, 0) rotate(-14deg)', opacity: 1, offset: 0.55, easing: 'ease-out' },
+            { transform: 'translate(-50%, -12px) rotate(-8deg)', offset: 0.75, easing: 'ease-in' },
+            { transform: 'translate(-50%, 0) rotate(-14deg)', opacity: 1, offset: 1 }
+          ],
+          { duration: 900, delay: 300, easing: 'ease-in', fill: 'backwards' }
+        ).finished?.then(() => {
+          const idle = {
+            wobble: [
+              [
+                { transform: 'translateX(-50%) rotate(-14deg)' },
+                { transform: 'translateX(-50%) rotate(-6deg) translateY(-2px)' },
+                { transform: 'translateX(-50%) rotate(-14deg)' }
+              ],
+              { duration: 1600, easing: 'ease-in-out' }
+            ],
+            bounce: [
+              [
+                { transform: 'translateX(-50%) rotate(-14deg) translateY(0)', easing: 'ease-out' },
+                { transform: 'translateX(-50%) rotate(-14deg) translateY(-7px)', easing: 'ease-in' },
+                { transform: 'translateX(-50%) rotate(-14deg) translateY(0)' }
+              ],
+              { duration: 900 }
+            ],
+            spin: [
+              [
+                { transform: 'translateX(-50%) translateY(-4px) rotate(-14deg)' },
+                { transform: 'translateX(-50%) translateY(-4px) rotate(346deg)' }
+              ],
+              { duration: 2400, easing: 'linear' }
+            ],
+          }[fx.badgeAnimation];
+          if (!idle) return;
+          if (fx.badgeAnimation === 'spin') crownGlyph.style.transformOrigin = '50% 55%';
+          crownGlyph.animate(idle[0], { ...idle[1], iterations: Infinity });
+        }).catch(() => {});
+        crownGlyph.style.transform = 'translateX(-50%) rotate(-14deg)';
+      }
+
+      // Twinkling stars scattered around the name. The box is sized to the name in `follow`,
+      // the stars are placed in % of it, so they need no per-frame work of their own.
+      const sparkleBox = document.createElement('div');
+      sparkleBox.style.cssText = 'position:absolute;left:0;top:0;width:0;height:0;';
+      if (fx.sparkles) {
+        for (let i = 0; i < EASTER_EGG_SPARKLE_COUNT; i++) {
+          const star = document.createElement('div');
+          const color = pick(fx.sparkleColors);
+          // Around the edges of the name, never on top of the letters themselves.
+          const side = i % 4;
+          const along = Math.random() * 100;
+          const [x, y] = side === 0 ? [along, -45 - Math.random() * 25]
+            : side === 1 ? [along, 115 + Math.random() * 25]
+              : side === 2 ? [-12 - Math.random() * 10, Math.random() * 100]
+                : [108 + Math.random() * 10, Math.random() * 100];
+          star.textContent = '✦';
+          star.style.cssText = `position:absolute;left:${x.toFixed(0)}%;top:${y.toFixed(0)}%;font-size:${Math.round(8 + Math.random() * 6)}px;line-height:1;`
+            + `color:${color};text-shadow:0 0 5px ${color};opacity:0;`;
+          sparkleBox.appendChild(star);
+          if (prefersReducedMotion) {
+            star.style.opacity = '0.8';
+          } else {
+            star.animate?.(
+              [
+                { opacity: 0, transform: 'translate(-50%, -50%) scale(.3) rotate(0deg)' },
+                { opacity: 1, transform: 'translate(-50%, -50%) scale(1) rotate(45deg)' },
+                { opacity: 0, transform: 'translate(-50%, -50%) scale(.3) rotate(90deg)' }
+              ],
+              { duration: 1300 + Math.random() * 900, delay: Math.random() * 1500, iterations: Infinity, easing: 'ease-in-out' }
+            );
+          }
+        }
+        layer.appendChild(sparkleBox);
+      }
+
+      // Ambient particles drifting across the card, clipped to it. Each particle sits in a
+      // full-height column, and the column is what moves: translateY(100%) of the column is the
+      // card's height, so the whole thing stays compositor-only without measuring anything.
+      const ambient = EASTER_EGG_AMBIENT[fx.ambient];
+      const ambientBox = document.createElement('div');
+      ambientBox.style.cssText = `position:absolute;left:0;top:0;width:0;height:0;overflow:hidden;border-radius:${radius};`;
+      if (ambient && !prefersReducedMotion) {
+        for (let i = 0; i < EASTER_EGG_AMBIENT_COUNT; i++) {
+          const column = document.createElement('div');
+          column.style.cssText = `position:absolute;top:0;left:${(4 + Math.random() * 92).toFixed(1)}%;width:0;height:100%;`;
+          const glyph = document.createElement('div');
+          const color = pick(fx.ambientColors);
+          const size = ambient.size[0] + Math.random() * (ambient.size[1] - ambient.size[0]);
+          glyph.textContent = pick(ambient.glyphs);
+          glyph.style.cssText = `position:absolute;left:0;top:0;font-size:${size.toFixed(0)}px;line-height:1;color:${color};`
+            + (ambient.glow ? `text-shadow:0 0 5px ${color};` : '');
+          column.appendChild(glyph);
+          ambientBox.appendChild(column);
+          const time = ambient.time[0] + Math.random() * (ambient.time[1] - ambient.time[0]);
+          const [from, to] = ambient.up ? ['105%', '-10%'] : ['-10%', '105%'];
+          column.animate?.(
+            [
+              { transform: `translateY(${from})`, opacity: 0 },
+              { opacity: 0.85, offset: 0.15 },
+              { opacity: 0.85, offset: 0.8 },
+              { transform: `translateY(${to})`, opacity: 0 }
+            ],
+            // Negative delay: start mid-flight so the card isn't empty for the first seconds.
+            { duration: time, delay: -Math.random() * time, iterations: Infinity, easing: 'linear' }
+          );
+          glyph.animate?.(
+            [{ transform: `translateX(${-ambient.sway}px)` }, { transform: `translateX(${ambient.sway}px)` }],
+            { duration: 1400 + Math.random() * 1400, delay: -Math.random() * 2000, iterations: Infinity, direction: 'alternate', easing: 'ease-in-out' }
+          );
+        }
+        layer.appendChild(ambientBox);
+      }
+
+      // Reads two rects per check and only touches styles when the card actually moved or
+      // resized (size changes are the only writes that cause layout, and `contain:strict` keeps
+      // that inside this layer). The card almost never moves, so checking every frame is only
+      // done while something can be moving: the first moments (entrance, badge drop), after a
+      // resize/scroll/click, or always when the name itself is animated. Otherwise a slow poll.
+      const ALWAYS_TRACK = fx.nameAnimation !== 'none' && (fx.crown || fx.sparkles);
+      let trackUntil = performance.now() + 1500;
+      let pollTimer = 0;
+      const wake = () => {
+        trackUntil = Math.max(trackUntil, performance.now() + 700);
+        if (pollTimer) {
+          clearTimeout(pollTimer);
+          pollTimer = 0;
+          this.easterEggDecorFrame = requestAnimationFrame(follow);
+        }
+      };
+      this.easterEggDecorWake = wake;
+      const resizeObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(wake) : null;
+      resizeObserver?.observe(card);
+      if (nameAnchor && nameAnchor !== card) resizeObserver?.observe(nameAnchor);
+      window.addEventListener('resize', wake);
+      window.addEventListener('scroll', wake, true);
+      this.easterEggDecorCleanup = () => {
+        clearTimeout(pollTimer);
+        pollTimer = 0;
+        resizeObserver?.disconnect();
+        window.removeEventListener('resize', wake);
+        window.removeEventListener('scroll', wake, true);
+        if (this.easterEggDecorWake === wake) this.easterEggDecorWake = null;
+      };
+      let lastPos = '';
+      let lastSize = '';
+      let lastCrown = '';
+      let lastSparkle = '';
+      let hidden = false;
+      const follow = () => {
+        pollTimer = 0;
+        if (!card.isConnected) {
+          layer.remove();
+          this.easterEggDecorFrame = 0;
+          this.easterEggDecorCleanup?.();
+          return;
+        }
+        const cardRect = card.getBoundingClientRect();
+        const isHidden = !cardRect.width || !cardRect.height;
+        if (isHidden !== hidden) {
+          hidden = isHidden;
+          // display:none also stops the infinite spin/wobble from being rendered.
+          layer.style.display = hidden ? 'none' : '';
+        }
+        if (!hidden) {
+          const size = `${Math.round(cardRect.width)}x${Math.round(cardRect.height)}`;
+          if (size !== lastSize) {
+            lastSize = size;
+            glow.style.width = `${cardRect.width + ringWidth * 2}px`;
+            glow.style.height = `${cardRect.height + ringWidth * 2}px`;
+            const diagonal = Math.ceil(Math.hypot(cardRect.width, cardRect.height)) + ringWidth * 2 + 4;
+            spinner.style.width = `${diagonal}px`;
+            spinner.style.height = `${diagonal}px`;
+            ambientBox.style.width = `${cardRect.width}px`;
+            ambientBox.style.height = `${cardRect.height}px`;
+          }
+          const pos = `translate(${(cardRect.left - ringWidth).toFixed(1)}px, ${(cardRect.top - ringWidth).toFixed(1)}px)`;
+          if (pos !== lastPos) {
+            lastPos = pos;
+            glow.style.transform = pos;
+            ambientBox.style.transform = `translate(${cardRect.left.toFixed(1)}px, ${cardRect.top.toFixed(1)}px)`;
+          }
+          const nameRect = (nameAnchor?.isConnected ? nameAnchor : card).getBoundingClientRect();
+          // Sits on the top edge of the name, over its first or last letters.
+          const crownX = fx.badgePosition === 'end' ? nameRect.right - 8 : nameRect.left + 10;
+          const crownPos = `translate(${crownX.toFixed(1)}px, ${(nameRect.top + 3).toFixed(1)}px)`;
+          if (crownPos !== lastCrown) {
+            lastCrown = crownPos;
+            crown.style.transform = crownPos;
+          }
+          if (fx.sparkles) {
+            const sparkleKey = `${nameRect.left.toFixed(1)},${nameRect.top.toFixed(1)},${Math.round(nameRect.width)}x${Math.round(nameRect.height)}`;
+            if (sparkleKey !== lastSparkle) {
+              lastSparkle = sparkleKey;
+              sparkleBox.style.transform = `translate(${nameRect.left.toFixed(1)}px, ${nameRect.top.toFixed(1)}px)`;
+              sparkleBox.style.width = `${Math.round(nameRect.width)}px`;
+              sparkleBox.style.height = `${Math.round(nameRect.height)}px`;
+            }
+          }
+        }
+        if (ALWAYS_TRACK || performance.now() < trackUntil) {
+          this.easterEggDecorFrame = requestAnimationFrame(follow);
+        } else {
+          this.easterEggDecorFrame = 0;
+          pollTimer = setTimeout(follow, 400);
+        }
+      };
+      follow();
+    };
+    /** Fires pixel confetti (palette squares + a few glyphs) out of the anchor's centre, on the
+     * shared particle canvas (see particleCanvas.js for why not DOM elements). */
+    const spawnBurst = (anchor, count) => {
+      if (prefersReducedMotion || !anchor?.isConnected) return;
+      const rect = anchor.getBoundingClientRect();
+      if (!rect.width && !rect.height) return;
+      const originX = rect.left + rect.width / 2;
+      const originY = rect.top + rect.height / 2;
+      for (let i = 0; i < count; i++) {
+        const color = randomColor();
+        const sprite = Math.random() < 0.22
+          ? particleCanvas.glyph(pick(EASTER_EGG_BURST_GLYPHS), color, 12 + Math.random() * 10)
+          : particleCanvas.pixel(color, 4 + Math.random() * 5);
+        // Mostly-upward cone, then gravity pulls everything down past the start point.
+        const angle = -Math.PI / 2 + (Math.random() - 0.5) * Math.PI * 1.5;
+        const speed = 90 + Math.random() * 170;
+        particleCanvas.add({
+          sprite,
+          x: originX,
+          y: originY,
+          dx: Math.cos(angle) * speed,
+          dy: Math.sin(angle) * speed,
+          gravity: 260 + Math.random() * 120,
+          spin: (Math.random() < 0.5 ? -1 : 1) * (360 + Math.random() * 720),
+          life: 1300 + Math.random() * 900,
+          delay: Math.random() * 120,
+          scaleFrom: 0.2,
+          scaleTo: 0.8,
+          scaleSpeed: 6,
+          ease: 'out2',
+        });
+      }
+    };
+    /** Puts a waved element back: drops the letter spans and returns wplace's own text nodes. */
+    const unwrapWave = (target) => {
+      (target.__bmEasterEggWaveAnimations || []).forEach(animation => {
+        try {
+          animation.cancel();
+        } catch {}
+      });
+      target.__bmEasterEggWaveAnimations = null;
+      const holder = target.__bmEasterEggWaveHolder;
+      if (holder) {
+        Array.from(target.querySelectorAll(':scope > [data-rm-wave-char]')).forEach(node => node.remove());
+        if (holder.parentNode === target) holder.replaceWith(...holder.childNodes);
+      } else {
+        const originalText = target.getAttribute('data-bm-easter-egg-wave-original');
+        if (originalText !== null) target.textContent = originalText;
+      }
+      target.__bmEasterEggWaveHolder = null;
+      target.removeAttribute('data-bm-easter-egg-wave-original');
     };
     const clearWave = () => {
-      Array.from(infoRoot.querySelectorAll('[data-bm-easter-egg-wave-original]')).forEach(target => {
-        const originalText = target.getAttribute('data-bm-easter-egg-wave-original');
-        if (originalText !== null) {
-          target.textContent = originalText;
-        }
-        target.removeAttribute('data-bm-easter-egg-wave-original');
-        const animations = target.__bmEasterEggWaveAnimations;
-        if (Array.isArray(animations)) {
-          animations.forEach(animation => {
-            try {
-              animation.cancel();
-            } catch {}
-          });
-        }
-        target.__bmEasterEggWaveAnimations = null;
-      });
+      Array.from(infoRoot.querySelectorAll('[data-bm-easter-egg-wave-original]')).forEach(unwrapWave);
     };
     const getWaveTargets = (targetElement, idPattern) => {
       const container =
@@ -712,36 +1485,58 @@ export default class ApiManager {
       let waveIndex = 0;
       let maxDelay = 0;
       targetElements.forEach(target => {
-        const originalText = target.textContent || '';
-        if (!/\S/.test(originalText)) return;
-        target.setAttribute('data-bm-easter-egg-wave-original', originalText);
-        target.textContent = '';
+        let chars;
+        const existingHolder = target.__bmEasterEggWaveHolder;
+        if (existingHolder?.parentNode === target
+          && existingHolder.textContent === target.getAttribute('data-bm-easter-egg-wave-original')) {
+          // Same text as last loop: keep the letter spans and just replay their animations,
+          // instead of tearing the DOM down and rebuilding it every few seconds.
+          (target.__bmEasterEggWaveAnimations || []).forEach(animation => {
+            try {
+              animation.cancel();
+            } catch {}
+          });
+          chars = Array.from(target.querySelectorAll(':scope > [data-rm-wave-char]'));
+        } else {
+          if (target.hasAttribute('data-bm-easter-egg-wave-original')) unwrapWave(target);
+          const originalText = target.textContent || '';
+          if (!/\S/.test(originalText)) return;
+          target.setAttribute('data-bm-easter-egg-wave-original', originalText);
+          // wplace (Svelte) keeps a reference to its text node and updates it in place when another
+          // pixel opens. Replacing it would freeze the name, so it is parked, hidden, inside the
+          // element instead; its updates still land in the DOM and the observer sees them.
+          const holder = document.createElement('span');
+          holder.style.display = 'none';
+          Array.from(target.childNodes)
+            .filter(node => node.nodeType === Node.TEXT_NODE)
+            .forEach(node => holder.appendChild(node));
+          target.appendChild(holder);
+          target.__bmEasterEggWaveHolder = holder;
+          const fragment = document.createDocumentFragment();
+          chars = Array.from(originalText, character => {
+            const waveChar = document.createElement('span');
+            waveChar.setAttribute('data-rm-wave-char', '');
+            waveChar.setAttribute('data-rm-fx', '');
+            waveChar.textContent = character === ' ' ? '\u00A0' : character;
+            waveChar.style.display = 'inline-block';
+            fragment.appendChild(waveChar);
+            return waveChar;
+          });
+          target.appendChild(fragment);
+        }
         const animations = [];
-        Array.from(originalText).forEach(character => {
-          const waveChar = document.createElement('span');
-          waveChar.textContent = character === ' ' ? '\u00A0' : character;
-          waveChar.style.display = 'inline-block';
-          waveChar.style.willChange = 'transform';
-          target.appendChild(waveChar);
+        chars.forEach(waveChar => {
           if (typeof waveChar.animate === 'function') {
             const delay = waveIndex * EASTER_EGG_WAVE_STAGGER_MS;
-            const animation = waveChar.animate(
+            animations.push(waveChar.animate(
               [
                 { transform: 'translateY(0)' },
                 { transform: 'translateY(-4px)' },
                 { transform: 'translateY(0)' }
               ],
-              {
-                duration: EASTER_EGG_WAVE_STEP_DURATION_MS,
-                easing: 'ease-in-out',
-                iterations,
-                delay
-              }
-            );
-            animations.push(animation);
-            if (delay > maxDelay) {
-              maxDelay = delay;
-            }
+              { duration: EASTER_EGG_WAVE_STEP_DURATION_MS, easing: 'ease-in-out', iterations, delay }
+            ));
+            if (delay > maxDelay) maxDelay = delay;
           }
           waveIndex += 1;
         });
@@ -754,13 +1549,12 @@ export default class ApiManager {
       if (typeof animTarget.animate === 'function') {
         animTarget.__bmEasterEggPulseAnimation?.cancel();
         animTarget.__bmEasterEggPulseAnimation = animTarget.animate(
+          // Transform only. A filter (or the old text-shadow glow) on this element forces the
+          // name and every animated wave letter inside it to be re-rendered each frame.
           [
-            { transform: 'scale(1)', textShadow: 'none' },
-            {
-              transform: 'scale(1.12)',
-              textShadow: '0 0 14px rgba(255, 235, 180, 0.9), 0 0 24px rgba(255, 180, 120, 0.6)'
-            },
-            { transform: 'scale(1)', textShadow: 'none' }
+            { transform: 'scale(1)' },
+            { transform: 'scale(1.14)' },
+            { transform: 'scale(1)' }
           ],
           { duration: 1400, easing: 'ease-in-out', iterations: 1 }
         );
@@ -782,23 +1576,36 @@ export default class ApiManager {
     clearFlowTimeouts();
     clearCloseHandler();
     clearWave();
-    const elements = Array.from(infoRoot.querySelectorAll('*'));
-    const targetUserIDs = new Set([EASTER_EGG_USER_ID]);
-    const extractTargetUserID = (text) => {
-      const match = String(text || '').match(/#\s*(\d{4,})\b/);
-      if (!match) return null;
-      const userID = Number(match[1]);
-      return targetUserIDs.has(userID) ? userID : null;
+    clearBursts();
+    // The painter's "#123456" ID. Whoever it is, their effects come from the shared config
+    // (built-in defaults cover a few accounts until they save their own).
+    const idRegex = /#\s*(\d{4,})\b/;
+    let matchedUserID = null;
+    // Only an element's own text nodes count, so the innermost element holding the ID wins.
+    const ownText = (element) => Array.from(element.childNodes)
+      .filter(node => node.nodeType === Node.TEXT_NODE)
+      .map(node => node.textContent)
+      .join('');
+    const allElements = Array.from(infoRoot.querySelectorAll('*'));
+    const matchesPainter = (text) => {
+      const match = text.match(idRegex);
+      if (!match) return false;
+      const config = resolveConfig(Number(match[1]));
+      if (!config) return false;
+      matchedUserID = Number(match[1]);
+      fx = config;
+      return true;
     };
-    const exactIdTexts = new Set(Array.from(targetUserIDs, userID => `#${userID}`));
     const targetElement =
-      elements.find(element => exactIdTexts.has((element.textContent || '').trim())) ||
-      elements.find(element => !element.children.length && extractTargetUserID(element.textContent || '') !== null) ||
-      elements.find(element => extractTargetUserID(element.textContent || '') !== null) ||
+      allElements.find(element => matchesPainter(ownText(element))) ||
+      // "#" and the digits in separate elements: take the deepest element whose text has both.
+      allElements.findLast?.(element => matchesPainter(element.textContent || '')) ||
       null;
-    if (!targetElement) return;
-    const matchedUserID = extractTargetUserID(targetElement.textContent || '');
-    if (matchedUserID === null) return;
+    if (!targetElement || !fx) return;
+    const anyEffect = fx.pulse || fx.wave || fx.confetti || fx.fireworks || fx.crown || fx.border || fx.clickExplode
+      || fx.sparkles || fx.nameStyle !== 'none' || fx.nameFont !== 'default' || fx.cardTint !== 'off' || !!fx.motto
+      || fx.nameAnimation !== 'none' || fx.cardEntrance !== 'none' || fx.ambient !== 'none';
+    if (!anyEffect) return;
     const idPattern = new RegExp(`#\\s*${matchedUserID}\\b`);
     const animTarget =
       targetElement.closest('.inline-flex.items-baseline') ||
@@ -807,24 +1614,81 @@ export default class ApiManager {
       targetElement.closest('.flex.items-center.gap-2') ||
       targetElement.closest('.flex.h-10.items-center.justify-between')?.querySelector('.flex.items-center.gap-2') ||
       targetElement;
-    this.easterEggCloseButton = closeButton;
-    this.easterEggCloseHandler = () => {
+    this.easterEggStop = () => {
       clearFlowTimeouts();
       clearWave();
+      clearBursts();
+      clearNameStyle();
       clearCloseHandler();
     };
-    closeButton.addEventListener('click', this.easterEggCloseHandler, { once: true });
-    runPulse(animTarget);
-    const runOneWaveWithPause = (waveTargets) => {
-      const waveDuration = applyWave(waveTargets, { iterations: 1 });
+    if (closeButton) {
+      this.easterEggCloseButton = closeButton;
+      this.easterEggCloseHandler = () => this.stopPixelEffects();
+      closeButton.addEventListener('click', this.easterEggCloseHandler, { once: true });
+    }
+    const nameElement = getWaveTargets(targetElement, idPattern)[0] || null;
+    // Read phase: one style pass for everything the effects need...
+    const cardStyle = getComputedStyle(infoRoot);
+    const nameStyle = nameElement ? getComputedStyle(nameElement) : null;
+    measured = {
+      radius: cardStyle.borderRadius,
+      cardBackground: Object.fromEntries(
+        ['background-image', 'background-size', 'background-position', 'background-repeat', 'background-clip', 'background-origin']
+          .map(property => [property, cardStyle.getPropertyValue(property).trim()])
+      ),
+      nameDisplay: nameStyle?.display,
+      nameColor: nameStyle?.color,
+      nameShadow: nameStyle?.textShadow,
+      mottoRow: fx.motto ? findMottoRow(animTarget) : null,
+    };
+    if (fx.confetti) spawnBurst(animTarget, EASTER_EGG_BURST_PARTICLES); // reads the layout once
+    // ...then the write phase.
+    if (fx.pulse) runPulse(animTarget);
+    playCardEntrance(infoRoot);
+    applyNameStyle(nameElement);
+    applyNameAnimation(nameElement);
+    applyCardTint(infoRoot);
+    showMotto(measured.mottoRow);
+    showDecor(infoRoot, nameElement || animTarget);
+    if (fx.fireworks) later(() => launchFireworks(infoRoot), 500);
+    if (fx.clickExplode && (fx.pulse || fx.confetti || fx.fireworks)) {
+      // Clicking the name/ID fires it all again.
+      let lastClickAt = 0;
+      this.easterEggClickTarget = animTarget;
+      this.easterEggClickPrevCursor = animTarget.style.cursor;
+      animTarget.style.cursor = 'pointer';
+      this.easterEggClickHandler = () => {
+        const now = performance.now();
+        if (now - lastClickAt < EASTER_EGG_CLICK_COOLDOWN_MS) return;
+        if (particleCanvas.count >= EASTER_EGG_MAX_PARTICLES) return;
+        lastClickAt = now;
+        this.easterEggDecorWake?.();
+        if (fx.pulse) {
+          clearTimeout(this.easterEggPulseTimeout);
+          runPulse(animTarget);
+        }
+        if (fx.confetti) spawnBurst(animTarget, EASTER_EGG_BURST_PARTICLES);
+        if (fx.fireworks) launchFireworks(infoRoot);
+      };
+      animTarget.addEventListener('click', this.easterEggClickHandler);
+    }
+    if (!fx.wave && !fx.confetti && !fx.fireworks) return;
+    // Repeats while the card is open: the letter wave (if on), plus a smaller confetti burst and
+    // another salute. Without the wave, the repeat just runs on a fixed beat.
+    const runLoop = (waveTargets) => {
+      const waveDuration = fx.wave && waveTargets.length
+        ? applyWave(waveTargets, { iterations: 1 })
+        : EASTER_EGG_WAVE_STEP_DURATION_MS;
+      if (!document.hidden) {
+        if (fx.confetti) spawnBurst(animTarget, EASTER_EGG_LOOP_BURST_PARTICLES);
+        if (fx.fireworks) launchFireworks(infoRoot);
+      }
       this.easterEggWaveLoopStartTimeout = setTimeout(() => {
-        runOneWaveWithPause(waveTargets);
+        runLoop(waveTargets);
       }, waveDuration + EASTER_EGG_WAVE_PAUSE_BEFORE_LOOP_MS);
     };
     this.easterEggWaveStartTimeout = setTimeout(() => {
-      const waveTargets = getWaveTargets(targetElement, idPattern);
-      if (!waveTargets.length) return;
-      runOneWaveWithPause(waveTargets);
+      runLoop(fx.wave ? getWaveTargets(targetElement, idPattern) : []);
     }, 1450 + EASTER_EGG_WAVE_FIRST_DELAY_MS);
   }
 
@@ -838,6 +1702,7 @@ export default class ApiManager {
   spontaneousResponseListener(overlay) {
 
     this.#setUpTimeout();
+    this.#observePixelInfoCards();
 
     // Triggers whenever a message is sent
     window.addEventListener('message', async (event) => {
