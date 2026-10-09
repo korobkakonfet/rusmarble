@@ -28,6 +28,7 @@ import { applyWidePalette } from './utils.js';
  * @param {() => void} deps.applySafeMode - Applies the persisted safe mode state to runtime hooks.
  * @param {object} deps.themeList - Available theme list.
  * @param {() => void} deps.openCustomThemeEditor - Opens the custom theme editor window.
+ * @param {() => void} deps.openPixelEffectsEditor - Opens the "My pixel effects" window.
  * @param {string} deps.outputStatusId - Element id for the status output.
  * @returns {import('./Overlay.js').default} Overlay builder instance for chaining.
  */
@@ -56,6 +57,7 @@ export function buildUserSettingsSection({
   applySafeMode,
   themeList,
   openCustomThemeEditor,
+  openPixelEffectsEditor,
   outputStatusId,
   t,
 }) {
@@ -166,6 +168,13 @@ export function buildUserSettingsSection({
               button.style.display = 'none';
             }
             button.addEventListener('click', () => { openCustomThemeEditor?.(); });
+          }).buildElement()
+        .buildElement()
+        .addDiv({'className': 'bm-setting-row', 'style': 'align-items: center; gap: 6px;'})
+          .addSpan({'textContent': t('settings.pixelEffects.label')}).buildElement()
+          .addButton({'textContent': t('settings.pixelEffects.open')}, (instance, button) => {
+            button.title = t('settings.pixelEffects.title');
+            button.addEventListener('click', () => { openPixelEffectsEditor?.(); });
           }).buildElement()
         .buildElement()
         .addCheckbox({'id': 'bm-theme-override-enabled', 'textContent': t('settings.themeOverride.label'), 'checked': templateManager.isThemeOverridden()}, (instance, label, checkbox) => {

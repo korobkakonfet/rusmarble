@@ -1017,16 +1017,21 @@ export function insertIntoPaintPanelToolbar(heading, ...elements) {
   if (!row) return;
   // wplace's pixel UI (Oct 2026) made the title row a non-wrapping `.paint-toolbar` with no
   // `ml-auto` child: appending there overflowed the panel and crushed wplace's own `.paint-tools`
-  // (min-w-0) to nothing. Our controls get a shrinkable, wrapping group right after the heading,
-  // so on the full-width legacy panel they share the title line instead of adding a row.
-  if (row.classList?.contains('paint-toolbar')) {
-    let extra = heading.nextElementSibling;
-    if (extra?.id !== 'rm-paint-toolbar-extra') {
+  // (min-w-0) to nothing. Our controls get their own wrapping line under the toolbar: sharing the
+  // title line left them only the width the tools didn't use, which on a phone was one button, so
+  // they stacked into a tall column that pushed the palette down.
+  // The heading has since moved into a `.paint-summary` wrapper inside the toolbar, so look the
+  // toolbar up rather than assuming it is the heading's parent.
+  const toolbar = heading.closest?.('.paint-toolbar');
+  if (toolbar) {
+    let extra = toolbar.querySelector(':scope > #rm-paint-toolbar-extra');
+    if (!extra) {
       extra = document.createElement('div');
       extra.id = 'rm-paint-toolbar-extra';
-      extra.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:4px;flex:1 1 0;min-width:0;margin-inline:8px;';
-      heading.after(extra);
+      extra.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:4px;order:99;flex:0 0 100%;min-width:0;margin-top:4px;';
+      toolbar.appendChild(extra);
     }
+    toolbar.style.flexWrap = 'wrap';
     for (const element of elements) {
       element.style.whiteSpace = 'nowrap';
       element.style.flexShrink = '0';
