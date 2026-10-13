@@ -694,6 +694,30 @@ html[data-rm-theme="halloween"] .bg-base-content\/10 {
   text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
 }
 
+/* wplace's pixel-info card is 470px wide, which leaves the name column next to the avatar so narrow
+ * that "Nickname #ID" wraps mid-name once the header controls are in. wplace's own
+ * `min(var(--game-panel-width), 100% - 24px)` still caps it on phones. */
+:root[data-game-ui] .game-selected-panel {
+  --game-panel-width: 540px;
+}
+/* The painter's "Nickname #ID" (wplace's name component: an inline-flex holding the nickname as an
+ * inline-block plus the ID span). Its `min-w-0` let the nickname wrap onto two lines; keep it on
+ * one and ellipsize instead, with the ID never shrinking. */
+:root[data-game-ui] .selected-pixel span.inline-flex.items-baseline {
+  flex-wrap: nowrap;
+  max-width: 100%;
+  white-space: nowrap;
+}
+:root[data-game-ui] .selected-pixel span.inline-flex.items-baseline > span.inline-block {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:root[data-game-ui] .selected-pixel span.inline-flex.items-baseline > span:not(.inline-block) {
+  flex-shrink: 0;
+}
+
 /* wplace's pixel UI (Oct 2026) paints `.game-panel-surface` with a layered `background` shorthand
  * from a higher-specificity selector, which hid the flag background on the card. Re-assert it. The
  * alliance name itself is styled on a span inside the button (see apiManager), so the button keeps
