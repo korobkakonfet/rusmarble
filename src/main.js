@@ -173,15 +173,32 @@ function updateOverlayPaletteShift(paletteAnchor, diagnostics = null) {
   const panel = getPaletteShiftPanel(paletteAnchor);
   if (!panel) { clear(); report('no-palette-panel'); return; }
 
-  // Measure from the unshifted position so repeated runs cannot compound the offset.
+  // Measure from the unshifted position so repeated runs cannot compound the offset. The overlay
+  // has `transition: all`, and measuring flushes styles, so a plain clear-then-measure starts an
+  // animation back to the unshifted spot on every run — the widget visibly jumped whenever this
+  // re-ran with an unchanged result. Measure with transitions off, then put the current shift back
+  // before re-enabling them, so only a real change in the target position animates.
+  const wasShifted = overlay.dataset.bmShiftPrevBottom !== undefined;
+  const currentBottom = overlay.style.getPropertyValue('bottom');
+  const currentMaxHeight = overlay.style.getPropertyValue('max-height');
+  const transition = overlay.style.transition;
+  overlay.style.transition = 'none';
   clear();
   const overlayRect = overlay.getBoundingClientRect();
   const panelRect = panel.getBoundingClientRect();
-  if (!overlayRect.width || !panelRect.width) { report('zero-size', { overlayRect, panelRect }); return; }
+  if (wasShifted) {
+    overlay.dataset.bmShiftPrevBottom = overlay.style.bottom ?? '';
+    overlay.dataset.bmShiftPrevMaxHeight = overlay.style.maxHeight ?? '';
+    overlay.style.setProperty('bottom', currentBottom, 'important');
+    overlay.style.setProperty('max-height', currentMaxHeight, 'important');
+  }
+  overlay.getBoundingClientRect(); // Flush with transitions still off
+  overlay.style.transition = transition;
+  if (!overlayRect.width || !panelRect.width) { clear(); report('zero-size', { overlayRect, panelRect }); return; }
 
   const overlaps = overlayRect.left < panelRect.right && overlayRect.right > panelRect.left
     && overlayRect.top < panelRect.bottom && overlayRect.bottom > panelRect.top;
-  if (!overlaps) { report('no-overlap', { overlayRect, panelRect }); return; }
+  if (!overlaps) { clear(); report('no-overlap', { overlayRect, panelRect }); return; }
 
   // The panel is full-width, so only moving up can clear it. Clamp the lift to the room actually
   // available rather than giving up when the full clearance does not fit.
@@ -192,10 +209,13 @@ function updateOverlayPaletteShift(paletteAnchor, diagnostics = null) {
   const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
   const bottomOffset = Math.max(0, viewportHeight - panelRect.top + OVERLAY_PALETTE_SHIFT_GAP);
   const availableHeight = Math.max(0, panelRect.top - OVERLAY_PALETTE_SHIFT_GAP);
-  if (availableHeight <= 0) { report('no-room', { bottomOffset, overlayRect, panelRect }); return; }
+  if (availableHeight <= 0) { clear(); report('no-room', { bottomOffset, overlayRect, panelRect }); return; }
 
-  overlay.dataset.bmShiftPrevBottom = overlay.style.bottom ?? '';
-  overlay.dataset.bmShiftPrevMaxHeight = overlay.style.maxHeight ?? '';
+  // Already shifted: the dataset still holds the original inline values from the first shift.
+  if (overlay.dataset.bmShiftPrevBottom === undefined) {
+    overlay.dataset.bmShiftPrevBottom = overlay.style.bottom ?? '';
+    overlay.dataset.bmShiftPrevMaxHeight = overlay.style.maxHeight ?? '';
+  }
   overlay.style.setProperty('bottom', `${bottomOffset}px`, 'important');
   // Keep the sheet inside the space left above the panel, so it stays scrollable instead of
   // growing behind the palette.
@@ -5526,8 +5546,9 @@ function createZoomButtons() {
   // used to be the *last* `.gap-1 > .btn[title]` in the document, but the paint panel redesign
   // added rows that match too (the pixel-info window's action row, most visibly), so the
   // buttons ended up wherever that row happened to be. Pin the anchor to the +/- column.
+  // wplace's Oct 2026 UI labels these buttons with `data-tooltip` instead of `title`; accept both.
   const column = Array.from(document.querySelectorAll('div.flex-col.gap-1')).find((candidate) => {
-    const buttons = Array.from(candidate.children).filter((child) => child.matches('button.btn[title]'));
+    const buttons = Array.from(candidate.children).filter((child) => child.matches('button.btn:is([title], [data-tooltip])'));
     return buttons.length >= 2 && buttons.some((button) => button.textContent.trim() === '-');
   });
   if (!column) return;
@@ -5538,7 +5559,7 @@ function createZoomButtons() {
   // Stale buttons from an earlier, wrong anchor: drop them so they are rebuilt in the column.
   if (zoom1) document.querySelectorAll('.bm-zoom-btn').forEach(btn => btn.remove());
 
-  const ref = Array.from(column.children).filter((child) => child.matches('button.btn[title]')).slice(-1)[0];
+  const ref = Array.from(column.children).filter((child) => child.matches('button.btn:is([title], [data-tooltip])')).slice(-1)[0];
   const container = column;
 
   const isShown = templateManager.areIntegerZoomButtonsShown();
@@ -5744,8 +5765,8 @@ function observeBlack() {
   const isRelevantObserveBlackNode = (node) => (
     node instanceof Element
     && (
-      node.matches?.('#color-1, .gap-1, .gap-1 > .btn[title], #bm-button-move, #bm-button-paint')
-      || node.querySelector?.('#color-1, .gap-1 > .btn[title], #bm-button-move, #bm-button-paint')
+      node.matches?.('#color-1, .gap-1, .gap-1 > .btn:is([title], [data-tooltip]), #bm-button-move, #bm-button-paint')
+      || node.querySelector?.('#color-1, .gap-1 > .btn:is([title], [data-tooltip]), #bm-button-move, #bm-button-paint')
     )
   );
   const queueObserveBlackSync = () => {
