@@ -1176,7 +1176,7 @@ export function coordsGeoCoordsToTileCoords(latitude, longitude, truncate = true
  * @deprecated only for demo purpose
  */
 export function zoomIn() {
-  document.querySelectorAll(".gap-1>.btn[title]")[0].click();
+  document.querySelectorAll(".gap-1>.btn:is([title],[data-tooltip])")[0].click();
 }
 
 /** Click the zoom out button
@@ -1184,7 +1184,7 @@ export function zoomIn() {
  * @deprecated only for demo purpose
  */
 export function zoomOut() {
-  document.querySelectorAll(".gap-1>.btn[title]")[1].click();
+  document.querySelectorAll(".gap-1>.btn:is([title],[data-tooltip])")[1].click();
 }
 
 /** Get the displacement in pixels per wplace pixel
