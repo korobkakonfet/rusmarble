@@ -13,6 +13,13 @@
  *       svg.pixel-grid  (viewBox 0 0 N N)  <- N is the HQ canvas size
  *       canvas (N x N)                     <- pending/preview pixels
  *
+ * Since the viewport renderer (2026-10) there is no tile div and no pixel-grid svg:
+ *     div.artboard-frame
+ *       canvas.hq-tile-layer               <- stage-sized, screen resolution, offset with left/top
+ *       canvas (N x N)                     <- pending/preview pixels
+ *
+ * Both layouts are supported; see readCanvasDims() and readHqRegion().
+ *
  * The canvas size is one of 250/500/750/1000/1500/2000 and can be expanded by
  * the alliance at any time, so everything here is derived from the DOM instead
  * of being hardcoded.
@@ -168,12 +175,20 @@ function readCanvasDims(frame) {
     if (width > 0 && height > 0) return { width, height };
   }
   // Fallback: the preview canvas is a direct child sized 1:1 with the artboard.
+  // The viewport tile layer is a direct child too, but sized to the stage, so it
+  // is skipped — and anything whose aspect does not match the frame is not it.
+  const frameWidth = Number.parseFloat(frame.style.width) || frame.getBoundingClientRect().width;
+  const frameHeight = Number.parseFloat(frame.style.height) || frame.getBoundingClientRect().height;
   for (const canvas of frame.children) {
     if (canvas.tagName !== 'CANVAS') continue;
     if (canvas.classList.contains('bm-hq-overlay')) continue; // our own overlay
+    if (canvas.classList.contains('hq-tile-layer')) continue; // viewport-sized artwork
     const width = toInt(canvas.getAttribute('width'), 0);
     const height = toInt(canvas.getAttribute('height'), 0);
-    if (width > 0 && height > 0) return { width, height };
+    if (!(width > 0 && height > 0)) continue;
+    if (frameWidth > 0 && frameHeight > 0
+      && Math.abs(Math.log((width / height) / (frameWidth / frameHeight))) > 0.02) continue;
+    return { width, height };
   }
   return null;
 }
@@ -253,13 +268,114 @@ async function dataUrlToImageData(dataUrl) {
   }
 }
 
+/** @type {WeakMap<HTMLElement, {width: number, height: number, pixels: Uint8ClampedArray, known: Uint8Array}>}
+ * HQ-sized copy of what the viewport tile layer has shown so far, per artboard frame.
+ */
+const viewportCaches = new WeakMap();
+/** `known` values (0 = never sampled): sampled while zoomed out (approximate) / sampled 1:1 or better. */
+const SAMPLE_APPROX = 1;
+const SAMPLE_EXACT = 2;
+
+/** Samples the viewport tile layer into the frame's HQ-sized cache.
+ *
+ * The viewport renderer draws the painted artwork into one `canvas.hq-tile-layer`
+ * at screen resolution, sized to the stage and offset into the frame with inline
+ * left/top. It only ever holds what is on screen, so every read accumulates into a
+ * cache that survives panning. Samples taken while an HQ pixel is smaller than a
+ * canvas pixel are approximate (nearest sampling of a downscale) and only fill
+ * gaps; they never overwrite a 1:1 sample.
+ * @param {HTMLElement} frame - The `.artboard-frame` element.
+ * @param {HTMLCanvasElement} layer - The `canvas.hq-tile-layer`.
+ * @param {number} canvasWidth - The HQ canvas width in pixels.
+ * @param {number} canvasHeight - The HQ canvas height in pixels.
+ * @returns {{width: number, height: number, pixels: Uint8ClampedArray, known: Uint8Array}|null} The cache, or `null` when unreadable.
+ */
+function sampleViewportLayer(frame, layer, canvasWidth, canvasHeight) {
+  let cache = viewportCaches.get(frame);
+  if (!cache || cache.width !== canvasWidth || cache.height !== canvasHeight) {
+    cache = {
+      width: canvasWidth,
+      height: canvasHeight,
+      pixels: new Uint8ClampedArray(canvasWidth * canvasHeight * 4),
+      known: new Uint8Array(canvasWidth * canvasHeight),
+    };
+    viewportCaches.set(frame, cache);
+  }
+
+  // Layout sizes, not bounding rects: left/top are in the frame's own (untransformed) px.
+  const frameWidth = Number.parseFloat(frame.style.width) || frame.offsetWidth;
+  const layerWidth = layer.width;
+  const layerHeight = layer.height;
+  if (!(frameWidth > 0) || !layerWidth || !layerHeight) return cache;
+  const scale = frameWidth / canvasWidth; // frame px per HQ pixel
+  const left = Number.parseFloat(layer.style.left) || 0;
+  const top = Number.parseFloat(layer.style.top) || 0;
+  const ratioX = layerWidth / (Number.parseFloat(layer.style.width) || layerWidth);
+  const ratioY = layerHeight / (Number.parseFloat(layer.style.height) || layerHeight);
+  const exact = scale * ratioX >= 1 && scale * ratioY >= 1;
+
+  let source;
+  try {
+    source = layer.getContext('2d', { willReadFrequently: true })?.getImageData(0, 0, layerWidth, layerHeight)?.data;
+  } catch (error) {
+    consoleWarn('[hq] headquarters canvas is not readable', error);
+    return null;
+  }
+  if (!source) return null;
+
+  const x0 = clamp(Math.floor(left / scale), 0, canvasWidth);
+  const y0 = clamp(Math.floor(top / scale), 0, canvasHeight);
+  const x1 = clamp(Math.ceil((left + layerWidth / ratioX) / scale), 0, canvasWidth);
+  const y1 = clamp(Math.ceil((top + layerHeight / ratioY) / scale), 0, canvasHeight);
+  const { pixels, known } = cache;
+  const quality = exact ? SAMPLE_EXACT : SAMPLE_APPROX;
+
+  for (let y = y0; y < y1; y++) {
+    const sy = Math.floor(((y + 0.5) * scale - top) * ratioY);
+    if (sy < 0 || sy >= layerHeight) continue;
+    for (let x = x0; x < x1; x++) {
+      const index = y * canvasWidth + x;
+      if (!exact && known[index] === SAMPLE_EXACT) continue;
+      const sx = Math.floor(((x + 0.5) * scale - left) * ratioX);
+      if (sx < 0 || sx >= layerWidth) continue;
+      const from = (sy * layerWidth + sx) * 4;
+      const to = index * 4;
+      pixels[to] = source[from];
+      pixels[to + 1] = source[from + 1];
+      pixels[to + 2] = source[from + 2];
+      pixels[to + 3] = source[from + 3];
+      known[index] = quality;
+    }
+  }
+  return cache;
+}
+
 /** Reads the painted HQ artwork back out of the tile canvases.
  * @param {HTMLElement} frame - The `.artboard-frame` element.
  * @param {number} canvasWidth - The HQ canvas width in pixels.
  * @param {{x: number, y: number, width: number, height: number}} region - Region of interest.
+ * @param {number} [canvasHeight=canvasWidth] - The HQ canvas height in pixels.
  * @returns {ImageData|null} Image data for `region`, or `null` when the canvases cannot be read.
  */
-function readHqRegion(frame, canvasWidth, region) {
+function readHqRegion(frame, canvasWidth, region, canvasHeight = canvasWidth) {
+  const viewportLayer = frame.querySelector(':scope > canvas.hq-tile-layer');
+  if (viewportLayer) {
+    const cache = sampleViewportLayer(frame, viewportLayer, canvasWidth, canvasHeight);
+    if (!cache) return null;
+    // Never-seen pixels stay transparent, like a tile that has not loaded yet.
+    const output = new ImageData(region.width, region.height);
+    for (let y = 0; y < region.height; y++) {
+      const hqY = region.y + y;
+      if (hqY < 0 || hqY >= canvasHeight) continue;
+      const startX = clamp(region.x, 0, canvasWidth);
+      const endX = clamp(region.x + region.width, 0, canvasWidth);
+      if (endX <= startX) continue;
+      const from = (hqY * canvasWidth + startX) * 4;
+      output.data.set(cache.pixels.subarray(from, from + (endX - startX) * 4), (y * region.width + (startX - region.x)) * 4);
+    }
+    return output;
+  }
+
   const tiles = frame.querySelectorAll('.hq-tile-layer canvas');
   if (!tiles.length) return null;
 
@@ -451,7 +567,7 @@ export function createHqTemplateManager({ getLanguage = () => 'en', remote = nul
 
     const { width, height } = image;
     const region = { x: layer.x, y: layer.y, width, height };
-    const painted = readHqRegion(dom.frame, canvasWidth, region);
+    const painted = readHqRegion(dom.frame, canvasWidth, region, canvasHeight);
     if (!painted) {
       progress = null;
       wrongMask = null;

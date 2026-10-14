@@ -329,6 +329,9 @@ export default class TemplateManager {
     // order, but invalidating a template no longer has to scan (and substring-match) every key.
     this._overlayRasterCacheBySortID = new Map();
     this._livePixelsFetcher = null;
+    // Background-mode live tile downloads, keyed "0000,0000" -> { promise, time }. Shared so the
+    // chunks of one tile, and passes close together, make one request instead of one each.
+    this._liveFetchCache = new Map();
     // Freshest tile PNGs as the page itself received them, keyed "0000,0000". The overlay reads
     // erase pixels against these instead of re-requesting the tile URL, which the browser cache
     // and wplace's own service worker both answer with a stale copy.
@@ -1925,7 +1928,7 @@ export default class TemplateManager {
               const paddedTileKey = `${String(liveTileX).padStart(4, '0')},${String(liveTileY).padStart(4, '0')}`;
               let livePixels = await this.getCachedTilePixels(paddedTileKey);
               if (!livePixels && backgroundMode) {
-                livePixels = await this._livePixelsFetcher(liveTileX, liveTileY);
+                livePixels = await this._fetchLivePixelsShared(paddedTileKey, liveTileX, liveTileY);
               }
               if (!(livePixels instanceof Uint8ClampedArray) || livePixels.length < 4) diag.noLivePixels++;
               if (livePixels instanceof Uint8ClampedArray && livePixels.length >= 4) {
@@ -4035,6 +4038,38 @@ export default class TemplateManager {
 
   setLivePixelsFetcher(fn) {
     this._livePixelsFetcher = typeof fn === 'function' ? fn : null;
+    this._liveFetchCache.clear();
+  }
+
+  /** Downloads a live tile for background mode, at most once per tile per LIVE_FETCH_TTL.
+   *
+   * The overlay pass asks once per template chunk, all chunks in parallel, and every tile refresh
+   * that touches erase pixels schedules another pass. Uncached, a template spanning a few tiles
+   * fired dozens of identical tile requests per pass while painting, and the tile server answered
+   * with 429s. A failed download is dropped right away so the next pass can retry.
+   * @param {string} tileKey - Padded "tileX,tileY".
+   * @returns {Promise<Uint8ClampedArray|null>}
+   */
+  _fetchLivePixelsShared(tileKey, tileX, tileY) {
+    const LIVE_FETCH_TTL = 15000;
+    const now = Date.now();
+    const cached = this._liveFetchCache.get(tileKey);
+    if (cached && now - cached.time < LIVE_FETCH_TTL) return cached.promise;
+    const promise = Promise.resolve()
+      .then(() => this._livePixelsFetcher(tileX, tileY))
+      .catch(() => null)
+      .then((pixels) => {
+        if (!(pixels instanceof Uint8ClampedArray) && this._liveFetchCache.get(tileKey)?.promise === promise) {
+          this._liveFetchCache.delete(tileKey);
+        }
+        return pixels ?? null;
+      });
+    this._liveFetchCache.delete(tileKey);
+    this._liveFetchCache.set(tileKey, { promise, time: now });
+    while (this._liveFetchCache.size > 64) {
+      this._liveFetchCache.delete(this._liveFetchCache.keys().next().value);
+    }
+    return promise;
   }
 
   isNextTemplatePixelShortcutEnabled() {

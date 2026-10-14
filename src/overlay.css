@@ -1439,6 +1439,279 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   background: rgba(128, 128, 128, 0.12);
 }
 
+/* ---- Time machine (time-archive templates) -------------------------------
+ * The selection is drawn over the map in fixed, screen-space coordinates that the builder
+ * re-projects every frame. Above the map canvas but under wplace's own floating UI. Dragging the
+ * inside moves the selection (the builder forwards the wheel to the map, so zoom still works over
+ * it); the map still pans when grabbed outside. The blue is
+ * fixed rather than the skin accent: it marks a selection, and several skins' accents are
+ * pastel tones that vanish against the canvas. */
+.bm-archive-frame {
+  position: fixed;
+  z-index: 2;
+  box-sizing: border-box;
+  pointer-events: none;
+  border: 2px solid #4f8ff7;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45), 0 4px 18px rgba(0, 0, 0, 0.35);
+}
+
+.bm-archive-frame-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: rgba(79, 143, 247, 0.08);
+}
+
+/* Opaque backdrop behind the snapshot: pixels that were still empty at that date must not let
+ * today's art show through from the live map. A light checkerboard, so "empty" stays
+ * distinguishable from painted white. */
+.bm-archive-frame-image {
+  position: absolute;
+  display: block;
+  background-color: #f4f6f9;
+  background-image:
+    linear-gradient(45deg, #e3e8ef 25%, transparent 25%, transparent 75%, #e3e8ef 75%),
+    linear-gradient(45deg, #e3e8ef 25%, transparent 25%, transparent 75%, #e3e8ef 75%);
+  background-position: 0 0, 6px 6px;
+  background-size: 12px 12px;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+.bm-archive-move-area {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  cursor: move;
+  touch-action: none;
+}
+
+.bm-archive-frame-dragging .bm-archive-move-area {
+  cursor: grabbing;
+}
+
+.bm-archive-frame-busy .bm-archive-move-area {
+  pointer-events: none;
+}
+
+.bm-archive-handle {
+  position: absolute;
+  width: 11px;
+  height: 11px;
+  box-sizing: border-box;
+  transform: translate(-50%, -50%);
+  border: 2px solid #fff;
+  border-radius: 2px;
+  background: #4f8ff7;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
+  touch-action: none;
+}
+
+/* Bigger hit area than the visible square. */
+.bm-archive-handle::before {
+  content: '';
+  position: absolute;
+  inset: -7px;
+}
+
+.bm-archive-frame-small .bm-archive-handle:is([data-rm-handle="n"], [data-rm-handle="e"], [data-rm-handle="s"], [data-rm-handle="w"]),
+.bm-archive-frame-busy .bm-archive-handle {
+  display: none;
+}
+
+.bm-archive-frame-badge {
+  position: absolute;
+  left: -2px;
+  top: 100%;
+  margin-top: 8px;
+  display: none;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(15, 23, 42, 0.85);
+  color: #fff;
+  font: 600 11px/1.35 ui-sans-serif, system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.bm-archive-frame-dragging .bm-archive-frame-badge {
+  display: block;
+}
+
+.bm-archive-panel {
+  position: fixed;
+  z-index: 10055;
+  box-sizing: border-box;
+  width: min(340px, calc(100vw - 16px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 8px;
+  border: 1px solid var(--bm-border-strong, rgba(255, 255, 255, 0.25));
+  border-radius: 12px;
+  background: var(--bm-bg, rgba(20, 20, 20, 0.95));
+  color: var(--bm-fg, #fff);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.bm-archive-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.bm-archive-panel-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.bm-archive-panel-title::before {
+  content: '🕘';
+  margin-right: 6px;
+}
+
+.bm-archive-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--bm-border, rgba(255, 255, 255, 0.2));
+  border-radius: 8px;
+  background: var(--bm-btn-bg, rgba(255, 255, 255, 0.1));
+  color: var(--bm-btn-text, #fff);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.bm-archive-icon-btn:hover:not(:disabled) {
+  background: var(--bm-btn-hover, rgba(255, 255, 255, 0.18));
+}
+
+.bm-archive-panel button:disabled,
+.bm-archive-panel select:disabled,
+.bm-archive-panel input:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.bm-archive-date-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.bm-archive-date-select {
+  height: 30px;
+  min-width: 0;
+  padding: 0 8px;
+  border: 1px solid var(--bm-border, rgba(255, 255, 255, 0.2));
+  border-radius: 8px;
+  background: var(--bm-btn-bg, rgba(255, 255, 255, 0.1));
+  color: var(--bm-btn-text, #fff);
+  font: inherit;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.bm-archive-date-select option {
+  background: var(--bm-panel-bg, #1e1e1e);
+  color: var(--bm-fg, #fff);
+}
+
+.bm-archive-timeline {
+  width: 100%;
+  margin: 2px 0;
+  accent-color: #4f8ff7;
+  cursor: pointer;
+}
+
+.bm-archive-summary {
+  font-variant-numeric: tabular-nums;
+}
+
+.bm-archive-status {
+  margin-top: -4px;
+  color: var(--bm-muted, rgba(255, 255, 255, 0.6));
+  font-size: 11px;
+}
+
+.bm-archive-status.bm-archive-status-error {
+  color: var(--bm-danger, #f87171);
+}
+
+.bm-archive-progress {
+  width: 100%;
+  height: 6px;
+  accent-color: #4f8ff7;
+}
+
+.bm-archive-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+
+.bm-archive-actions .bm-archive-download-btn {
+  width: 36px;
+  height: 36px;
+}
+
+.bm-archive-create-btn {
+  height: 36px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: #4f8ff7;
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.bm-archive-create-btn:hover:not(:disabled) {
+  background: #3b7be6;
+}
+
+.bm-archive-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--bm-muted, rgba(255, 255, 255, 0.6));
+  font-size: 10.5px;
+}
+
+.bm-archive-footer a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+.bm-archive-link-btn {
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
 .bm-template-highlight {
   background: var(--bm-highlight-bg);
   border: 1px solid var(--bm-highlight-border);
@@ -2751,7 +3024,6 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   #bm-overlay button,
   #bm-overlay summary,
   .bm-text-template-window button,
-  .bm-archive-window button,
   #bm-chat-bans-window button {
     min-height: 44px;
     min-width: 44px;
@@ -2869,20 +3141,30 @@ span.bm-templatename:hover, a.bm-templatename:focus {
 
   /* ---- Archive / HQ dialogs: stack instead of shrinking ---------------- */
 
-  .bm-archive-backdrop {
-    padding: 0 !important;
-    align-items: stretch !important;
+  /* Time machine: bigger targets, and handles a finger can actually grab. */
+  .bm-archive-icon-btn,
+  .bm-archive-date-select {
+    width: auto;
+    min-width: 40px;
+    height: 40px;
   }
 
-  .bm-archive-window {
-    width: 100% !important;
-    max-height: 100dvh !important;
-    border-radius: 0 !important;
-    padding-bottom: calc(12px + env(safe-area-inset-bottom)) !important;
+  .bm-archive-actions .bm-archive-download-btn,
+  .bm-archive-create-btn {
+    height: 44px;
   }
 
-  .bm-archive-controls {
-    grid-template-columns: minmax(0, 1fr) !important;
+  .bm-archive-actions .bm-archive-download-btn {
+    width: 44px;
+  }
+
+  .bm-archive-handle {
+    width: 18px;
+    height: 18px;
+  }
+
+  .bm-archive-handle::before {
+    inset: -10px;
   }
 
   .bm-hq-row,

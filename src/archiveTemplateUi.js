@@ -2,7 +2,8 @@
  * @since 0.87.39
  */
 
-import { makePointerPannable } from './utils.js';
+import { makePanelDraggable, makePointerPannable, registerFloatingPanel } from './utils.js';
+import { coordsTileCoordsToGeoCoords, getMapCanvasElement, projectGeoToScreen } from './utilsMaptiler.js';
 
 /**
  * Creates the time-archive template UI helpers while keeping their internal modal state
@@ -45,8 +46,6 @@ export const createArchiveTemplateUi = (deps = {}) => {
 
   const archiveTemplateVersionCache = new Map();
   const ARCHIVE_REGION_PIXEL_BASE_URL = 'https://backend.wplace.live/s0/pixel';
-  const ARCHIVE_TEMPLATE_PREVIEW_ZOOM_MIN = 1;
-  const ARCHIVE_TEMPLATE_PREVIEW_ZOOM_MAX = 12;
   const archiveTemplatePointCaptureState = {
     active: false,
     points: [],
@@ -263,16 +262,68 @@ export const createArchiveTemplateUi = (deps = {}) => {
     await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
   };
 
+  /** `2025-08-09T22` (hour 22, UTC) -> `2025-08-09 22:00 UTC`; plain dates pass through. */
+  const formatArchiveVersionLabel = (entry) => {
+    const date = String(entry?.date || '').trim();
+    const hourMatch = date.match(/^(\d{4}-\d{2}-\d{2})T(\d{1,2})(?::(\d{2}))?/);
+    if (hourMatch) return `${hourMatch[1]} ${hourMatch[2].padStart(2, '0')}:${hourMatch[3] || '00'} UTC`;
+    return date || String(entry?.version || '').trim();
+  };
+
+  /** Absolute world pixel -> [tileX, tileY, pixelX, pixelY]. */
+  const worldPointToCoords = (x, y) => {
+    const wrappedX = ((x % MAP_WORLD_WIDTH_PX) + MAP_WORLD_WIDTH_PX) % MAP_WORLD_WIDTH_PX;
+    return [
+      Math.floor(wrappedX / TEMPLATE_TILE_SIZE),
+      Math.floor(y / TEMPLATE_TILE_SIZE),
+      wrappedX % TEMPLATE_TILE_SIZE,
+      y % TEMPLATE_TILE_SIZE,
+    ];
+  };
+
+  /** Selection rectangle from world edges (right/bottom exclusive). */
+  const buildArchiveTemplateRectFromEdges = ({ left, top, right, bottom }) => buildArchiveTemplateRectFromPoints(
+    worldPointToCoords(left, top),
+    worldPointToCoords(right - 1, bottom - 1)
+  );
+
+  /** Map-canvas (CSS px) position of an absolute world pixel corner. */
+  const projectWorldPoint = (x, y) => {
+    // Tile [0, 0] plus an absolute pixel offset: the conversion only ever sums the two.
+    const geo = coordsTileCoordsToGeoCoords([0, 0], [x, y], false);
+    return projectGeoToScreen(geo[0], geo[1]);
+  };
+
+  // Map previews never need more than about a screen's worth of pixels.
+  const ARCHIVE_MAP_PREVIEW_MAX_DIMENSION = Math.min(2048, TEMPLATE_ARCHIVE_PREVIEW_MAX_DIMENSION);
+  // Decoded versions kept around for scrubbing back and forth.
+  const ARCHIVE_PREVIEW_MEMORY_BUDGET = 192 * 1024 * 1024;
+  const ARCHIVE_PREVIEW_MAX_ENTRIES = 24;
+  const ARCHIVE_PREVIEW_PREFETCH_RADIUS = 3;
+  const ARCHIVE_SCRUB_LOAD_DELAY_MS = 120;
+  const ARCHIVE_HANDLES = [
+    ['nw', -1, -1, 'nwse-resize'],
+    ['n', 0, -1, 'ns-resize'],
+    ['ne', 1, -1, 'nesw-resize'],
+    ['e', 1, 0, 'ew-resize'],
+    ['se', 1, 1, 'nwse-resize'],
+    ['s', 0, 1, 'ns-resize'],
+    ['sw', -1, 1, 'nesw-resize'],
+    ['w', -1, 0, 'ew-resize'],
+  ];
+
   /**
-   * Opens the archive template builder for a selected rectangular region.
+   * Opens the time machine for a selected rectangular region: the selection is drawn on the map
+   * with the archive snapshot inside it and resize handles around it, next to a compact panel to
+   * pick the date and create the template.
    *
    * @param {object} options Selected points and optional update target.
    * @returns {Promise<object|null>}
    */
   const openArchiveTemplateBuilder = ({ firstPoint, secondPoint, overlayInstance = null, targetTemplate = null } = {}) => {
     const activeOverlay = overlayInstance || overlayMain;
-    const rect = buildArchiveTemplateRectFromPoints(firstPoint, secondPoint);
-    if (!rect) {
+    const initialRect = buildArchiveTemplateRectFromPoints(firstPoint, secondPoint);
+    if (!initialRect) {
       activeOverlay?.handleDisplayError(tt('dialog.archive.range.invalid', 'Could not read the selected archive range.'));
       return Promise.resolve(null);
     }
@@ -284,1018 +335,771 @@ export const createArchiveTemplateUi = (deps = {}) => {
       archiveTemplateWindowSession.close(null);
     }
     const archiveBaseUrl = normalizeArchiveTemplateBaseUrl(TEMPLATE_ARCHIVE_BASE_URL);
+    const archiveHost = (() => {
+      try { return new URL(archiveBaseUrl).host; } catch (_) { return archiveBaseUrl; }
+    })();
     const numberFmt = new Intl.NumberFormat();
-    let supportsCreate = false;
-    try {
-      supportsCreate = testCanvasSize(rect.width, rect.height);
-    } catch (_) {
-      supportsCreate = false;
-    }
 
     return new Promise((resolve) => {
-      const backdrop = document.createElement('div');
-      backdrop.className = 'bm-archive-backdrop'; // Hook for the mobile stylesheet
-      backdrop.style.position = 'fixed';
-      backdrop.style.left = '0';
-      backdrop.style.top = '0';
-      backdrop.style.right = '0';
-      backdrop.style.bottom = '0';
-      backdrop.style.display = 'flex';
-      backdrop.style.alignItems = 'center';
-      backdrop.style.justifyContent = 'center';
-      backdrop.style.padding = '12px';
-      backdrop.style.background = 'rgba(0, 0, 0, 0.45)';
-      backdrop.style.backdropFilter = 'blur(16px) saturate(140%)';
-      backdrop.style.webkitBackdropFilter = 'blur(16px) saturate(140%)';
-      backdrop.style.zIndex = '10055';
+      /* ---- selection state ------------------------------------------------ */
 
-      const panel = document.createElement('section');
-      panel.className = 'bm-archive-window'; // Hook for the mobile stylesheet
-      panel.style.width = 'min(760px, calc(100vw - 24px))';
-      panel.style.maxHeight = 'calc(100vh - 24px)';
-      panel.style.overflow = 'auto';
-      panel.style.background = 'var(--bm-bg, rgba(20, 20, 20, 0.95))';
-      panel.style.color = 'var(--bm-fg, #fff)';
-      panel.style.border = '1px solid var(--bm-glass-border, var(--bm-border-strong, rgba(255, 255, 255, 0.25)))';
-      panel.style.borderRadius = '10px';
-      panel.style.boxShadow = 'var(--bm-glass-shadow, 0 10px 30px rgba(0, 0, 0, 0.35)), var(--bm-glass-inner-shadow, inset 0 1px 0 rgba(255, 255, 255, 0))';
-      panel.style.backdropFilter = 'blur(var(--bm-glass-blur, 18px)) saturate(var(--bm-glass-saturate, 160%))';
-      panel.style.webkitBackdropFilter = 'blur(var(--bm-glass-blur, 18px)) saturate(var(--bm-glass-saturate, 160%))';
-      panel.style.padding = '12px';
-      panel.style.display = 'flex';
-      panel.style.flexDirection = 'column';
-      panel.style.gap = '10px';
-      panel.style.pointerEvents = 'auto';
-      panel.setAttribute('role', 'dialog');
-      panel.setAttribute('aria-modal', 'true');
-      panel.setAttribute('aria-label', tt('dialog.archive.ariaLabel', 'Time archive template builder'));
-      applyOverlayVarsToFloatingElement(panel);
-
-      const headingRow = document.createElement('div');
-      headingRow.style.display = 'flex';
-      headingRow.style.alignItems = 'center';
-      headingRow.style.gap = '8px';
-      const title = document.createElement('strong');
-      title.style.fontSize = '13px';
-      title.textContent = isUpdateMode
-        ? tt('dialog.archive.title.update', 'Time-Archive Template Update')
-        : tt('dialog.archive.title.create', 'Time-Archive Template');
-      const closeBtn = document.createElement('button');
-      closeBtn.type = 'button';
-      closeBtn.textContent = '✖';
-      closeBtn.style.marginLeft = 'auto';
-      headingRow.appendChild(title);
-      headingRow.appendChild(closeBtn);
-      panel.appendChild(headingRow);
-
-      const rangeInfo = document.createElement('div');
-      rangeInfo.style.whiteSpace = 'pre-line';
-      rangeInfo.style.fontSize = '12px';
-      rangeInfo.style.lineHeight = '1.35';
-      const [brTx, brTy, brPx, brPy] = rect.displayBottomRight;
-      rangeInfo.textContent = [
-        tt('dialog.archive.range.topLeft', 'Top Left: Tl X {tx}, Tl Y {ty}, Px X {px}, Px Y {py}', {
-          tx: rect.tx1,
-          ty: rect.ty1,
-          px: rect.px1,
-          py: rect.py1,
-        }),
-        tt('dialog.archive.range.bottomRight', 'Bottom Right: Tl X {tx}, Tl Y {ty}, Px X {px}, Px Y {py}', {
-          tx: brTx,
-          ty: brTy,
-          px: brPx,
-          py: brPy,
-        }),
-        tt('dialog.archive.range.size', 'Size: {width} x {height} px', {
-          width: numberFmt.format(rect.width),
-          height: numberFmt.format(rect.height),
-        }),
-        tt('dialog.archive.range.tiles', 'Tiles: {count} ({tileWidth} x {tileHeight})', {
-          count: numberFmt.format(rect.tileCount),
-          tileWidth: numberFmt.format(rect.tileWidth),
-          tileHeight: numberFmt.format(rect.tileHeight),
-        }),
-        tt('dialog.archive.range.provider', 'Provider: {provider}', { provider: archiveBaseUrl }),
-      ].join('\n');
-      panel.appendChild(rangeInfo);
-
-      const controls = document.createElement('div');
-      controls.className = 'bm-archive-controls'; // Collapsed to one column on mobile
-      controls.style.display = 'grid';
-      controls.style.gridTemplateColumns = 'auto minmax(220px, 1fr) auto auto';
-      controls.style.gap = '8px';
-      controls.style.alignItems = 'center';
-      const versionLabel = document.createElement('label');
-      versionLabel.textContent = tt('dialog.archive.date', 'Date');
-      const versionRange = document.createElement('input');
-      versionRange.type = 'range';
-      versionRange.min = '0';
-      versionRange.max = '0';
-      versionRange.step = '1';
-      versionRange.value = '0';
-      versionRange.style.width = '100%';
-      versionRange.style.margin = '0';
-      versionRange.disabled = true;
-      const versionValue = document.createElement('span');
-      versionValue.style.fontSize = '12px';
-      versionValue.style.fontVariantNumeric = 'tabular-nums';
-      versionValue.style.whiteSpace = 'nowrap';
-      versionValue.textContent = tt('dialog.common.loading', 'Loading...');
-      const refreshBtn = document.createElement('button');
-      refreshBtn.type = 'button';
-      refreshBtn.textContent = tt('dialog.archive.refresh', 'Refresh');
-      controls.appendChild(versionLabel);
-      controls.appendChild(versionRange);
-      controls.appendChild(versionValue);
-      controls.appendChild(refreshBtn);
-      panel.appendChild(controls);
-
-      const versionMeta = document.createElement('div');
-      versionMeta.style.fontSize = '11px';
-      versionMeta.style.color = 'var(--bm-muted)';
-      panel.appendChild(versionMeta);
-
-      const statusOutput = document.createElement('div');
-      statusOutput.style.fontSize = '11px';
-      statusOutput.style.color = 'var(--bm-muted)';
-      panel.appendChild(statusOutput);
-
-      const previewWrap = document.createElement('div');
-      previewWrap.style.position = 'relative';
-      previewWrap.style.display = 'flex';
-      previewWrap.style.justifyContent = 'center';
-      previewWrap.style.alignItems = 'center';
-      previewWrap.style.width = '100%';
-      previewWrap.style.height = '320px';
-      previewWrap.style.minHeight = '170px';
-      previewWrap.style.overflow = 'hidden';
-      previewWrap.style.border = '1px solid var(--bm-border-strong, rgba(255, 255, 255, 0.25))';
-      previewWrap.style.borderRadius = '8px';
-      previewWrap.style.background = 'var(--bm-subtle-bg, rgba(255, 255, 255, 0.04))';
-      const previewCanvas = document.createElement('canvas');
-      previewCanvas.style.display = 'block';
-      previewCanvas.style.width = '100%';
-      previewCanvas.style.height = '100%';
-      previewCanvas.style.background = 'rgba(0, 0, 0, 0.2)';
-      previewWrap.appendChild(previewCanvas);
-      panel.appendChild(previewWrap);
-
-      const previewControls = document.createElement('div');
-      previewControls.style.display = 'flex';
-      previewControls.style.alignItems = 'center';
-      previewControls.style.justifyContent = 'space-between';
-      previewControls.style.flexWrap = 'wrap';
-      previewControls.style.gap = '8px';
-      const previewHint = document.createElement('div');
-      previewHint.style.fontSize = '11px';
-      previewHint.style.color = 'var(--bm-muted)';
-      previewHint.textContent = tt('dialog.archive.previewHint', 'Wheel to zoom. Drag to pan.');
-      const previewZoomControls = document.createElement('div');
-      previewZoomControls.style.display = 'inline-flex';
-      previewZoomControls.style.alignItems = 'center';
-      previewZoomControls.style.gap = '6px';
-      const zoomOutBtn = document.createElement('button');
-      zoomOutBtn.type = 'button';
-      zoomOutBtn.textContent = '-';
-      zoomOutBtn.title = tt('dialog.archive.zoomOut', 'Zoom out');
-      const zoomValue = document.createElement('span');
-      zoomValue.style.minWidth = '52px';
-      zoomValue.style.fontSize = '11px';
-      zoomValue.style.textAlign = 'center';
-      zoomValue.style.fontVariantNumeric = 'tabular-nums';
-      zoomValue.textContent = '100%';
-      const zoomResetBtn = document.createElement('button');
-      zoomResetBtn.type = 'button';
-      zoomResetBtn.textContent = tt('dialog.archive.reset', 'Reset');
-      zoomResetBtn.title = tt('dialog.archive.resetTitle', 'Reset zoom and pan');
-      const zoomInBtn = document.createElement('button');
-      zoomInBtn.type = 'button';
-      zoomInBtn.textContent = '+';
-      zoomInBtn.title = tt('dialog.archive.zoomIn', 'Zoom in');
-      previewZoomControls.appendChild(zoomOutBtn);
-      previewZoomControls.appendChild(zoomValue);
-      previewZoomControls.appendChild(zoomResetBtn);
-      previewZoomControls.appendChild(zoomInBtn);
-      previewControls.appendChild(previewHint);
-      previewControls.appendChild(previewZoomControls);
-      panel.appendChild(previewControls);
-
-      const progress = document.createElement('progress');
-      progress.max = 1;
-      progress.value = 0;
-      progress.hidden = true;
-      panel.appendChild(progress);
-
-      const progressText = document.createElement('div');
-      progressText.style.fontSize = '11px';
-      progressText.style.color = 'var(--bm-muted)';
-      progressText.hidden = true;
-      panel.appendChild(progressText);
-
-      const actions = document.createElement('div');
-      actions.style.display = 'flex';
-      actions.style.justifyContent = 'flex-end';
-      actions.style.gap = '8px';
-      const cancelBtn = document.createElement('button');
-      cancelBtn.type = 'button';
-      cancelBtn.textContent = tt('dialog.common.cancel', 'Cancel');
-      const createDownloadBtn = document.createElement('button');
-      createDownloadBtn.type = 'button';
-      createDownloadBtn.textContent = isUpdateMode
-        ? tt('dialog.archive.button.updateDownload', 'Update & Download Image')
-        : tt('dialog.archive.button.createDownload', 'Create & Download Image');
-      const createBtn = document.createElement('button');
-      createBtn.type = 'button';
-      createBtn.textContent = isUpdateMode
-        ? tt('dialog.archive.button.update', 'Update Template')
-        : tt('dialog.common.createTemplate', 'Create Template');
-      actions.appendChild(cancelBtn);
-      actions.appendChild(createDownloadBtn);
-      actions.appendChild(createBtn);
-      panel.appendChild(actions);
-      backdrop.appendChild(panel);
-
-      let closed = false;
-      let busy = false;
-      let loadingVersions = false;
-      let previewResizeObserver = null;
-      let previewRedrawQueued = false;
-      let previewDragState = null; // Truthy while a pan is in progress (drives the cursor)
-      let detachPreviewPan = null;
-      let archiveVersions = [];
-      let selectedVersionValue = String(targetTemplateMeta?.archiveVersion || '').trim();
-      let selectedVersionDate = '';
-      let selectedVersionLabel = '';
-      let previewZoomLevel = ARCHIVE_TEMPLATE_PREVIEW_ZOOM_MIN;
-      let previewPanX = 0;
-      let previewPanY = 0;
-      let previewHasImage = false;
-      let previewPlaceholderMessage = tt('dialog.common.loadingPreview', 'Loading preview...');
-      let previewPrefetchGeneration = 0;
-      let previewPrefetchSuspended = false;
-      let previewPrefetchWaiters = [];
-      let statusCategory = 'idle';
-      const previewImageCanvas = document.createElement('canvas');
-      const previewEntries = new Map();
-      const previewTileCoords = [];
-      const previewSupported = rect.tileCount <= TEMPLATE_ARCHIVE_PREVIEW_MAX_TILE_REQUESTS;
-      const previewPrefetchConcurrency = Math.max(
-        1,
-        Math.min(16, Math.trunc(Number(TEMPLATE_ARCHIVE_PREVIEW_DOWNLOAD_CONCURRENCY) || 10))
-      );
-      for (let ty = rect.ty1; ty <= rect.ty2; ty++) {
-        for (let tx = rect.tx1; tx <= rect.tx2; tx++) {
-          previewTileCoords.push({ tx, ty });
+      let rect = initialRect;
+      /** Live world edges; differ from `rect` only while a handle is being dragged. */
+      let edges = { left: rect.left, top: rect.top, right: rect.left + rect.width, bottom: rect.top + rect.height };
+      let previewTiles = [];
+      let previewDims = null;
+      let previewSupported = false;
+      let supportsCreate = false;
+      let maxPreviewEntries = 2;
+      const applyRectDerivedState = () => {
+        previewTiles = [];
+        for (let ty = rect.ty1; ty <= rect.ty2; ty++) {
+          for (let tx = rect.tx1; tx <= rect.tx2; tx++) {
+            previewTiles.push({ tx, ty });
+          }
         }
-      }
-      const previewDimensions = (() => {
-        const scale = Math.min(1, TEMPLATE_ARCHIVE_PREVIEW_MAX_DIMENSION / Math.max(rect.width, rect.height));
-        return {
+        const scale = Math.min(1, ARCHIVE_MAP_PREVIEW_MAX_DIMENSION / Math.max(rect.width, rect.height));
+        previewDims = {
           scale,
           width: Math.max(1, Math.round(rect.width * scale)),
           height: Math.max(1, Math.round(rect.height * scale)),
         };
-      })();
+        previewSupported = rect.tileCount <= TEMPLATE_ARCHIVE_PREVIEW_MAX_TILE_REQUESTS;
+        try {
+          supportsCreate = testCanvasSize(rect.width, rect.height);
+        } catch (_) {
+          supportsCreate = false;
+        }
+        const entryBytes = previewDims.width * previewDims.height * 4;
+        maxPreviewEntries = Math.max(2, Math.min(ARCHIVE_PREVIEW_MAX_ENTRIES, Math.floor(ARCHIVE_PREVIEW_MEMORY_BUDGET / entryBytes)));
+      };
+      applyRectDerivedState();
 
-      const setStatus = (message, isError = false, category = 'general') => {
-        statusOutput.textContent = message;
-        statusOutput.style.color = isError ? 'var(--bm-danger)' : 'var(--bm-muted)';
-        statusCategory = category;
+      let closed = false;
+      let busy = false;
+      let dragging = false;
+      let loadingVersions = false;
+      let archiveVersions = [];
+      let selectedIndex = -1;
+      let selectedVersionValue = String(targetTemplateMeta?.archiveVersion || '').trim();
+      let frameRaf = 0;
+      let scrubTimer = 0;
+      let prefetching = false;
+      let lastFrameBox = '';
+      let lastImageBox = '';
+      let frameScreenWidth = 0;
+      let statusMessage = '';
+      let statusIsError = false;
+      const cleanups = [];
+
+      /* ---- on-map frame ------------------------------------------------------ */
+
+      const frame = document.createElement('div');
+      frame.className = 'bm-archive-frame';
+      frame.style.display = 'none';
+      const frameImage = document.createElement('canvas');
+      frameImage.className = 'bm-archive-frame-image';
+      frameImage.width = 0;
+      frameImage.height = 0;
+      // Clips the snapshot to the selection while the handles stick out past its edge.
+      const frameClip = document.createElement('div');
+      frameClip.className = 'bm-archive-frame-clip';
+      frameClip.appendChild(frameImage);
+      frame.appendChild(frameClip);
+      const frameBadge = document.createElement('div');
+      frameBadge.className = 'bm-archive-frame-badge';
+      frame.appendChild(frameBadge);
+      /** World edges of what `frameImage` currently shows; kept while a new version loads. */
+      let shownImageEdges = null;
+      let shownVersion = '';
+
+      /* ---- panel ------------------------------------------------------------- */
+
+      const panel = document.createElement('section');
+      panel.className = 'bm-archive-panel';
+      panel.setAttribute('role', 'dialog');
+      panel.setAttribute('aria-label', tt('dialog.archive.ariaLabel', 'Time archive template builder'));
+
+      const header = document.createElement('div');
+      header.className = 'bm-archive-panel-header';
+      header.title = tt('dialog.common.dragToMove', 'Drag to move');
+      const title = document.createElement('strong');
+      title.className = 'bm-archive-panel-title';
+      title.textContent = isUpdateMode
+        ? tt('dialog.archive.title.update', 'Time machine: update template')
+        : tt('dialog.archive.title.create', 'Time machine');
+      const closeBtn = document.createElement('button');
+      closeBtn.type = 'button';
+      closeBtn.className = 'bm-archive-icon-btn';
+      // Icons are SVG and texts plain ASCII: custom UI fonts (theme editor) remap symbols such as
+      // × to unrelated letters.
+      closeBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+      closeBtn.title = tt('dialog.common.close', 'Close');
+      closeBtn.setAttribute('aria-label', closeBtn.title);
+      header.append(title, closeBtn);
+
+      const dateRow = document.createElement('div');
+      dateRow.className = 'bm-archive-date-row';
+      const prevBtn = document.createElement('button');
+      prevBtn.type = 'button';
+      prevBtn.className = 'bm-archive-icon-btn';
+      prevBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>';
+      prevBtn.title = tt('dialog.archive.prev', 'Earlier');
+      prevBtn.setAttribute('aria-label', prevBtn.title);
+      const dateSelect = document.createElement('select');
+      dateSelect.className = 'bm-archive-date-select';
+      dateSelect.setAttribute('aria-label', tt('dialog.archive.date', 'Date'));
+      const nextBtn = document.createElement('button');
+      nextBtn.type = 'button';
+      nextBtn.className = 'bm-archive-icon-btn';
+      nextBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>';
+      nextBtn.title = tt('dialog.archive.next', 'Later');
+      nextBtn.setAttribute('aria-label', nextBtn.title);
+      dateRow.append(prevBtn, dateSelect, nextBtn);
+
+      const timeline = document.createElement('input');
+      timeline.type = 'range';
+      timeline.className = 'bm-archive-timeline';
+      timeline.min = '0';
+      timeline.max = '0';
+      timeline.step = '1';
+      timeline.value = '0';
+      timeline.setAttribute('aria-label', tt('dialog.archive.timeline', 'Timeline'));
+
+      const summary = document.createElement('div');
+      summary.className = 'bm-archive-summary';
+      const status = document.createElement('div');
+      status.className = 'bm-archive-status';
+
+      const progress = document.createElement('progress');
+      progress.className = 'bm-archive-progress';
+      progress.max = 1;
+      progress.value = 0;
+      progress.hidden = true;
+
+      const actions = document.createElement('div');
+      actions.className = 'bm-archive-actions';
+      const createBtn = document.createElement('button');
+      createBtn.type = 'button';
+      createBtn.className = 'bm-archive-create-btn';
+      createBtn.textContent = isUpdateMode
+        ? tt('dialog.archive.button.update', 'Update template')
+        : tt('dialog.common.createTemplate', 'Create Template');
+      const downloadBtn = document.createElement('button');
+      downloadBtn.type = 'button';
+      downloadBtn.className = 'bm-archive-icon-btn bm-archive-download-btn';
+      downloadBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/></svg>';
+      downloadBtn.title = isUpdateMode
+        ? tt('dialog.archive.button.updateDownload', 'Update and download the PNG')
+        : tt('dialog.archive.button.createDownload', 'Create and download the PNG');
+      downloadBtn.setAttribute('aria-label', downloadBtn.title);
+      actions.append(createBtn, downloadBtn);
+
+      const footer = document.createElement('div');
+      footer.className = 'bm-archive-footer';
+      const footerText = document.createElement('span');
+      const archiveLink = document.createElement('a');
+      archiveLink.href = archiveBaseUrl;
+      archiveLink.target = '_blank';
+      archiveLink.rel = 'noopener noreferrer';
+      archiveLink.textContent = archiveHost;
+      footerText.append(`${tt('dialog.archive.footer.source', 'Archive')}: `, archiveLink, ` · ${tt('dialog.archive.footer.utc', 'UTC time')}`);
+      const refreshBtn = document.createElement('button');
+      refreshBtn.type = 'button';
+      refreshBtn.className = 'bm-archive-link-btn';
+      refreshBtn.textContent = '↻';
+      refreshBtn.title = tt('dialog.archive.refresh', 'Reload dates');
+      refreshBtn.setAttribute('aria-label', refreshBtn.title);
+      footer.append(footerText, refreshBtn);
+
+      panel.append(header, dateRow, timeline, summary, status, progress, actions, footer);
+
+      /* ---- text ------------------------------------------------------------- */
+
+      const setStatus = (message = '', isError = false) => {
+        statusMessage = String(message || '');
+        statusIsError = isError;
+        status.textContent = statusMessage;
+        status.hidden = !statusMessage;
+        status.classList.toggle('bm-archive-status-error', isError);
       };
-      const setProgress = (done = 0, total = 0, label = '') => {
-        const safeTotal = Math.max(1, Number(total) || 1);
-        const safeDone = Math.max(0, Math.min(safeTotal, Number(done) || 0));
-        progress.max = safeTotal;
-        progress.value = safeDone;
-        progress.hidden = false;
-        progressText.hidden = false;
-        progressText.textContent = `${label}${safeDone} / ${safeTotal}`;
-      };
-      const clearProgress = () => {
-        progress.hidden = true;
-        progressText.hidden = true;
-        progress.max = 1;
-        progress.value = 0;
-        progressText.textContent = '';
-      };
-      const canOverwriteStatusWithPreview = () => statusCategory === 'idle' || statusCategory === 'preview' || statusCategory === 'versions';
-      const setPreviewStatus = (message, isError = false, force = false) => {
-        if (!force && (busy || !canOverwriteStatusWithPreview())) return;
-        setStatus(message, isError, 'preview');
-      };
-      const clampPreviewZoom = (value) => clampNumber(
-        value,
-        ARCHIVE_TEMPLATE_PREVIEW_ZOOM_MIN,
-        ARCHIVE_TEMPLATE_PREVIEW_ZOOM_MAX,
-        ARCHIVE_TEMPLATE_PREVIEW_ZOOM_MIN
-      );
-      const getPreviewViewportSize = () => ({
-        width: Math.max(1, Math.floor(previewWrap.clientWidth || 320)),
-        height: Math.max(1, Math.floor(previewWrap.clientHeight || 180)),
-      });
-      const resizePreviewCanvas = () => {
-        const { width, height } = getPreviewViewportSize();
-        const dpr = Math.max(1, window.devicePixelRatio || 1);
-        const targetWidth = Math.max(1, Math.floor(width * dpr));
-        const targetHeight = Math.max(1, Math.floor(height * dpr));
-        if (previewCanvas.width !== targetWidth || previewCanvas.height !== targetHeight) {
-          previewCanvas.width = targetWidth;
-          previewCanvas.height = targetHeight;
-        }
-        previewCanvas.style.width = `${width}px`;
-        previewCanvas.style.height = `${height}px`;
-        const context = previewCanvas.getContext('2d');
-        if (context) {
-          context.setTransform(dpr, 0, 0, dpr, 0, 0);
-          context.clearRect(0, 0, width, height);
-        }
-        return { width, height, context };
-      };
-      const computePreviewLayout = (
-        width,
-        height,
-        zoomLevel = previewZoomLevel,
-        panX = previewPanX,
-        panY = previewPanY
-      ) => {
-        const imageWidth = Math.max(1, Math.trunc(Number(previewImageCanvas.width) || 0));
-        const imageHeight = Math.max(1, Math.trunc(Number(previewImageCanvas.height) || 0));
-        if (!previewHasImage || imageWidth <= 0 || imageHeight <= 0) return null;
-        const fitScale = Math.min(1, width / imageWidth, height / imageHeight);
-        const safeFitScale = Number.isFinite(fitScale) && fitScale > 0 ? fitScale : 1;
-        const scale = safeFitScale * clampPreviewZoom(zoomLevel);
-        const drawWidth = imageWidth * scale;
-        const drawHeight = imageHeight * scale;
-        const maxPanX = Math.max(0, (drawWidth - width) / 2);
-        const maxPanY = Math.max(0, (drawHeight - height) / 2);
-        const clampedPanX = clampNumber(panX, -maxPanX, maxPanX, 0);
-        const clampedPanY = clampNumber(panY, -maxPanY, maxPanY, 0);
-        const baseX = (width - drawWidth) / 2;
-        const baseY = (height - drawHeight) / 2;
-        return {
-          width,
-          height,
-          scale,
-          drawWidth,
-          drawHeight,
-          baseX,
-          baseY,
-          drawX: baseX + clampedPanX,
-          drawY: baseY + clampedPanY,
-          panX: clampedPanX,
-          panY: clampedPanY,
-          maxPanX,
-          maxPanY,
-        };
-      };
-      const syncPreviewControls = (layout = null) => {
-        const hasPreview = previewHasImage && previewImageCanvas.width > 0 && previewImageCanvas.height > 0;
-        const safeZoom = clampPreviewZoom(previewZoomLevel);
-        const renderLayout = layout || (() => {
-          const { width, height } = getPreviewViewportSize();
-          return computePreviewLayout(width, height);
-        })();
-        const canPan = Boolean(renderLayout && (renderLayout.maxPanX > 0.5 || renderLayout.maxPanY > 0.5));
-        const isReset = Math.abs(safeZoom - ARCHIVE_TEMPLATE_PREVIEW_ZOOM_MIN) < 0.001
-          && Math.abs(previewPanX) < 0.5
-          && Math.abs(previewPanY) < 0.5;
-        previewZoomLevel = safeZoom;
-        zoomValue.textContent = `${Math.round(safeZoom * 100)}%`;
-        zoomOutBtn.disabled = !hasPreview || safeZoom <= ARCHIVE_TEMPLATE_PREVIEW_ZOOM_MIN + 0.001;
-        zoomInBtn.disabled = !hasPreview || safeZoom >= ARCHIVE_TEMPLATE_PREVIEW_ZOOM_MAX - 0.001;
-        zoomResetBtn.disabled = !hasPreview || isReset;
-        previewWrap.style.cursor = hasPreview
-          ? (previewDragState ? 'grabbing' : canPan ? 'grab' : 'zoom-in')
-          : 'default';
-      };
-      const drawPreviewViewport = () => {
-        const { width, height, context } = resizePreviewCanvas();
-        if (!context) return;
-        context.fillStyle = 'rgba(0, 0, 0, 0.35)';
-        context.fillRect(0, 0, width, height);
-        const layout = computePreviewLayout(width, height);
-        if (!layout) {
-          context.fillStyle = 'rgba(255, 255, 255, 0.78)';
-          context.font = '600 12px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
-          context.textAlign = 'center';
-          context.textBaseline = 'middle';
-          context.fillText(previewPlaceholderMessage, width / 2, height / 2);
-          syncPreviewControls(null);
-          return;
-        }
-        previewPanX = layout.panX;
-        previewPanY = layout.panY;
-        const displayNeedsSmoothing = layout.scale < 1;
-        context.imageSmoothingEnabled = displayNeedsSmoothing;
-        if (displayNeedsSmoothing) context.imageSmoothingQuality = 'high';
-        context.drawImage(previewImageCanvas, layout.drawX, layout.drawY, layout.drawWidth, layout.drawHeight);
-        context.imageSmoothingEnabled = false;
-        syncPreviewControls(layout);
-      };
-      const queuePreviewViewportDraw = () => {
-        if (previewRedrawQueued || closed) return;
-        previewRedrawQueued = true;
-        requestAnimationFrame(() => {
-          previewRedrawQueued = false;
-          if (closed) return;
-          drawPreviewViewport();
-        });
-      };
-      const drawPreviewPlaceholder = (message = tt('dialog.common.previewUnavailable', 'Preview unavailable')) => {
-        previewHasImage = false;
-        previewPlaceholderMessage = String(message || tt('dialog.common.previewUnavailable', 'Preview unavailable'));
-        previewImageCanvas.width = 0;
-        previewImageCanvas.height = 0;
-        queuePreviewViewportDraw();
-      };
-      const resetPreviewView = () => {
-        previewZoomLevel = ARCHIVE_TEMPLATE_PREVIEW_ZOOM_MIN;
-        previewPanX = 0;
-        previewPanY = 0;
-        queuePreviewViewportDraw();
-      };
-      const setPreviewZoom = (nextZoomLevel, originX = null, originY = null) => {
-        const safeZoom = clampPreviewZoom(nextZoomLevel);
-        if (!previewHasImage) {
-          previewZoomLevel = safeZoom;
-          syncPreviewControls(null);
-          return;
-        }
-        const { width, height } = getPreviewViewportSize();
-        const currentLayout = computePreviewLayout(width, height);
-        let nextPanX = previewPanX;
-        let nextPanY = previewPanY;
-        if (
-          currentLayout
-          && Number.isFinite(originX)
-          && Number.isFinite(originY)
-          && currentLayout.scale > 0
-        ) {
-          const sourceX = (originX - currentLayout.drawX) / currentLayout.scale;
-          const sourceY = (originY - currentLayout.drawY) / currentLayout.scale;
-          const nextLayout = computePreviewLayout(width, height, safeZoom, 0, 0);
-          if (nextLayout) {
-            nextPanX = originX - nextLayout.baseX - sourceX * nextLayout.scale;
-            nextPanY = originY - nextLayout.baseY - sourceY * nextLayout.scale;
+
+      const getSelectedEntry = () => (selectedIndex >= 0 ? archiveVersions[selectedIndex] || null : null);
+
+      const countColoredPixels = (entry) => {
+        if (entry.coloredPixels !== null) return entry.coloredPixels;
+        let count = 0;
+        try {
+          const data = entry.context.getImageData(0, 0, entry.width, entry.height).data;
+          for (let index = 3; index < data.length; index += 4) {
+            if (data[index] !== 0) count++;
           }
-        } else if (safeZoom <= ARCHIVE_TEMPLATE_PREVIEW_ZOOM_MIN + 0.001) {
-          nextPanX = 0;
-          nextPanY = 0;
-        }
-        previewZoomLevel = safeZoom;
-        const clampedLayout = computePreviewLayout(width, height, previewZoomLevel, nextPanX, nextPanY);
-        previewPanX = clampedLayout?.panX || 0;
-        previewPanY = clampedLayout?.panY || 0;
-        queuePreviewViewportDraw();
-      };
-      const cleanupPreviewDragHandlers = () => {
-        detachPreviewPan?.();
-        detachPreviewPan = null;
-        previewDragState = null;
-        syncPreviewControls();
-      };
-      const getSelectedVersionEntry = () => {
-        if (!archiveVersions.length) return null;
-        const index = Math.max(
-          0,
-          Math.min(archiveVersions.length - 1, Math.trunc(Number(versionRange.value) || 0))
-        );
-        return archiveVersions[index] || null;
-      };
-      const getPreviewStats = () => {
-        let ready = 0;
-        let failed = 0;
-        for (const entry of previewEntries.values()) {
-          if (entry.status === 'ready') {
-            ready++;
-          } else if (entry.status === 'error') {
-            failed++;
-          }
-        }
-        return {
-          ready,
-          failed,
-          total: archiveVersions.length,
-        };
-      };
-      const syncVersionMetaText = () => {
-        const parts = [];
-        if (selectedVersionValue) {
-          parts.push(tt('dialog.archive.meta.version', 'Version: {version}', { version: selectedVersionValue }));
-        }
-        if (previewSupported && archiveVersions.length) {
-          const stats = getPreviewStats();
-          parts.push(tt('dialog.archive.meta.prefetched', 'Prefetched: {ready}/{total}', {
-            ready: stats.ready,
-            total: stats.total,
-          }));
-          if (stats.failed > 0) {
-            parts.push(tt('dialog.archive.meta.errors', 'Errors: {count}', { count: stats.failed }));
-          }
-        }
-        versionMeta.textContent = parts.join(' | ');
-      };
-      const syncSelectedVersionFromTimeline = () => {
-        const selected = getSelectedVersionEntry();
-        if (!selected) {
-          selectedVersionValue = '';
-          selectedVersionDate = '';
-          selectedVersionLabel = '';
-          versionValue.textContent = tt('dialog.archive.noDate', 'No date');
-          syncVersionMetaText();
+        } catch (_) {
           return null;
         }
-        selectedVersionValue = String(selected.version || '').trim();
-        selectedVersionDate = String(selected.date || '').trim();
-        selectedVersionLabel = `${selectedVersionDate || selectedVersionValue} (${selectedVersionValue})`;
-        versionValue.textContent = selectedVersionDate || selectedVersionValue;
-        syncVersionMetaText();
-        return selected;
+        entry.coloredPixels = entry.scale < 1 ? Math.round(count / (entry.scale * entry.scale)) : count;
+        return entry.coloredPixels;
       };
-      const populateVersionTimeline = (versions, preferredVersion = '') => {
-        archiveVersions = Array.isArray(versions) ? versions.slice() : [];
-        if (!archiveVersions.length) {
-          versionRange.min = '0';
-          versionRange.max = '0';
-          versionRange.step = '1';
-          versionRange.value = '0';
-          versionRange.disabled = true;
-          syncSelectedVersionFromTimeline();
+
+      const updateSummary = () => {
+        const width = edges.right - edges.left;
+        const height = edges.bottom - edges.top;
+        const parts = [tt('dialog.archive.summary.size', '{width} x {height} px', {
+          width: numberFmt.format(width),
+          height: numberFmt.format(height),
+        })];
+        const entry = !dragging && selectedVersionValue ? previewEntries.get(selectedVersionValue) : null;
+        if (entry?.status === 'ready') {
+          const colored = countColoredPixels(entry);
+          if (colored !== null) {
+            parts.push(tt(entry.scale < 1 ? 'dialog.archive.summary.coloredApprox' : 'dialog.archive.summary.colored',
+              entry.scale < 1 ? '~{count} colored pixels' : '{count} colored pixels',
+              { count: numberFmt.format(colored) }));
+          }
+        }
+        summary.textContent = parts.join(' · ');
+        frameBadge.textContent = parts[0];
+      };
+
+      const updatePreviewStatus = () => {
+        if (busy) return;
+        if (loadingVersions) {
+          setStatus(tt('dialog.archive.status.loadingVersions', 'Loading archive dates...'));
           return;
         }
-        versionRange.min = '0';
-        versionRange.max = String(archiveVersions.length - 1);
-        versionRange.step = '1';
-        versionRange.disabled = false;
-        let selectedIndex = archiveVersions.length - 1;
-        const preferred = String(preferredVersion || selectedVersionValue || '').trim();
-        if (preferred) {
-          const found = archiveVersions.findIndex((entry) => String(entry?.version || '').trim() === preferred);
-          if (found >= 0) {
-            selectedIndex = found;
-          }
-        }
-        versionRange.value = String(selectedIndex);
-        syncSelectedVersionFromTimeline();
-      };
-      const wakePreviewWorkers = () => {
-        if (!previewPrefetchWaiters.length) return;
-        const waiters = previewPrefetchWaiters;
-        previewPrefetchWaiters = [];
-        waiters.forEach((resolve) => resolve());
-      };
-      const waitForPreviewWork = () => new Promise((resolve) => {
-        previewPrefetchWaiters.push(resolve);
-      });
-      const releasePreviewEntry = (entry) => {
-        if (!entry?.canvas) return;
-        cleanUpCanvas(entry.canvas);
-        entry.canvas = null;
-        entry.context = null;
-      };
-      const resetPreviewEntries = () => {
-        previewPrefetchGeneration++;
-        const staleEntries = Array.from(previewEntries.values());
-        previewEntries.clear();
-        staleEntries.forEach((entry) => releasePreviewEntry(entry));
-        wakePreviewWorkers();
-        syncVersionMetaText();
-      };
-      const createPreviewEntry = (versionEntry) => {
-        const version = String(versionEntry?.version || '').trim();
-        const date = String(versionEntry?.date || '').trim();
-        let canvas = null;
-        let context = null;
-        let error = null;
-        try {
-          canvas = new OffscreenCanvas(previewDimensions.width, previewDimensions.height);
-          context = canvas.getContext('2d');
-          if (!context) {
-            throw new Error(tt('dialog.archive.error.previewCanvas', 'Could not initialize preview canvas.'));
-          }
-          context.imageSmoothingEnabled = false;
-          context.clearRect(0, 0, previewDimensions.width, previewDimensions.height);
-        } catch (creationError) {
-          error = creationError;
-          if (canvas) {
-            cleanUpCanvas(canvas);
-            canvas = null;
-          }
-          context = null;
-        }
-        return {
-          version,
-          date,
-          canvas,
-          context,
-          width: previewDimensions.width,
-          height: previewDimensions.height,
-          scale: previewDimensions.scale,
-          totalTiles: previewTileCoords.length,
-          completedTiles: 0,
-          nextTaskIndex: 0,
-          activeTasks: 0,
-          status: error ? 'error' : 'idle',
-          error,
-        };
-      };
-      const buildPreviewPriorityOrder = () => {
-        if (!archiveVersions.length) return [];
-        let selectedIndex = archiveVersions.length - 1;
-        if (selectedVersionValue) {
-          const matchIndex = archiveVersions.findIndex((entry) => String(entry?.version || '').trim() === selectedVersionValue);
-          if (matchIndex >= 0) {
-            selectedIndex = matchIndex;
-          }
-        }
-        const orderedVersions = [];
-        for (let distance = 0; distance < archiveVersions.length; distance++) {
-          const leftIndex = selectedIndex - distance;
-          const rightIndex = selectedIndex + distance;
-          if (leftIndex >= 0) {
-            const leftVersion = String(archiveVersions[leftIndex]?.version || '').trim();
-            if (leftVersion) {
-              orderedVersions.push(leftVersion);
-            }
-          }
-          if (distance > 0 && rightIndex < archiveVersions.length) {
-            const rightVersion = String(archiveVersions[rightIndex]?.version || '').trim();
-            if (rightVersion) {
-              orderedVersions.push(rightVersion);
-            }
-          }
-        }
-        return orderedVersions;
-      };
-      const getActivePreviewVersionEntries = () => {
-        const selectedEntry = selectedVersionValue ? previewEntries.get(selectedVersionValue) : null;
-        if (
-          selectedEntry
-          && selectedEntry.status !== 'error'
-          && selectedEntry.nextTaskIndex < selectedEntry.totalTiles
-        ) {
-          return [selectedEntry];
-        }
-        const entries = [];
-        for (const version of buildPreviewPriorityOrder()) {
-          const entry = previewEntries.get(version);
-          if (!entry || entry.status === 'error' || entry.nextTaskIndex >= entry.totalTiles) {
-            continue;
-          }
-          entries.push(entry);
-          if (entries.length >= previewPrefetchConcurrency) {
-            break;
-          }
-        }
-        return entries;
-      };
-      const copyPreviewEntryToCanvas = (entry) => {
-        if (!entry?.canvas || !entry?.context || entry.completedTiles <= 0) {
-          return false;
-        }
-        previewImageCanvas.width = entry.width;
-        previewImageCanvas.height = entry.height;
-        const context = previewImageCanvas.getContext('2d');
-        if (!context) {
-          drawPreviewPlaceholder(tt('dialog.common.previewUnavailable', 'Preview unavailable'));
-          return false;
-        }
-        context.imageSmoothingEnabled = false;
-        context.clearRect(0, 0, entry.width, entry.height);
-        context.drawImage(entry.canvas, 0, 0);
-        previewHasImage = true;
-        previewPlaceholderMessage = tt('dialog.common.loadingPreview', 'Loading preview...');
-        queuePreviewViewportDraw();
-        return true;
-      };
-      const updateSelectedPreviewFromCache = (forceStatus = false) => {
-        syncVersionMetaText();
-        if (!selectedVersionValue) {
-          drawPreviewPlaceholder(tt('dialog.archive.noDateAvailable', 'No archive date available'));
-          updateActionState();
+        if (!archiveVersions.length) return; // the load error stays up
+        if (!supportsCreate) {
+          setStatus(tt('dialog.archive.status.selectionTooLarge', 'Selection {width} x {height} is too large for this browser.', {
+            width: numberFmt.format(rect.width),
+            height: numberFmt.format(rect.height),
+          }), true);
           return;
         }
         if (!previewSupported) {
-          drawPreviewPlaceholder(tt('dialog.archive.preview.skippedLarge', 'Preview skipped for large range'));
-          setPreviewStatus(
-            tt(
-              'dialog.archive.preview.skippedStatus',
-              'Preview skipped ({tiles} tiles > {limit} limit). You can still create the template.',
-              {
-                tiles: numberFmt.format(rect.tileCount),
-                limit: numberFmt.format(TEMPLATE_ARCHIVE_PREVIEW_MAX_TILE_REQUESTS),
-              }
-            ),
-            false,
-            forceStatus
-          );
-          updateActionState();
+          setStatus(tt('dialog.archive.preview.skippedStatus', 'No preview for areas over {limit} tiles; the template can still be created.', {
+            limit: numberFmt.format(TEMPLATE_ARCHIVE_PREVIEW_MAX_TILE_REQUESTS),
+          }));
           return;
         }
-        const entry = previewEntries.get(selectedVersionValue) || null;
-        if (!entry) {
-          drawPreviewPlaceholder(tt('dialog.common.loadingPreview', 'Loading preview...'));
-          setPreviewStatus(
-            tt('dialog.archive.preview.loadingFor', 'Loading preview for {label}...', {
-              label: selectedVersionLabel || selectedVersionValue,
-            }),
-            false,
-            forceStatus
-          );
-          updateActionState();
+        const entry = selectedVersionValue ? previewEntries.get(selectedVersionValue) : null;
+        if (!entry || entry.status === 'loading') {
+          setStatus(tt('dialog.archive.preview.loadingProgress', 'Loading snapshot... {done} / {total} tiles', {
+            done: numberFmt.format(entry?.completedTiles || 0),
+            total: numberFmt.format(previewTiles.length),
+          }));
           return;
         }
         if (entry.status === 'error') {
-          drawPreviewPlaceholder(tt('dialog.archive.preview.failed', 'Preview failed'));
-          setPreviewStatus(
-            tt('dialog.archive.preview.failedStatus', 'Preview failed for {label}: {error}', {
-              label: selectedVersionLabel || selectedVersionValue,
-              error: entry.error?.message || entry.error,
-            }),
-            true,
-            forceStatus
-          );
-          updateActionState();
+          setStatus(tt('dialog.archive.preview.failedStatus', 'Could not load this snapshot: {error}', {
+            error: entry.error?.message || entry.error,
+          }), true);
           return;
         }
-        if (!copyPreviewEntryToCanvas(entry)) {
-          drawPreviewPlaceholder(tt('dialog.common.loadingPreview', 'Loading preview...'));
-        }
-        if (entry.status === 'ready') {
-          setPreviewStatus(
-            tt('dialog.archive.preview.ready', 'Preview ready: {width} x {height} px', {
-              width: numberFmt.format(entry.width),
-              height: numberFmt.format(entry.height),
-            }),
-            false,
-            forceStatus
-          );
-        } else {
-          setPreviewStatus(
-            tt('dialog.archive.preview.loadingProgress', 'Loading preview for {label}... {done} / {total} tiles', {
-              label: selectedVersionLabel || selectedVersionValue,
-              done: numberFmt.format(entry.completedTiles),
-              total: numberFmt.format(entry.totalTiles),
-            }),
-            false,
-            forceStatus
-          );
-        }
-        updateActionState();
+        setStatus(entry.failedTiles > 0
+          ? tt('dialog.archive.preview.partial', '{count} tiles of this snapshot are missing from the archive.', {
+            count: numberFmt.format(entry.failedTiles),
+          })
+          : '');
       };
-      const drawPreviewTileIntoEntry = (entry, tx, ty, image) => {
-        if (!entry?.context) return;
+
+      const updateActionState = () => {
+        const hasVersion = Boolean(getSelectedEntry()?.version);
+        closeBtn.disabled = busy;
+        const navDisabled = busy || loadingVersions || !archiveVersions.length;
+        dateSelect.disabled = navDisabled;
+        timeline.disabled = navDisabled;
+        prevBtn.disabled = navDisabled || selectedIndex <= 0;
+        nextBtn.disabled = navDisabled || selectedIndex >= archiveVersions.length - 1;
+        refreshBtn.disabled = busy || loadingVersions;
+        createBtn.disabled = busy || dragging || !hasVersion || !supportsCreate;
+        downloadBtn.disabled = createBtn.disabled;
+        frame.classList.toggle('bm-archive-frame-busy', busy);
+      };
+
+      /* ---- snapshot previews ------------------------------------------------ */
+
+      /** Decoded previews by version, least recently used first. */
+      const previewEntries = new Map();
+
+      const releasePreviewEntry = (entry) => {
+        entry.cancelled = true;
+        if (entry.canvas) cleanUpCanvas(entry.canvas);
+        entry.canvas = null;
+        entry.context = null;
+      };
+
+      const resetPreviewEntries = () => {
+        previewEntries.forEach(releasePreviewEntry);
+        previewEntries.clear();
+        prefetching = false;
+      };
+
+      const evictPreviewEntries = () => {
+        for (const [version, entry] of previewEntries) {
+          if (previewEntries.size <= maxPreviewEntries) break;
+          if (version === selectedVersionValue) continue;
+          previewEntries.delete(version);
+          releasePreviewEntry(entry);
+        }
+      };
+
+      const drawTileIntoEntry = (entry, tx, ty, image) => {
+        if (!entry.context) return;
+        const entryRect = entry.rect;
         const tileLeft = tx * TEMPLATE_TILE_SIZE;
         const tileTop = ty * TEMPLATE_TILE_SIZE;
-        const intersectLeft = Math.max(rect.left, tileLeft);
-        const intersectTop = Math.max(rect.top, tileTop);
-        const intersectRight = Math.min(rect.left + rect.width, tileLeft + TEMPLATE_TILE_SIZE);
-        const intersectBottom = Math.min(rect.top + rect.height, tileTop + TEMPLATE_TILE_SIZE);
+        const intersectLeft = Math.max(entryRect.left, tileLeft);
+        const intersectTop = Math.max(entryRect.top, tileTop);
+        const intersectRight = Math.min(entryRect.left + entryRect.width, tileLeft + TEMPLATE_TILE_SIZE);
+        const intersectBottom = Math.min(entryRect.top + entryRect.height, tileTop + TEMPLATE_TILE_SIZE);
         const intersectWidth = intersectRight - intersectLeft;
         const intersectHeight = intersectBottom - intersectTop;
         if (intersectWidth <= 0 || intersectHeight <= 0) return;
-        const srcX = intersectLeft - tileLeft;
-        const srcY = intersectTop - tileTop;
-        const dstX = (intersectLeft - rect.left) * entry.scale;
-        const dstY = (intersectTop - rect.top) * entry.scale;
-        const dstWidth = intersectWidth * entry.scale;
-        const dstHeight = intersectHeight * entry.scale;
-        const needsSmoothing = entry.scale < 1;
-        if (needsSmoothing) {
-          entry.context.imageSmoothingEnabled = true;
-          entry.context.imageSmoothingQuality = 'high';
-        }
+        const smooth = entry.scale < 1;
+        entry.context.imageSmoothingEnabled = smooth;
+        if (smooth) entry.context.imageSmoothingQuality = 'high';
         entry.context.drawImage(
           image,
-          srcX,
-          srcY,
+          intersectLeft - tileLeft,
+          intersectTop - tileTop,
           intersectWidth,
           intersectHeight,
-          dstX,
-          dstY,
-          dstWidth,
-          dstHeight
+          (intersectLeft - entryRect.left) * entry.scale,
+          (intersectTop - entryRect.top) * entry.scale,
+          intersectWidth * entry.scale,
+          intersectHeight * entry.scale
         );
-        if (needsSmoothing) {
-          entry.context.imageSmoothingEnabled = false;
-        }
       };
-      const pickNextPreviewTask = () => {
-        if (closed || previewPrefetchSuspended || !previewSupported) return null;
-        const activeEntries = getActivePreviewVersionEntries();
-        for (const entry of activeEntries) {
-          const isSelected = entry.version === selectedVersionValue;
-          if (!isSelected && entry.activeTasks > 0) continue;
-          if (entry.nextTaskIndex >= entry.totalTiles) continue;
-          const task = previewTileCoords[entry.nextTaskIndex];
-          if (!task) {
-            entry.nextTaskIndex = entry.totalTiles;
-            continue;
-          }
-          entry.nextTaskIndex++;
-          entry.activeTasks++;
-          if (entry.status === 'idle') {
-            entry.status = 'loading';
-          }
-          return { entry, task };
+
+      /** Puts a preview on the map frame. A version still loading only replaces the picture when
+       * nothing else covers this area yet, so scrubbing never blinks to an empty frame. */
+      const showPreviewEntry = (entry) => {
+        if (!entry?.canvas || closed) return;
+        const sameArea = shownImageEdges
+          && shownImageEdges.left === edgesOfRect(entry.rect).left
+          && shownImageEdges.top === edgesOfRect(entry.rect).top
+          && shownImageEdges.right === edgesOfRect(entry.rect).right
+          && shownImageEdges.bottom === edgesOfRect(entry.rect).bottom;
+        if (entry.status !== 'ready' && shownVersion !== entry.version && sameArea) return;
+        if (entry.completedTiles <= 0) return;
+        if (frameImage.width !== entry.width || frameImage.height !== entry.height) {
+          frameImage.width = entry.width;
+          frameImage.height = entry.height;
         }
-        return null;
+        const context = frameImage.getContext('2d');
+        if (!context) return;
+        context.clearRect(0, 0, entry.width, entry.height);
+        context.drawImage(entry.canvas, 0, 0);
+        shownImageEdges = edgesOfRect(entry.rect);
+        shownVersion = entry.version;
+        lastImageBox = '';
+        positionFrame();
       };
-      const runPreviewWorker = async (generation) => {
-        while (!closed && generation === previewPrefetchGeneration) {
-          const nextTask = pickNextPreviewTask();
-          if (!nextTask) {
-            await waitForPreviewWork();
-            continue;
-          }
-          const { entry, task } = nextTask;
-          try {
-            const image = await downloadTile(task.tx % 2048, task.ty, {
-              source: 'archive',
-              archiveBaseUrl,
-              archiveVersion: entry.version,
-            });
-            if (closed || generation !== previewPrefetchGeneration) return;
-            drawPreviewTileIntoEntry(entry, task.tx, task.ty, image);
+
+      const onPreviewEntryProgress = (entry) => {
+        if (closed || entry.cancelled) return;
+        if (entry.version === selectedVersionValue) {
+          showPreviewEntry(entry);
+          updatePreviewStatus();
+          if (entry.status !== 'loading') updateSummary();
+        }
+        if (entry.status !== 'loading') schedulePrefetch();
+      };
+
+      const fillPreviewEntry = async (entry) => {
+        let cursor = 0;
+        const concurrency = Math.max(1, Math.min(16, Math.trunc(Number(TEMPLATE_ARCHIVE_PREVIEW_DOWNLOAD_CONCURRENCY) || 6)));
+        const worker = async () => {
+          while (cursor < entry.tiles.length) {
+            if (entry.cancelled || closed) return;
+            const { tx, ty } = entry.tiles[cursor++];
+            try {
+              const image = await downloadTile(tx % 2048, ty, {
+                source: 'archive',
+                archiveBaseUrl,
+                archiveVersion: entry.version,
+              });
+              if (entry.cancelled || closed) return;
+              drawTileIntoEntry(entry, tx, ty, image);
+            } catch (error) {
+              if (entry.cancelled || closed) return;
+              entry.failedTiles++;
+              entry.error = error;
+            }
             entry.completedTiles++;
-            entry.activeTasks = Math.max(0, entry.activeTasks - 1);
-            if (entry.completedTiles >= entry.totalTiles) {
-              entry.status = 'ready';
-            }
-          } catch (error) {
-            if (closed || generation !== previewPrefetchGeneration) return;
-            entry.activeTasks = Math.max(0, entry.activeTasks - 1);
-            entry.status = 'error';
-            entry.error = error;
-            entry.nextTaskIndex = entry.totalTiles;
-          } finally {
-            if (closed || generation !== previewPrefetchGeneration) return;
-            if (!busy && entry.version === selectedVersionValue) {
-              updateSelectedPreviewFromCache(false);
-            } else {
-              syncVersionMetaText();
-            }
-            wakePreviewWorkers();
+            onPreviewEntryProgress(entry);
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(concurrency, entry.tiles.length) }, () => worker()));
+        if (entry.cancelled || closed) return;
+        entry.status = entry.failedTiles >= entry.totalTiles ? 'error' : 'ready';
+        onPreviewEntryProgress(entry);
+      };
+
+      const ensurePreviewEntry = (version) => {
+        const existing = previewEntries.get(version);
+        if (existing) {
+          previewEntries.delete(version);
+          previewEntries.set(version, existing);
+          return existing;
+        }
+        const entry = {
+          version,
+          rect,
+          tiles: previewTiles,
+          width: previewDims.width,
+          height: previewDims.height,
+          scale: previewDims.scale,
+          canvas: null,
+          context: null,
+          totalTiles: previewTiles.length,
+          completedTiles: 0,
+          failedTiles: 0,
+          status: 'loading',
+          error: null,
+          coloredPixels: null,
+          cancelled: false,
+          done: null,
+        };
+        try {
+          entry.canvas = new OffscreenCanvas(entry.width, entry.height);
+          entry.context = entry.canvas.getContext('2d');
+          if (!entry.context) throw new Error(tt('dialog.archive.error.previewCanvas', 'Could not initialize preview canvas.'));
+        } catch (error) {
+          entry.status = 'error';
+          entry.error = error;
+          entry.done = Promise.resolve();
+          previewEntries.set(version, entry);
+          return entry;
+        }
+        previewEntries.set(version, entry);
+        evictPreviewEntries();
+        entry.done = fillPreviewEntry(entry).catch((error) => {
+          entry.status = 'error';
+          entry.error = error;
+          onPreviewEntryProgress(entry);
+        });
+        return entry;
+      };
+
+      /** Once the selected snapshot is in, decode its neighbours one at a time for scrubbing. */
+      const schedulePrefetch = () => {
+        if (prefetching || busy || closed || dragging || !previewSupported || selectedIndex < 0) return;
+        const selected = previewEntries.get(selectedVersionValue);
+        if (!selected || selected.status === 'loading') return;
+        const radius = Math.min(ARCHIVE_PREVIEW_PREFETCH_RADIUS, Math.floor((maxPreviewEntries - 1) / 2));
+        for (let distance = 1; distance <= radius; distance++) {
+          for (const index of [selectedIndex + distance, selectedIndex - distance]) {
+            const version = String(archiveVersions[index]?.version || '').trim();
+            if (!version || previewEntries.has(version)) continue;
+            prefetching = true;
+            const entry = ensurePreviewEntry(version);
+            const generationRect = rect;
+            entry.done.finally(() => {
+              if (generationRect !== rect) return; // reset by a resize; its own prefetch restarts
+              prefetching = false;
+              schedulePrefetch();
+            });
+            return;
           }
         }
       };
-      const startPreviewPrefetch = () => {
-        resetPreviewEntries();
-        if (!previewSupported || !archiveVersions.length || !previewTileCoords.length) {
-          updateSelectedPreviewFromCache(true);
+
+      const requestSelectedPreview = () => {
+        updateSummary();
+        if (!selectedVersionValue || !previewSupported || !supportsCreate) {
+          updatePreviewStatus();
           return;
         }
-        archiveVersions.forEach((versionEntry) => {
-          const entry = createPreviewEntry(versionEntry);
-          previewEntries.set(entry.version, entry);
-        });
-        syncVersionMetaText();
-        const generation = previewPrefetchGeneration;
-        const workerCount = Math.max(1, Math.min(previewPrefetchConcurrency, archiveVersions.length));
-        for (let workerIndex = 0; workerIndex < workerCount; workerIndex++) {
-          void runPreviewWorker(generation);
+        const entry = ensurePreviewEntry(selectedVersionValue);
+        showPreviewEntry(entry);
+        updatePreviewStatus();
+        schedulePrefetch();
+      };
+
+      /* ---- frame tracking --------------------------------------------------- */
+
+      function edgesOfRect(target) {
+        return { left: target.left, top: target.top, right: target.left + target.width, bottom: target.top + target.height };
+      }
+
+      /** Glues the frame to the selection while the map pans or zooms. Polled per frame: nothing
+       * here exposes the map's own move events. */
+      function positionFrame() {
+        const topLeft = projectWorldPoint(edges.left, edges.top);
+        const bottomRight = projectWorldPoint(edges.right, edges.bottom);
+        const canvasRect = getMapCanvasElement()?.getBoundingClientRect();
+        const width = bottomRight && topLeft ? bottomRight.x - topLeft.x : NaN;
+        const height = bottomRight && topLeft ? bottomRight.y - topLeft.y : NaN;
+        if (!canvasRect || !(width > 0) || !(height > 0)) {
+          if (lastFrameBox !== 'hidden') {
+            frame.style.display = 'none';
+            lastFrameBox = 'hidden';
+          }
+          return;
         }
-        updateSelectedPreviewFromCache(true);
-        wakePreviewWorkers();
-      };
-      const handleSelectedVersionChange = (forceStatus = false) => {
-        syncSelectedVersionFromTimeline();
-        updateSelectedPreviewFromCache(forceStatus);
-        wakePreviewWorkers();
-      };
-      const updateActionState = () => {
-        const hasVersion = Boolean(getSelectedVersionEntry()?.version);
-        closeBtn.disabled = busy;
-        cancelBtn.disabled = busy;
-        versionRange.disabled = busy || loadingVersions || !archiveVersions.length;
-        refreshBtn.disabled = busy || loadingVersions;
-        createBtn.disabled = busy || !hasVersion || !supportsCreate;
-        createDownloadBtn.disabled = busy || !hasVersion || !supportsCreate;
-      };
-      const close = (result = null) => {
+        frameScreenWidth = width;
+        const box = `${canvasRect.left + topLeft.x}|${canvasRect.top + topLeft.y}|${width}|${height}`;
+        if (box !== lastFrameBox) {
+          lastFrameBox = box;
+          frame.style.display = '';
+          frame.style.left = `${canvasRect.left + topLeft.x}px`;
+          frame.style.top = `${canvasRect.top + topLeft.y}px`;
+          frame.style.width = `${width}px`;
+          frame.style.height = `${height}px`;
+          // Tiny selections at low zoom would hide their own handles.
+          frame.classList.toggle('bm-archive-frame-small', width < 36 || height < 36);
+        }
+        // The shown snapshot keeps its own world position, so while a handle is dragged (or a new
+        // size is loading) it stays put on the map instead of stretching with the frame.
+        const spanX = edges.right - edges.left;
+        const spanY = edges.bottom - edges.top;
+        const imageBox = shownImageEdges
+          ? [
+            ((shownImageEdges.left - edges.left) / spanX) * 100,
+            ((shownImageEdges.top - edges.top) / spanY) * 100,
+            ((shownImageEdges.right - shownImageEdges.left) / spanX) * 100,
+            ((shownImageEdges.bottom - shownImageEdges.top) / spanY) * 100,
+          ].map(value => value.toFixed(4)).join('|')
+          : 'none';
+        if (imageBox !== lastImageBox) {
+          lastImageBox = imageBox;
+          if (shownImageEdges) {
+            const [left, top, width, height] = imageBox.split('|');
+            frameImage.style.display = '';
+            frameImage.style.left = `${left}%`;
+            frameImage.style.top = `${top}%`;
+            frameImage.style.width = `${width}%`;
+            frameImage.style.height = `${height}%`;
+          } else {
+            frameImage.style.display = 'none';
+          }
+        }
+      }
+
+      const trackFrame = () => {
         if (closed) return;
-        closed = true;
-        resetPreviewEntries();
-        cleanupPreviewDragHandlers();
-        if (previewResizeObserver) {
-          previewResizeObserver.disconnect();
-          previewResizeObserver = null;
-        }
-        window.removeEventListener('resize', queuePreviewViewportDraw);
-        document.removeEventListener('keydown', onKeyDown, true);
-        backdrop.remove();
-        if (archiveTemplateWindowSession?.panel === panel) {
-          archiveTemplateWindowSession = null;
-        }
-        resolve(result);
+        positionFrame();
+        frameRaf = requestAnimationFrame(trackFrame);
       };
-      const onKeyDown = (event) => {
-        if (event.key !== 'Escape' || busy) return;
+
+      /* ---- resize handles --------------------------------------------------- */
+
+      const commitEdges = () => {
+        const nextRect = buildArchiveTemplateRectFromEdges(edges);
+        if (!nextRect) {
+          edges = edgesOfRect(rect);
+          return;
+        }
+        if (nextRect.left === rect.left && nextRect.top === rect.top
+          && nextRect.width === rect.width && nextRect.height === rect.height) {
+          return;
+        }
+        rect = nextRect;
+        edges = edgesOfRect(rect);
+        resetPreviewEntries();
+        applyRectDerivedState();
+        requestSelectedPreview();
+        updateActionState();
+      };
+
+      /** Drags the selection's edges: one side per axis for a handle (hx/hy -1 or 1 picks the
+       * left/top or right/bottom edge, 0 leaves that axis alone), or the whole box for `move`. */
+      const attachEdgeDrag = (element, hx, hy, move = false) => {
+        cleanups.push(makePointerPannable(element, {
+          onStart: () => {
+            if (busy || !(frameScreenWidth > 0)) return null;
+            const scale = frameScreenWidth / (edges.right - edges.left);
+            if (!(scale > 0)) return null;
+            dragging = true;
+            frame.classList.add('bm-archive-frame-dragging');
+            updateActionState();
+            return { start: { ...edges }, scale };
+          },
+          onMove: (dx, dy, context) => {
+            const { start, scale } = context;
+            const deltaX = Math.round(dx / scale);
+            const deltaY = Math.round(dy / scale);
+            const next = { ...start };
+            if (move) {
+              const width = start.right - start.left;
+              const height = start.bottom - start.top;
+              next.left = clampNumber(start.left + deltaX, 0, MAP_WORLD_WIDTH_PX - width);
+              next.top = clampNumber(start.top + deltaY, 0, MAP_WORLD_WIDTH_PX - height);
+              next.right = next.left + width;
+              next.bottom = next.top + height;
+            } else {
+              if (hx < 0) next.left = clampNumber(start.left + deltaX, 0, start.right - 1);
+              if (hx > 0) next.right = clampNumber(start.right + deltaX, start.left + 1, MAP_WORLD_WIDTH_PX);
+              if (hy < 0) next.top = clampNumber(start.top + deltaY, 0, start.bottom - 1);
+              if (hy > 0) next.bottom = clampNumber(start.bottom + deltaY, start.top + 1, MAP_WORLD_WIDTH_PX);
+            }
+            edges = next;
+            positionFrame();
+            updateSummary();
+          },
+          onEnd: () => {
+            dragging = false;
+            frame.classList.remove('bm-archive-frame-dragging');
+            commitEdges();
+            updateSummary();
+            updateActionState();
+          },
+        }));
+      };
+
+      // The zone itself moves the selection. It sits on top of the map, so the wheel would stop
+      // zooming over it; hand wheel events on to the map canvas instead.
+      const moveArea = document.createElement('div');
+      moveArea.className = 'bm-archive-move-area';
+      frame.appendChild(moveArea);
+      attachEdgeDrag(moveArea, 0, 0, true);
+      const forwardWheel = (event) => {
+        const mapCanvas = getMapCanvasElement();
+        if (!mapCanvas) return;
         event.preventDefault();
-        close(null);
+        mapCanvas.dispatchEvent(new WheelEvent('wheel', event));
+      };
+      moveArea.addEventListener('wheel', forwardWheel, { passive: false });
+      cleanups.push(() => moveArea.removeEventListener('wheel', forwardWheel));
+
+      ARCHIVE_HANDLES.forEach(([name, hx, hy, cursor]) => {
+        const handle = document.createElement('div');
+        handle.className = 'bm-archive-handle';
+        handle.dataset.rmHandle = name;
+        handle.style.left = `${(hx + 1) * 50}%`;
+        handle.style.top = `${(hy + 1) * 50}%`;
+        handle.style.cursor = cursor;
+        frame.appendChild(handle);
+        attachEdgeDrag(handle, hx, hy);
+      });
+
+      /* ---- date selection --------------------------------------------------- */
+
+      const selectVersionIndex = (index, { immediate = true } = {}) => {
+        if (!archiveVersions.length) return;
+        const safeIndex = Math.max(0, Math.min(archiveVersions.length - 1, Math.trunc(Number(index) || 0)));
+        selectedIndex = safeIndex;
+        selectedVersionValue = String(archiveVersions[safeIndex]?.version || '').trim();
+        if (dateSelect.value !== String(safeIndex)) dateSelect.value = String(safeIndex);
+        if (timeline.value !== String(safeIndex)) timeline.value = String(safeIndex);
+        updateActionState();
+        clearTimeout(scrubTimer);
+        if (immediate) {
+          requestSelectedPreview();
+        } else {
+          // Dragging the slider passes through many dates; only decode where it settles.
+          updateSummary();
+          scrubTimer = setTimeout(requestSelectedPreview, ARCHIVE_SCRUB_LOAD_DELAY_MS);
+        }
+      };
+
+      const populateVersions = (versions) => {
+        archiveVersions = Array.isArray(versions) ? versions.slice() : [];
+        dateSelect.textContent = '';
+        archiveVersions.forEach((entry, index) => {
+          const option = document.createElement('option');
+          option.value = String(index);
+          option.textContent = formatArchiveVersionLabel(entry);
+          dateSelect.appendChild(option);
+        });
+        timeline.max = String(Math.max(0, archiveVersions.length - 1));
+        if (!archiveVersions.length) {
+          selectedIndex = -1;
+          return;
+        }
+        const preferred = String(selectedVersionValue || '').trim();
+        const found = preferred
+          ? archiveVersions.findIndex(entry => String(entry?.version || '').trim() === preferred)
+          : -1;
+        selectVersionIndex(found >= 0 ? found : archiveVersions.length - 1);
       };
 
       const loadVersions = async (force = false) => {
         loadingVersions = true;
         updateActionState();
-        setStatus(tt('dialog.archive.status.loadingVersions', 'Loading archive versions...'), false, 'versions');
+        updatePreviewStatus();
         try {
           const versions = await fetchArchiveTemplateVersions(archiveBaseUrl, force);
-          const preferred = String(selectedVersionValue || '').trim();
-          populateVersionTimeline(versions, preferred);
-          setStatus(
-            tt('dialog.archive.status.loadedVersions', 'Loaded {count} archive versions.', {
-              count: numberFmt.format(versions.length),
-            }),
-            false,
-            'versions'
-          );
-          startPreviewPrefetch();
+          if (closed) return;
+          loadingVersions = false;
+          populateVersions(versions);
         } catch (error) {
-          resetPreviewEntries();
+          if (closed) return;
+          loadingVersions = false;
           archiveVersions = [];
-          selectedVersionValue = '';
-          selectedVersionDate = '';
-          selectedVersionLabel = '';
-          versionRange.min = '0';
-          versionRange.max = '0';
-          versionRange.step = '1';
-          versionRange.value = '0';
-          versionRange.disabled = true;
-          versionValue.textContent = tt('dialog.archive.unavailable', 'Unavailable');
-          syncVersionMetaText();
-          drawPreviewPlaceholder(tt('dialog.archive.noVersionsLoaded', 'No versions loaded'));
-          setStatus(
-            tt('dialog.archive.status.failedVersions', 'Failed to load archive versions: {error}', {
-              error: error?.message || error,
-            }),
-            true,
-            'versions'
-          );
+          selectedIndex = -1;
+          dateSelect.textContent = '';
+          setStatus(tt('dialog.archive.status.failedVersions', 'Failed to load archive dates: {error}', {
+            error: error?.message || error,
+          }), true);
         } finally {
           loadingVersions = false;
-          updateActionState();
+          if (!closed) updateActionState();
         }
       };
 
+      /* ---- create ----------------------------------------------------------- */
+
+      const setProgress = (done = 0, total = 0) => {
+        progress.max = Math.max(1, Number(total) || 1);
+        progress.value = Math.max(0, Math.min(progress.max, Number(done) || 0));
+        progress.hidden = false;
+      };
+
       const createArchiveTemplate = async (downloadAfterCreate = false) => {
-        const selectedEntry = syncSelectedVersionFromTimeline();
+        const selectedEntry = getSelectedEntry();
         const archiveVersion = String(selectedEntry?.version || '').trim();
+        const selectedVersionDate = String(selectedEntry?.date || '').trim();
         if (!archiveVersion) {
-          setStatus(tt('dialog.archive.status.selectDateFirst', 'Select an archive date first.'), true, 'general');
+          setStatus(tt('dialog.archive.status.selectDateFirst', 'Select an archive date first.'), true);
           return;
         }
         if (!supportsCreate) {
-          setStatus(tt('dialog.archive.status.tooLarge', 'Selection is too large for this browser to build a template image.'), true, 'general');
+          setStatus(tt('dialog.archive.status.tooLarge', 'Selection is too large for this browser to build a template image.'), true);
           return;
         }
-        previewPrefetchSuspended = true;
-        wakePreviewWorkers();
+        const buildRect = rect;
         busy = true;
+        clearTimeout(scrubTimer);
         updateActionState();
-        setStatus(
-          tt('dialog.archive.status.building', 'Building archive snapshot ({tiles} tiles)...', {
-            tiles: numberFmt.format(rect.tileCount),
-          }),
-          false,
-          'general'
-        );
-        setProgress(0, rect.tileCount, `${tt('dialog.archive.createProgress', 'Create')}: `);
-        const centerCoords = getArchiveRectCenterCoords(rect);
+        setStatus(tt('dialog.archive.status.building', 'Building the snapshot ({tiles} tiles)...', {
+          tiles: numberFmt.format(buildRect.tileCount),
+        }));
+        setProgress(0, buildRect.tileCount);
+        const centerCoords = getArchiveRectCenterCoords(buildRect);
         const regionNamePromise = fetchArchiveRegionName(centerCoords).catch((error) => {
           consoleWarn('Failed to resolve archive region name for template.', error);
           return '';
         });
-        let resultCanvas = new OffscreenCanvas(rect.width, rect.height);
+        let resultCanvas = new OffscreenCanvas(buildRect.width, buildRect.height);
         try {
           const context = resultCanvas.getContext('2d');
           if (!context) {
             throw new Error(tt('dialog.archive.error.templateCanvas', 'Failed to initialize template canvas.'));
           }
           context.imageSmoothingEnabled = false;
-          context.clearRect(0, 0, rect.width, rect.height);
-          await iterateArchiveTemplateTiles(rect, {
+          context.clearRect(0, 0, buildRect.width, buildRect.height);
+          await iterateArchiveTemplateTiles(buildRect, {
             archiveVersion,
             archiveBaseUrl,
-            onProgress: (done, total) => setProgress(done, total, `${tt('dialog.archive.createProgress', 'Create')}: `),
+            concurrency: TEMPLATE_ARCHIVE_PREVIEW_DOWNLOAD_CONCURRENCY,
+            onProgress: (done, total) => setProgress(done, total),
             onTile: ({ image, tx, ty }) => {
               context.drawImage(
                 image,
-                tx * TEMPLATE_TILE_SIZE - rect.left,
-                ty * TEMPLATE_TILE_SIZE - rect.top
+                tx * TEMPLATE_TILE_SIZE - buildRect.left,
+                ty * TEMPLATE_TILE_SIZE - buildRect.top
               );
             },
           });
           const blob = await resultCanvas.convertToBlob({ type: 'image/png' });
           const archiveNameDate = formatArchiveNameDate(selectedVersionDate, archiveVersion);
           const sourceTag = (archiveNameDate || archiveVersion).replace(/[^a-z0-9._-]+/gi, '_');
-          const fileName = `archive_${sourceTag}_${rect.tx1}_${rect.ty1}_${rect.px1}_${rect.py1}.png`;
+          const fileName = `archive_${sourceTag}_${buildRect.tx1}_${buildRect.ty1}_${buildRect.px1}_${buildRect.py1}.png`;
           const file = new File([blob], fileName, { type: 'image/png' });
           const regionName = await regionNamePromise;
-          const autoTemplateName = buildArchiveTemplateName({
-            regionName,
-            centerCoords,
-          });
+          const autoTemplateName = buildArchiveTemplateName({ regionName, centerCoords });
           const previousAutoTemplateName = buildArchiveTemplateName({
             regionName: String(targetTemplateMeta?.regionName || '').trim(),
             centerCoords,
@@ -1316,13 +1120,13 @@ export const createArchiveTemplateUi = (deps = {}) => {
             archiveVersion,
             archiveDate: selectedVersionDate,
             regionName,
-            width: rect.width,
-            height: rect.height,
+            width: buildRect.width,
+            height: buildRect.height,
           });
           const createdTemplate = await templateManager.createTemplate(
             file,
             templateName,
-            [rect.tx1, rect.ty1, rect.px1, rect.py1],
+            [buildRect.tx1, buildRect.ty1, buildRect.px1, buildRect.py1],
             {
               enabled: targetTemplate ? (targetTemplate.enabled || targetTemplate.autoDisabled === true) : true,
               timeArchiveMeta,
@@ -1358,22 +1162,22 @@ export const createArchiveTemplateUi = (deps = {}) => {
                 ? (
                   isUpdateMode
                     ? tt('dialog.archive.overlay.updatedDownloaded', 'Updated "{name}" and downloaded {file}.', {
-                        name: templateName,
-                        file: downloadResult?.fileName || tt('dialog.archive.image', 'image'),
-                      })
+                      name: templateName,
+                      file: downloadResult?.fileName || tt('dialog.archive.image', 'image'),
+                    })
                     : tt('dialog.archive.overlay.createdDownloaded', 'Archive template created from {name} and image downloaded.', {
-                        name: templateName,
-                      })
+                      name: templateName,
+                    })
                 )
                 : (
                   isUpdateMode
                     ? tt('dialog.archive.overlay.updated', 'Updated "{name}" to archive {archive}.', {
-                        name: templateName,
-                        archive: selectedVersionDate || archiveVersion,
-                      })
+                      name: templateName,
+                      archive: selectedVersionDate || archiveVersion,
+                    })
                     : tt('dialog.archive.overlay.created', 'Archive template created from {name}.', {
-                        name: templateName,
-                      })
+                      name: templateName,
+                    })
                 )
             );
           }
@@ -1388,122 +1192,84 @@ export const createArchiveTemplateUi = (deps = {}) => {
           });
         } catch (error) {
           consoleWarn('Failed to create archive template from selected range.', error);
-          setStatus(
-            tt('dialog.archive.status.createFailed', 'Template creation failed: {error}', {
-              error: error?.message || error,
-            }),
-            true,
-            'general'
-          );
+          busy = false;
+          setStatus(tt('dialog.archive.status.createFailed', 'Template creation failed: {error}', {
+            error: error?.message || error,
+          }), true);
         } finally {
           cleanUpCanvas(resultCanvas);
           resultCanvas = null;
           if (!closed) {
-            clearProgress();
-            previewPrefetchSuspended = false;
             busy = false;
+            progress.hidden = true;
             updateActionState();
-            syncVersionMetaText();
-            wakePreviewWorkers();
+            schedulePrefetch();
           }
         }
+      };
+
+      /* ---- lifecycle -------------------------------------------------------- */
+
+      const close = (result = null) => {
+        if (closed) return;
+        closed = true;
+        cancelAnimationFrame(frameRaf);
+        clearTimeout(scrubTimer);
+        resetPreviewEntries();
+        cleanups.forEach(cleanup => {
+          try { cleanup(); } catch (_) {}
+        });
+        document.removeEventListener('keydown', onKeyDown, true);
+        frame.remove();
+        panel.remove();
+        frameImage.width = 0;
+        frameImage.height = 0;
+        if (archiveTemplateWindowSession?.panel === panel) {
+          archiveTemplateWindowSession = null;
+        }
+        resolve(result);
+      };
+
+      const onKeyDown = (event) => {
+        if (event.key !== 'Escape' || busy) return;
+        event.preventDefault();
+        close(null);
       };
 
       closeBtn.addEventListener('click', () => {
         if (!busy) close(null);
       });
-      cancelBtn.addEventListener('click', () => {
-        if (!busy) close(null);
-      });
+      prevBtn.addEventListener('click', () => selectVersionIndex(selectedIndex - 1));
+      nextBtn.addEventListener('click', () => selectVersionIndex(selectedIndex + 1));
+      dateSelect.addEventListener('change', () => selectVersionIndex(dateSelect.value));
+      timeline.addEventListener('input', () => selectVersionIndex(timeline.value, { immediate: false }));
+      timeline.addEventListener('change', () => selectVersionIndex(timeline.value));
       refreshBtn.addEventListener('click', () => {
         void loadVersions(true);
-      });
-      zoomOutBtn.addEventListener('click', () => {
-        setPreviewZoom(previewZoomLevel / 1.2);
-      });
-      zoomInBtn.addEventListener('click', () => {
-        setPreviewZoom(previewZoomLevel * 1.2);
-      });
-      zoomResetBtn.addEventListener('click', () => {
-        resetPreviewView();
-      });
-      versionRange.addEventListener('input', () => {
-        handleSelectedVersionChange(true);
-      });
-      versionRange.addEventListener('change', () => {
-        handleSelectedVersionChange(true);
       });
       createBtn.addEventListener('click', () => {
         void createArchiveTemplate(false);
       });
-      createDownloadBtn.addEventListener('click', () => {
+      downloadBtn.addEventListener('click', () => {
         void createArchiveTemplate(true);
       });
-      backdrop.addEventListener('click', (event) => {
-        if (event.target === backdrop && !busy) {
-          close(null);
-        }
-      });
-      previewWrap.addEventListener('wheel', (event) => {
-        if (!previewHasImage) return;
-        event.preventDefault();
-        const factor = event.shiftKey ? 1.35 : 1.15;
-        const nextZoom = event.deltaY < 0
-          ? previewZoomLevel * factor
-          : previewZoomLevel / factor;
-        const bounds = previewWrap.getBoundingClientRect();
-        setPreviewZoom(nextZoom, event.clientX - bounds.left, event.clientY - bounds.top);
-      }, { passive: false });
-      detachPreviewPan = makePointerPannable(previewWrap, {
-        onStart: () => {
-          if (!previewHasImage) return null;
-          const { width, height } = getPreviewViewportSize();
-          const layout = computePreviewLayout(width, height);
-          if (!layout || (layout.maxPanX <= 0.5 && layout.maxPanY <= 0.5)) return null;
-          previewDragState = { panX: previewPanX, panY: previewPanY };
-          syncPreviewControls(layout);
-          return previewDragState;
-        },
-        onMove: (dx, dy, origin) => {
-          previewPanX = origin.panX + dx;
-          previewPanY = origin.panY + dy;
-          queuePreviewViewportDraw();
-        },
-        onEnd: () => {
-          previewDragState = null;
-          syncPreviewControls();
-        }
-      });
 
-      document.body.appendChild(backdrop);
+      applyOverlayVarsToFloatingElement(panel);
+      applyOverlayVarsToFloatingElement(frame);
+      document.body.append(frame, panel);
+      // Top centre to start with, then wherever the user drags it.
+      const panelWidth = panel.getBoundingClientRect().width;
+      panel.style.left = `${Math.max(8, Math.round((window.innerWidth - panelWidth) / 2))}px`;
+      panel.style.top = '12px';
+      cleanups.push(registerFloatingPanel(panel));
+      cleanups.push(makePanelDraggable(header, panel));
       archiveTemplateWindowSession = { panel, close };
       document.addEventListener('keydown', onKeyDown, true);
-      window.addEventListener('resize', queuePreviewViewportDraw);
-      if (typeof ResizeObserver === 'function') {
-        previewResizeObserver = new ResizeObserver(() => queuePreviewViewportDraw());
-        previewResizeObserver.observe(previewWrap);
-      }
 
-      if (!supportsCreate) {
-        setStatus(
-          tt(
-            'dialog.archive.status.selectionTooLarge',
-            'Selection {width} x {height} is too large for template creation in this browser.',
-            {
-              width: numberFmt.format(rect.width),
-              height: numberFmt.format(rect.height),
-            }
-          ),
-          true,
-          'general'
-        );
-        drawPreviewPlaceholder(tt('dialog.archive.preview.tooLarge', 'Selection too large for create'));
-      } else {
-        setStatus(tt('dialog.archive.status.loadingVersions', 'Loading archive versions...'), false, 'versions');
-        drawPreviewPlaceholder(tt('dialog.common.loadingPreview', 'Loading preview...'));
-      }
+      setStatus('');
+      updateSummary();
       updateActionState();
-      syncPreviewControls();
+      trackFrame();
       void loadVersions(false);
     });
   };

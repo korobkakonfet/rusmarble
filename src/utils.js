@@ -622,12 +622,37 @@ const downloadArchiveTile = async (tx, ty, options = {}) => {
     throw new Error('Archive tile Y coordinate is invalid.');
   }
   const containerUrl = archiveTileUrl(archiveBaseUrl, version, ARCHIVE_TILE_ZOOM, safeTx, safeTy);
-  const blob = await gmFetchBlob(containerUrl);
-  if (!blob) {
+  const buffer = await fetchArchiveContainer(containerUrl);
+  if (!buffer) {
     throw new Error(`Archive tile not found at ${containerUrl}`);
   }
-  const png = await decodeArchiveTile(version, await blob.arrayBuffer());
+  const png = await decodeArchiveTile(version, buffer);
   return blobToImage(new Blob([png], { type: 'image/png' }));
+};
+
+/** Recently fetched archive containers, by URL. One container holds a whole week (168 versions)
+ * of one tile, so scrubbing the time machine's timeline or resizing its selection would otherwise
+ * download the same bundle again for every version and every tile. Promises, so concurrent
+ * requests for one bundle share a download; insertion order doubles as LRU order. */
+const archiveContainerCache = new Map();
+const ARCHIVE_CONTAINER_CACHE_LIMIT = 64;
+
+const fetchArchiveContainer = (url) => {
+  const cached = archiveContainerCache.get(url);
+  if (cached) {
+    archiveContainerCache.delete(url);
+    archiveContainerCache.set(url, cached);
+    return cached;
+  }
+  const request = gmFetchBlob(url).then(blob => blob ? blob.arrayBuffer() : null);
+  archiveContainerCache.set(url, request);
+  // A failed or missing download must not stick: a later request retries.
+  request.then(buffer => { if (!buffer) archiveContainerCache.delete(url); },
+    () => archiveContainerCache.delete(url));
+  while (archiveContainerCache.size > ARCHIVE_CONTAINER_CACHE_LIMIT) {
+    archiveContainerCache.delete(archiveContainerCache.keys().next().value);
+  }
+  return request;
 };
 
 export function downloadTile(tx, ty, options = {}) {

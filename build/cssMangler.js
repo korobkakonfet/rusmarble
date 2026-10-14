@@ -145,13 +145,25 @@ export default function mangleSelectors({
   matchedSelectors.sort((a, b) => b.length - a.length);
 
   // Converts the string[] to an Object (key-value)
-  matchedSelectors = { 
-    ...importMap, 
+  // New names only get codes nobody holds yet. Numbering them from `importMapLength + index` (the
+  // index among *all* matched names, imported ones included) handed out codes an existing selector
+  // already had, so a new element silently picked up unrelated styles.
+  const usedCodes = new Set(Object.values(importMap));
+  let nextCode = importMapLength;
+  const allocateCode = () => {
+    let code;
+    do {
+      code = outputPrefix + numberToEncoded(nextCode++, encoding);
+    } while (usedCodes.has(code));
+    usedCodes.add(code);
+    return code;
+  };
+  matchedSelectors = {
+    ...importMap,
     ...Object.fromEntries(
       matchedSelectors
         .filter(key => !(key in importMap))
-        .map(key => [key, outputPrefix + numberToEncoded(importMapLength + matchedSelectors.indexOf(key), encoding)]
-      )
+        .map(key => [key, allocateCode()])
     )
   };
   
