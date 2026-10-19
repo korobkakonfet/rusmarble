@@ -17,7 +17,7 @@ import { createMapCommentManager } from './mapComments.js';
 import { createHqTemplateManager } from './hqTemplate.js';
 import { createTemplateCreationUi } from './templateCreationUi.js';
 import { createArchiveTemplateUi } from './archiveTemplateUi.js';
-import { CUSTOM_LAYOUT_THEME, CUSTOM_THEME_DRAG_BG_VAR, CUSTOM_THEME_TOKENS, normalizeCustomThemeColor, buildCustomThemeCssVars, buildCustomThemeSiteVars, customThemeColorToCss, getDefaultCustomTheme, normalizeUiFont, buildUiFontFamily, buildUiFontFaceCss, UI_FONT_FILE_STORAGE_KEY } from './customTheme.js';
+import { CUSTOM_LAYOUT_THEME, CUSTOM_THEME_DRAG_BG_VAR, CUSTOM_THEME_TOKENS, normalizeCustomThemeColor, buildCustomThemeCssVars, buildCustomThemeSiteVars, customThemeColorToCss, getDefaultCustomTheme, normalizeUiFont, buildUiFontFamily, buildUiFontFaceCss, UI_FONT_FILE_STORAGE_KEY, UI_FONT_FILE_FAMILY, UI_FONT_BALANCED_FAMILY, measureBalancedFontMetrics, buildBalancedFontFaceCss } from './customTheme.js';
 import { createCustomThemeUi } from './customThemeUi.js';
 import { createPixelEffectsStore } from './pixelEffects.js';
 import { createPixelEffectsUi } from './pixelEffectsUi.js';
@@ -60,7 +60,7 @@ import { layoutLanguageOptions, normalizeLayoutLanguage, translateLayout, getLay
 import { encodeChunkSampleBytes } from './templateChunkUtils.js';
 import { consoleLog, consoleWarn, consoleError, isDebugLoggingEnabled, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels, initMobileLayout, isMobileLayout, makePanelDraggable, registerFloatingPanel, findPaintPanelHeading, insertIntoPaintPanelToolbar, applyWidePalette } from './utils.js';
 import { getCenterGeoCoords, getPixelPerWplacePixel, isMapMoving, getMapBounds, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getZoom, getCurrentTileSize, getMountedTemplateCanvasSourceIDs, setForcedTileRefreshSuppressed, applyArchiveBgLayerToMap, getArchiveBgDiag, loadArchiveTile, setTemplateSortIDLayersOpacity, registerBmCanvasRestoreOnStyleChange, projectGeoToScreen, unprojectScreenToGeo, getMapCanvasElement, findMapHandleButton, syncSiteSkin} from './utilsMaptiler.js';
-import { buildFontFaceCss } from './fonts.js';
+import { buildFontFaceCss, BUNDLED_FONTS } from './fonts.js';
 // import { getCenterGeoCoords, addTemplate } from './utilsMaptiler.js';
 
 const name = GM_info.script.name.toString(); // Name of userscript
@@ -264,6 +264,7 @@ const layoutThemeOptions = {
   "imperial": "Russian Imperial",
   "tricolor": "Russian Tricolor",
   "halloween": "Halloween",
+  "wplace": "Wplace new design",
   "custom": "Custom..."
 };
 const templateDisplayOptions = {
@@ -1662,11 +1663,16 @@ const applyWplaceThemeState = () => {
 };
 const observeWplaceTheme = () => {
   const observer = new MutationObserver((mutations) => {
-    if (mutations.some(mutation => mutation.type === 'attributes' && (mutation.attributeName === 'data-theme' || mutation.attributeName === 'data-rm-theme'))) {
-      applyWplaceThemeState();
+    if (!mutations.some(mutation => mutation.type === 'attributes')) return;
+    applyWplaceThemeState();
+    // The "wplace" layout theme takes its colours from wplace's own tokens, which change with its
+    // light/dark mode and standard/pixel UI. Floating windows hold a computed copy of the overlay's
+    // --bm-* values, so have them re-read it.
+    if (document.getElementById('bm-overlay')?.dataset.layoutTheme === 'wplace') {
+      document.dispatchEvent(new CustomEvent('bm-layout-theme-changed', { detail: { layoutTheme: 'wplace' } }));
     }
   });
-  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-rm-theme'] });
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-rm-theme', 'data-game-ui', 'data-standard-ui'] });
   applyWplaceThemeState();
 };
 
@@ -1783,6 +1789,9 @@ const applyLayoutTheme = (value) => {
   if (!overlay) return;
   const nextTheme = normalizeLayoutTheme(value);
   overlay.dataset.layoutTheme = nextTheme;
+  // Floating windows live outside #bm-overlay, so the "wplace" theme's shape rules key off <html>.
+  // Not `bm-` prefixed: the CSS mangler would rename it in the stylesheet only.
+  document.documentElement.dataset.rmLayoutTheme = nextTheme;
   syncSiteSkin(); // the Halloween layout theme also skins wplace's UI
   applyWplaceThemeState();
   const notificationContainer = document.getElementById('bm-notification-container');
@@ -1844,7 +1853,19 @@ const getBuiltInThemePalette = (theme) => {
     document.body.appendChild(probe);
     const computed = getComputedStyle(probe).color;
     probe.remove();
-    return normalizeCustomThemeColor(computed, fallback);
+    const parsed = normalizeCustomThemeColor(computed, '');
+    if (parsed) return parsed;
+    // `color-mix()` (the "wplace" theme) computes to `color(srgb …)`, which the parser can't read.
+    // Paint it and read the pixel back.
+    try {
+      const ctx = Object.assign(document.createElement('canvas'), { width: 1, height: 1 }).getContext('2d');
+      ctx.fillStyle = computed;
+      ctx.fillRect(0, 0, 1, 1);
+      const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
+      return normalizeCustomThemeColor(`rgba(${r}, ${g}, ${b}, ${a / 255})`, fallback);
+    } catch (_) {
+      return fallback;
+    }
   };
   const palette = {};
   for (const token of CUSTOM_THEME_TOKENS) {
@@ -1916,6 +1937,32 @@ const applyUiFont = (font, file = uiFontFile) => {
   }
   root.toggleAttribute('data-rm-ui-font', !!family);
   root.toggleAttribute('data-rm-site-font', !!family && normalized.applyToSite);
+  balanceUiFont(normalized, file, family);
+};
+
+/** Re-registers the chosen bundled/uploaded font with ascent/descent overrides that centre its
+ * text vertically (see measureBalancedFontMetrics). Async, so applyUiFont paints the plain font
+ * first; a newer applyUiFont call makes a pending one drop its result. System fonts are left as
+ * they are: no file to build a face from, and their metrics are normally sane. */
+let uiFontBalanceSeq = 0;
+const balanceUiFont = (normalized, file, family) => {
+  const seq = ++uiFontBalanceSeq;
+  if (!family) return;
+  let url = '';
+  if (normalized.source === 'file') url = String(file?.dataUrl ?? '');
+  else if (normalized.source === 'bundled') url = BUNDLED_FONTS.find((font) => font.family === normalized.family)?.url || '';
+  if (!url) return;
+  measureBalancedFontMetrics(url).then((metrics) => {
+    if (seq !== uiFontBalanceSeq || !metrics) return;
+    const faceStyle = document.getElementById('rm-ui-font-face') || document.head.appendChild(Object.assign(document.createElement('style'), { id: 'rm-ui-font-face' }));
+    if (normalized.source === 'file') {
+      // Replace the plain face in place: same family name, so --rm-ui-font stays as it is.
+      faceStyle.textContent = buildBalancedFontFaceCss(UI_FONT_FILE_FAMILY, url, metrics);
+    } else {
+      faceStyle.textContent = buildBalancedFontFaceCss(UI_FONT_BALANCED_FAMILY, url, metrics);
+      document.documentElement.style.setProperty('--rm-ui-font', `"${UI_FONT_BALANCED_FAMILY}", ${family}`);
+    }
+  });
 };
 
 /** Applies a whole palette to the live UI without persisting it (editor preview).
@@ -2862,8 +2909,14 @@ function initChat() {
   let floatingResizeObserver = null;
   let floatingExpandedWidth = '360px';
   let floatingExpandedHeight = '420px';
-  const CHAT_FLOAT_ICON = '⧉';
-  const CHAT_DOCK_ICON = '⇱';
+  // Drawn as SVG rather than the ⧉ / ⇱ glyphs: those come from whatever symbol font the OS has,
+  // whose metrics put them off-centre in the button (and differently on every platform).
+  const CHAT_FLOAT_ICON = '<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.75" y="4.75" width="5.5" height="5.5"/><path d="M4.75 4.75V1.75h5.5v5.5H7.25"/></svg>';
+  const CHAT_DOCK_ICON = '<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1.5 1.75h9M3.75 9V4.75H8M4.25 4.25l6 6"/></svg>';
+  const setChatFloatToggleIcon = (button, dock) => {
+    button.innerHTML = dock ? CHAT_DOCK_ICON : CHAT_FLOAT_ICON;
+    button.toggleAttribute('data-rm-dock', dock);
+  };
   const originalChatParent = chatDetails.parentElement;
   const originalChatNextSibling = chatDetails.nextElementSibling;
   const overlayRoot = document.getElementById('bm-overlay');
@@ -3119,7 +3172,7 @@ function initChat() {
     chatFloatToggleBtn = document.createElement('button');
     chatFloatToggleBtn.type = 'button';
     chatFloatToggleBtn.className = 'bm-chat-float-toggle';
-    chatFloatToggleBtn.textContent = CHAT_FLOAT_ICON;
+    setChatFloatToggleIcon(chatFloatToggleBtn, false);
     chatFloatToggleBtn.setAttribute('aria-label', 'Float chat');
     chatFloatToggleBtn.title = 'Open chat in floating window';
     unreadBadge = chatSummary.querySelector('.bm-chat-unread-badge');
@@ -3258,7 +3311,7 @@ function initChat() {
     isChatFloating = Boolean(enabled);
     chatDetails.classList.toggle('bm-chat-floating', isChatFloating);
     if (chatFloatToggleBtn) {
-      chatFloatToggleBtn.textContent = isChatFloating ? CHAT_DOCK_ICON : CHAT_FLOAT_ICON;
+      setChatFloatToggleIcon(chatFloatToggleBtn, isChatFloating);
       chatFloatToggleBtn.setAttribute('aria-label', isChatFloating ? 'Dock chat' : 'Float chat');
       chatFloatToggleBtn.title = isChatFloating ? 'Return chat to main layout' : 'Open chat in floating window';
     }
@@ -7471,7 +7524,7 @@ const syncChatStaticLanguage = () => {
   if (statusLight) statusLight.title = t('chat.statusLightTitle');
   const floatButton = document.querySelector('.bm-chat-float-toggle');
   if (floatButton instanceof HTMLButtonElement) {
-    const isDock = floatButton.textContent?.trim() === '⇱';
+    const isDock = floatButton.hasAttribute('data-rm-dock');
     floatButton.title = isDock ? t('chat.dockTitle') : t('chat.floatTitle');
     floatButton.setAttribute('aria-label', isDock ? t('chat.dockAria') : t('chat.floatAria'));
   }
@@ -9745,7 +9798,7 @@ async function buildOverlayMain() {
 
       if (templateManager.isProgressBarEnabled()) {
         const percentageProgress = paintedCount / (totalCount === 0 ? 1 : totalCount) * 100;
-        row.style.background = `linear-gradient(to right, rgb(0, 128, 0, 0.8) 0%, rgb(0, 128, 0, 0.8) ${percentageProgress}%, transparent ${percentageProgress}%, transparent 100%)`;
+        row.style.background = `linear-gradient(to right, var(--rm-progress-fill, rgb(0, 128, 0, 0.8)) 0%, var(--rm-progress-fill, rgb(0, 128, 0, 0.8)) ${percentageProgress}%, transparent ${percentageProgress}%, transparent 100%)`;
       }
 
       const paletteEntry = combinedProgress[colorKey];

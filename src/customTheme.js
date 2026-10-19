@@ -372,6 +372,64 @@ export const buildUiFontFaceCss = (file) => {
   return `@font-face{font-family:"${UI_FONT_FILE_FAMILY}";src:url("${dataUrl}");font-display:swap;}`;
 };
 
+/** Family the UI copy of a bundled font is registered under, with balanced metrics. A separate
+ * face because text templates draw the bundled fonts on canvas and must not shift. */
+export const UI_FONT_BALANCED_FAMILY = 'RusMarbleUiFont';
+
+const balancedMetricsCache = new Map();
+
+/** Ascent/descent overrides that centre a font's text in its line box.
+ *
+ * Pixel fonts often ship lopsided metrics (RuxpixelPantin: ascent 1.17em, descent 0.17em, caps
+ * 0.83em), so at `line-height: 1` the glyphs sit on the bottom of every button and field. This
+ * keeps the font's total height, so line heights don't change, and moves the baseline so the
+ * middle of the letters - halfway between the x-height and cap-height centres, since many pixel
+ * fonts use small caps for lowercase - lands on the middle of the box. Measured on canvas, which
+ * uses the same metrics as CSS layout.
+ *
+ * @param {string} url - The font file URL (a data: URL here).
+ * @returns {Promise<{ascent: number, descent: number}|null>} Percentages of the em, or null when
+ *   the font can't be measured (no FontFace / TextMetrics support, missing Latin glyphs).
+ */
+export const measureBalancedFontMetrics = (url) => {
+  if (!url) return Promise.resolve(null);
+  if (!balancedMetricsCache.has(url)) {
+    balancedMetricsCache.set(url, (async () => {
+      const FontFaceCtor = globalThis.FontFace;
+      if (typeof FontFaceCtor !== 'function' || !document.fonts) return null;
+      const family = 'RusMarbleFontMeasure';
+      const face = new FontFaceCtor(family, `url("${url}")`);
+      await face.load();
+      document.fonts.add(face);
+      try {
+        const ctx = document.createElement('canvas').getContext('2d');
+        ctx.font = `100px "${family}"`;
+        const cap = ctx.measureText('H');
+        const ex = ctx.measureText('x');
+        const ascent = cap.fontBoundingBoxAscent;
+        const descent = cap.fontBoundingBoxDescent;
+        const capHeight = cap.actualBoundingBoxAscent;
+        const xHeight = ex.actualBoundingBoxAscent;
+        if (![ascent, descent, capHeight, xHeight].every((v) => Number.isFinite(v) && v >= 0) || !capHeight) return null;
+        const total = ascent + descent;
+        const textCentre = (capHeight + (xHeight || capHeight)) / 4;
+        const round = (v) => Math.round(v * 100) / 100;
+        return { ascent: round(total / 2 + textCentre), descent: round(Math.max(0, total / 2 - textCentre)) };
+      } finally {
+        document.fonts.delete(face);
+      }
+    })().catch(() => null));
+  }
+  return balancedMetricsCache.get(url);
+};
+
+/** An `@font-face` rule for `family` from `url` with the given ascent/descent overrides. */
+export const buildBalancedFontFaceCss = (family, url, metrics) => {
+  if (!metrics) return '';
+  return `@font-face{font-family:"${family}";src:url("${url}");font-display:swap;`
+    + `ascent-override:${metrics.ascent}%;descent-override:${metrics.descent}%;line-gap-override:0%;}`;
+};
+
 /* -------------------------------------------------------------------------- */
 /* Share codes                                                                */
 /* -------------------------------------------------------------------------- */

@@ -1345,6 +1345,17 @@ export default class ApiManager {
       let lastCrown = '';
       let lastSparkle = '';
       let hidden = false;
+      /** Whether an open modal that does not hold the card overlaps it. */
+      const isCardCovered = (cardRect) => {
+        for (const dialog of document.querySelectorAll('dialog[open]')) {
+          if (dialog.contains(card)) continue;
+          const box = dialog.querySelector('.modal-box') || dialog;
+          const rect = box.getBoundingClientRect();
+          if (rect.width && rect.height && rect.left < cardRect.right && rect.right > cardRect.left
+            && rect.top < cardRect.bottom && rect.bottom > cardRect.top) return true;
+        }
+        return false;
+      };
       const follow = () => {
         pollTimer = 0;
         if (!card.isConnected) {
@@ -1354,7 +1365,9 @@ export default class ApiManager {
           return;
         }
         const cardRect = card.getBoundingClientRect();
-        const isHidden = !cardRect.width || !cardRect.height;
+        // The layer sits above everything, so it has to hide itself when a wplace modal (e.g. a
+        // leaderboard opened from the card) covers the card — otherwise the ring floats on top.
+        const isHidden = !cardRect.width || !cardRect.height || isCardCovered(cardRect);
         if (isHidden !== hidden) {
           hidden = isHidden;
           // display:none also stops the infinite spin/wobble from being rendered.

@@ -296,6 +296,76 @@
   --bm-drag-bg: radial-gradient(circle at 3px 3px, rgba(255, 138, 40, 0.6) 0 1.6px, transparent 1.6px);
 }
 
+/* "Wplace new design": no palette of its own, every token points at wplace's daisyUI `--color-*` (set
+ * for both data-theme values, in both UIs) or, in the pixel UI, its `--pixel-*` palette. So the
+ * overlay follows wplace's light/dark mode, standard/pixel UI and skins without any JS. `--pixel-*`
+ * only exists on game routes, hence the fallbacks. Values must not reference other `--bm-*` tokens:
+ * the editor's "Start from" resolves them on a probe outside #bm-overlay.
+ * The pixel-UI shape rules (frames, bevels, square corners) are further down, under
+ * `data-rm-layout-theme="wplace"`.
+ * @since 0.87.114
+ */
+#bm-overlay[data-layout-theme="wplace"] {
+  --bm-bg: var(--color-base-100);
+  --bm-panel-bg: var(--color-base-100);
+  --bm-comment-bg: var(--color-base-100);
+  --bm-fg: var(--color-base-content);
+  --bm-muted: var(--pixel-muted, color-mix(in srgb, var(--color-base-content) 68%, var(--color-base-100)));
+  --bm-border: color-mix(in srgb, var(--color-base-content) 18%, transparent);
+  --bm-border-strong: color-mix(in srgb, var(--color-base-content) 30%, transparent);
+  --bm-subtle-bg: var(--color-base-200);
+  --bm-btn-bg: var(--color-primary);
+  --bm-btn-hover: color-mix(in srgb, var(--color-primary) 86%, white);
+  --bm-btn-active: color-mix(in srgb, var(--color-primary) 80%, black);
+  --bm-btn-text: var(--color-primary-content);
+  --bm-accent: var(--color-primary);
+  --bm-accent-strong: var(--pixel-soft-ink, color-mix(in srgb, var(--color-primary) 75%, var(--color-base-content)));
+  --bm-accent-soft: color-mix(in srgb, var(--color-primary) 45%, transparent);
+  --bm-charge-time: var(--color-primary);
+  --bm-highlight-bg: color-mix(in srgb, var(--color-primary) 16%, transparent);
+  --bm-highlight-border: color-mix(in srgb, var(--color-primary) 50%, transparent);
+  --bm-highlight-text: var(--pixel-soft-ink, var(--color-primary));
+  --bm-highlight-text-border: color-mix(in srgb, var(--color-primary) 65%, transparent);
+  --bm-warn: var(--color-warning);
+  --bm-danger: var(--color-error);
+  --bm-icon: var(--color-base-content);
+  --bm-chat-reply-bg: color-mix(in srgb, var(--color-primary) 10%, transparent);
+  --bm-chat-reply-border: color-mix(in srgb, var(--color-primary) 60%, transparent);
+  --bm-drag-bg: radial-gradient(circle at 3px 3px, color-mix(in srgb, var(--color-base-content) 35%, transparent) 0 1.6px, transparent 1.6px);
+  --bm-glass-border: color-mix(in srgb, var(--color-base-content) 16%, transparent);
+  --bm-glass-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+  --bm-glass-button-shadow: none;
+  --bm-glass-button-shadow-hover: none;
+  --bm-glass-button-shadow-active: none;
+  --bm-glass-input-shadow: none;
+  /* Colour-list progress bars (main.js buildColorFilterList); `rm-` so the mangler leaves it alone. */
+  --rm-progress-fill: color-mix(in srgb, var(--color-success) 55%, transparent);
+}
+
+/* Pixel UI: wplace's neutral bevelled button and its hard offset shadows. Kept as tokens so the
+ * existing button/panel rules (and the floating windows' computed copy) pick them up. */
+:root[data-game-ui]:not([data-standard-ui]) #bm-overlay[data-layout-theme="wplace"] {
+  /* wplace's page/card split: the window is the page, sections are white cards on it. */
+  --bm-bg: var(--color-base-200);
+  --bm-border: var(--pixel-button-frame);
+  --bm-border-strong: var(--pixel-ink);
+  --bm-subtle-bg: var(--pixel-well);
+  --bm-btn-bg: var(--pixel-button);
+  --bm-btn-hover: var(--pixel-button-light);
+  --bm-btn-active: var(--pixel-button-shade);
+  --bm-btn-text: var(--pixel-title);
+  --bm-glass-border: var(--pixel-ink);
+  --bm-glass-shadow: 6px 6px 0 var(--pixel-shadow);
+  --bm-glass-inner-shadow: inset -3px -3px 0 var(--color-base-300);
+  --bm-glass-button-shadow: inset 2px 2px 0 var(--pixel-button-light), inset -2px -2px 0 var(--pixel-button-shade);
+  --bm-glass-button-shadow-hover: inset 2px 2px 0 var(--pixel-button-light), inset -2px -2px 0 var(--pixel-button-shade);
+  --bm-glass-button-shadow-active: inset 2px 2px 0 var(--pixel-button-shade), inset -2px -2px 0 var(--pixel-button-light);
+  --bm-glass-input-shadow: inset 2px 2px 0 var(--pixel-field-shade);
+  --bm-drag-bg: repeating-linear-gradient(90deg, var(--pixel-button-frame) 0 2px, transparent 2px 6px);
+  --bm-drag-bg-repeat: repeat;
+  --bm-drag-bg-size: auto;
+}
+
 /* The "custom" theme has no static palette: applyCustomThemeVars() writes the
  * user's tokens inline onto #bm-overlay. This block only supplies a sane
  * starting point for the tokens the editor does not expose.
@@ -2051,7 +2121,12 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-family: "Segoe UI Symbol", "Noto Sans Symbols 2", sans-serif;
+}
+
+/* The icon is an SVG (main.js CHAT_FLOAT_ICON); block so no line box nudges it off-centre. */
+.bm-chat-float-toggle svg {
+  display: block;
+  flex-shrink: 0;
 }
 
 .bm-chat-unread-badge {
@@ -2779,6 +2854,142 @@ span.bm-templatename:hover, a.bm-templatename:focus {
   --bm-notify-fg: #f2f5ff;
   --bm-notify-muted: #bcc3d9;
   --bm-notify-border: rgba(255, 255, 255, 0.2);
+}
+
+#bm-notification-container[data-layout-theme="wplace"] {
+  --bm-notify-bg: var(--color-base-100);
+  --bm-notify-fg: var(--color-base-content);
+  --bm-notify-muted: var(--pixel-muted, color-mix(in srgb, var(--color-base-content) 68%, var(--color-base-100)));
+  --bm-notify-border: var(--pixel-ink, color-mix(in srgb, var(--color-base-content) 20%, transparent));
+}
+
+/* "Wplace new design" in wplace's pixel UI: copy its look (see :root[data-game-ui]:not([data-standard-ui])
+ * in wplace's stylesheet): square corners, a 3px ink frame with an inner shade and a hard offset
+ * shadow on panels, ink-framed inset fields and its pixel display font on headings. Colours come
+ * from the tokens above; only shapes are set here. Floating windows sit outside #bm-overlay, so
+ * this keys off `data-rm-layout-theme` on <html> (set by applyLayoutTheme in main.js). */
+:root[data-rm-layout-theme="wplace"][data-game-ui]:not([data-standard-ui]) :is(#bm-overlay, #bm-contain-chat.bm-chat-floating, #bm-chat-bans-window, #bm-text-template-window, #bm-flag-template-window, #bm-remote-template-window, #bm-custom-theme-window, #rm-pixel-effects-window, .bm-template-position-joystick) {
+  border-width: 3px;
+  border-color: var(--pixel-ink);
+  border-radius: 0;
+  accent-color: var(--color-primary);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+:root[data-rm-layout-theme="wplace"][data-game-ui]:not([data-standard-ui]) :is(#bm-overlay, #bm-contain-chat.bm-chat-floating, #bm-chat-bans-window, #bm-text-template-window, #bm-flag-template-window, #bm-remote-template-window, #bm-custom-theme-window, #rm-pixel-effects-window, .bm-template-position-joystick) :is(*, *::before, *::after) {
+  border-radius: 0 !important;
+}
+:root[data-rm-layout-theme="wplace"][data-game-ui]:not([data-standard-ui]) :is(#bm-overlay, #bm-contain-chat.bm-chat-floating, #bm-chat-bans-window, #bm-text-template-window, #bm-flag-template-window, #bm-remote-template-window, #bm-custom-theme-window, #rm-pixel-effects-window, .bm-template-position-joystick) button {
+  border-color: var(--pixel-button-frame);
+}
+/* Fields. Many carry inline border/background styles (userSettings.js, main.js), hence !important. */
+:root[data-rm-layout-theme="wplace"][data-game-ui]:not([data-standard-ui]) :is(#bm-overlay, #bm-contain-chat.bm-chat-floating, #bm-chat-bans-window, #bm-text-template-window, #bm-flag-template-window, #bm-remote-template-window, #bm-custom-theme-window, #rm-pixel-effects-window, .bm-template-position-joystick) :is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"]), select, textarea) {
+  border: 2px solid var(--pixel-ink) !important;
+  background-color: var(--color-base-100) !important;
+  color: var(--color-base-content) !important;
+  box-shadow: inset 2px 2px 0 var(--pixel-field-shade) !important;
+}
+:root[data-rm-layout-theme="wplace"][data-game-ui]:not([data-standard-ui]) :is(#bm-overlay, #bm-contain-chat.bm-chat-floating, #bm-chat-bans-window, #bm-text-template-window, #bm-flag-template-window, #bm-remote-template-window, #bm-custom-theme-window, #rm-pixel-effects-window, .bm-template-position-joystick) :is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"]), select, textarea):focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+:root[data-rm-layout-theme="wplace"][data-game-ui]:not([data-standard-ui]) :is(#bm-overlay, #bm-contain-chat.bm-chat-floating, #bm-chat-bans-window, #bm-text-template-window, #bm-flag-template-window, #bm-remote-template-window, #bm-custom-theme-window, #rm-pixel-effects-window, .bm-template-position-joystick) :is(input, textarea)::placeholder {
+  color: var(--pixel-placeholder);
+}
+/* wplace's pixel checkbox/radio: an ink-framed inset well that fills with the primary colour. */
+:root[data-rm-layout-theme="wplace"][data-game-ui]:not([data-standard-ui]) :is(#bm-overlay, #bm-contain-chat.bm-chat-floating, #bm-chat-bans-window, #bm-text-template-window, #bm-flag-template-window, #bm-remote-template-window, #bm-custom-theme-window, #rm-pixel-effects-window, .bm-template-position-joystick) input:is([type="checkbox"], [type="radio"]) {
+  appearance: none;
+  -webkit-appearance: none;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  margin: 0 2px;
+  vertical-align: middle;
+  border: 2px solid var(--pixel-ink);
+  background: var(--color-base-100) no-repeat center / 10px 10px;
+  box-shadow: inset 2px 2px 0 var(--pixel-field-shade);
+  image-rendering: pixelated;
+  cursor: pointer;
+}
+:root[data-rm-layout-theme="wplace"][data-game-ui]:not([data-standard-ui]) :is(#bm-overlay, #bm-contain-chat.bm-chat-floating, #bm-chat-bans-window, #bm-text-template-window, #bm-flag-template-window, #bm-remote-template-window, #bm-custom-theme-window, #rm-pixel-effects-window, .bm-template-position-joystick) input[type="checkbox"]:is(:checked, :indeterminate) {
+  background-color: var(--color-primary);
+  box-shadow: inset 2px 2px 0 var(--pixel-primary-shade);
+}
+:root[data-rm-layout-theme="wplace"][data-game-ui]:not([data-standard-ui]) :is(#bm-overlay, #bm-contain-chat.bm-chat-floating, #bm-chat-bans-window, #bm-text-template-window, #bm-flag-template-window, #bm-remote-template-window, #bm-custom-theme-window, #rm-pixel-effects-window, .bm-template-position-joystick) input[type="checkbox"]:checked {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8' shape-rendering='crispEdges'%3E%3Cpath fill='white' d='M1 3h1v2H1zM2 4h1v2H2zM3 5h1v2H3zM4 4h1v2H4zM5 3h1v2H5zM6 2h1v2H6z'/%3E%3C/svg%3E");
+}
+:root[data-rm-layout-theme="wplace"][data-game-ui]:not([data-standard-ui]) :is(#bm-overlay, #bm-contain-chat.bm-chat-floating, #bm-chat-bans-window, #bm-text-template-window, #bm-flag-template-window, #bm-remote-template-window, #bm-custom-theme-window, #rm-pixel-effects-window, .bm-template-position-joystick) input[type="checkbox"]:indeterminate {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8' shape-rendering='crispEdges'%3E%3Cpath fill='white' d='M2 3h4v2H2z'/%3E%3C/svg%3E");
+}
+:root[data-rm-layout-theme="wplace"][data-game-ui]:not([data-standard-ui]) :is(#bm-overlay, #bm-contain-chat.bm-chat-floating, #bm-chat-bans-window, #bm-text-template-window, #bm-flag-template-window, #bm-remote-template-window, #bm-custom-theme-window, #rm-pixel-effects-window, .bm-template-position-joystick) input[type="radio"]:checked {
+  background-color: var(--color-primary);
+  box-shadow: inset 0 0 0 2px var(--color-base-100);
+}
+:root[data-rm-layout-theme="wplace"][data-game-ui]:not([data-standard-ui]) :is(#bm-overlay, #bm-contain-chat.bm-chat-floating, #bm-chat-bans-window, #bm-text-template-window, #bm-flag-template-window, #bm-remote-template-window, #bm-custom-theme-window, #rm-pixel-effects-window, .bm-template-position-joystick) input:is([type="checkbox"], [type="radio"]):disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+:root[data-rm-layout-theme="wplace"][data-game-ui]:not([data-standard-ui]) :is(#bm-overlay, #bm-contain-chat.bm-chat-floating, #bm-chat-bans-window, #bm-text-template-window, #bm-flag-template-window, #bm-remote-template-window, #bm-custom-theme-window, #rm-pixel-effects-window, .bm-template-position-joystick) input:is([type="checkbox"], [type="radio"]):focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+/* The overlay's sections become wplace cards (ink frame, inner shade, white fill on the page
+ * colour). Their border/radius are inline styles from addDetails(). */
+:root[data-rm-layout-theme="wplace"][data-game-ui]:not([data-standard-ui]) #bm-overlay :is(#bm-checkbox-container, #bm-contain-colorfilter, #bm-contain-templatefilter, #bm-contain-chat:not(.bm-chat-floating)) {
+  border: 2px solid var(--pixel-ink) !important;
+  background: var(--color-base-100);
+  box-shadow: inset -2px -2px 0 var(--color-base-300), 3px 3px 0 var(--pixel-shadow);
+  padding: 4px 6px 6px !important;
+}
+:root[data-rm-layout-theme="wplace"][data-game-ui]:not([data-standard-ui]) #bm-overlay :is(#bm-checkbox-container, #bm-contain-colorfilter, #bm-contain-templatefilter, #bm-contain-chat:not(.bm-chat-floating)) > summary {
+  color: var(--pixel-title);
+  font-weight: 700;
+}
+/* Scrolling lists sit in a recessed well, like wplace's palette. */
+:root[data-rm-layout-theme="wplace"][data-game-ui]:not([data-standard-ui]) #bm-overlay :is(#bm-user_setting-list, #bm-colorfilter-list, #bm-templatefilter-list) {
+  border: 2px solid var(--pixel-ink);
+  background: var(--pixel-well);
+  box-shadow: inset 3px 3px 0 var(--pixel-well-shade);
+  padding: 4px 2px 4px 5px;
+}
+:root[data-rm-layout-theme="wplace"][data-game-ui]:not([data-standard-ui]) #bm-overlay .bm-remote-badge {
+  border-width: 2px;
+  font-weight: 700;
+}
+:root[data-rm-layout-theme="wplace"][data-game-ui]:not([data-standard-ui]) #bm-overlay hr {
+  border: 0;
+  border-top: 2px solid var(--pixel-ink);
+}
+:root[data-rm-layout-theme="wplace"][data-game-ui]:not([data-standard-ui]) :is(#bm-overlay, #bm-contain-chat.bm-chat-floating, #bm-chat-bans-window, #bm-text-template-window, #bm-flag-template-window, #bm-remote-template-window, #bm-custom-theme-window, #rm-pixel-effects-window, .bm-template-position-joystick) hr {
+  border-color: var(--pixel-button-frame);
+}
+:root[data-rm-layout-theme="wplace"][data-game-ui]:not([data-standard-ui]) #bm-bar-drag {
+  background-color: var(--pixel-well);
+  border: 2px solid var(--pixel-ink);
+  box-shadow: inset 2px 2px 0 var(--pixel-well-shade);
+}
+:root[data-rm-layout-theme="wplace"][data-game-ui]:not([data-standard-ui]) :is(#bm-contain-chat.bm-chat-floating > summary, .bm-chat-bans-window-head, .bm-text-template-window-head) {
+  background: var(--color-base-200);
+  border-bottom: 2px solid var(--pixel-ink);
+}
+/* wplace's pixel font throughout (it has Cyrillic). A custom UI font (theme editor -> Font) takes
+ * precedence. Set on the windows and inherited; form controls don't inherit fonts by default, so
+ * they're told to, at zero specificity so rules that pick a monospace font still win. */
+:root[data-rm-layout-theme="wplace"][data-game-ui]:not([data-standard-ui]):not([data-rm-ui-font]) :is(#bm-overlay, #bm-contain-chat.bm-chat-floating, #bm-chat-bans-window, #bm-text-template-window, #bm-flag-template-window, #bm-remote-template-window, #bm-custom-theme-window, #rm-pixel-effects-window, .bm-template-position-joystick) {
+  font-family: var(--font-pixel);
+  letter-spacing: 0.02em;
+}
+:where(:root[data-rm-layout-theme="wplace"][data-game-ui]:not([data-standard-ui]):not([data-rm-ui-font])) :where(#bm-overlay, #bm-contain-chat.bm-chat-floating, #bm-chat-bans-window, #bm-text-template-window, #bm-flag-template-window, #bm-remote-template-window, #bm-custom-theme-window, #rm-pixel-effects-window, .bm-template-position-joystick) :where(button, input, select, textarea) {
+  font-family: inherit;
+}
+:root[data-rm-layout-theme="wplace"][data-game-ui]:not([data-standard-ui]):not([data-rm-ui-font]) :is(#bm-overlay, #bm-contain-chat.bm-chat-floating, #bm-chat-bans-window, #bm-text-template-window, #bm-flag-template-window, #bm-remote-template-window, #bm-custom-theme-window, #rm-pixel-effects-window, .bm-template-position-joystick) :is(h1, h2, h3) {
+  font-family: var(--font-pixel-display, var(--font-pixel));
+  color: var(--pixel-title);
+}
+:root[data-rm-layout-theme="wplace"][data-game-ui]:not([data-standard-ui]) #bm-notification {
+  border-width: 2px;
+  border-radius: 0;
+  box-shadow: 4px 4px 0 var(--pixel-shadow);
 }
 
 #bm-notification {
