@@ -409,6 +409,7 @@ FodyWeavers.xsd
 # Experimental build — deployed to a private static host, not committed
 dist/RusMarble.exp.user.js
 dist/RusMarble.exp.meta.js
+dist/extension-exp/
 src/exp/
 build/exp.local.json
 

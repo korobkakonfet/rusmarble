@@ -56,6 +56,21 @@ export function isDebugLoggingEnabled() {
   return debugLoggingEnabled === true;
 }
 
+/** Whether to put the console helpers (`bmControl`, `getTemplateList`, ...)
+ * on the page's `window`. Off unless the URL carries `?bmconsole=1`: anything on the page's
+ * window is visible to wplace's own scripts; other tooling uses the bridge channel instead
+ * (see BM_CHANNEL_REQUEST_EVENT in main.js).
+ * @since 0.86.0
+ */
+export function consoleHelpersEnabled() {
+  try {
+    const value = new URLSearchParams(location.search).get('bmconsole');
+    return value !== null && value !== '0' && value !== 'false';
+  } catch (_) {
+    return false;
+  }
+}
+
 /** Bypasses terser's stripping of console function calls.
  * This is so the non-obfuscated code will contain debugging console calls, but the distributed version won't.
  * However, the distributed version needs to call the console somehow, so this wrapper function is how.

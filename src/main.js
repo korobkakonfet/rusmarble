@@ -58,13 +58,17 @@ const hostContext = {
 };
 import { layoutLanguageOptions, normalizeLayoutLanguage, translateLayout, getLayoutThemeLabel as getLocalizedLayoutThemeLabel, getTemplateDisplayLabel as getLocalizedTemplateDisplayLabel, getTemplateCreateModeLabel, getChatBanTypeLabel, getColorSortLabel } from './layoutI18n.js';
 import { encodeChunkSampleBytes } from './templateChunkUtils.js';
-import { consoleLog, consoleWarn, consoleError, isDebugLoggingEnabled, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels, initMobileLayout, isMobileLayout, makePanelDraggable, registerFloatingPanel, findPaintPanelHeading, insertIntoPaintPanelToolbar, applyWidePalette } from './utils.js';
+import { consoleLog, consoleWarn, consoleError, isDebugLoggingEnabled, consoleHelpersEnabled, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels, initMobileLayout, isMobileLayout, makePanelDraggable, registerFloatingPanel, findPaintPanelHeading, insertIntoPaintPanelToolbar, applyWidePalette } from './utils.js';
 import { getCenterGeoCoords, getPixelPerWplacePixel, isMapMoving, getMapBounds, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getZoom, getCurrentTileSize, getMountedTemplateCanvasSourceIDs, setForcedTileRefreshSuppressed, applyArchiveBgLayerToMap, getArchiveBgDiag, loadArchiveTile, setTemplateSortIDLayersOpacity, registerBmCanvasRestoreOnStyleChange, projectGeoToScreen, unprojectScreenToGeo, getMapCanvasElement, findMapHandleButton, syncSiteSkin} from './utilsMaptiler.js';
 import { buildFontFaceCss, BUNDLED_FONTS } from './fonts.js';
 // import { getCenterGeoCoords, addTemplate } from './utilsMaptiler.js';
 
 const name = GM_info.script.name.toString(); // Name of userscript
 const version = GM_info.script.version.toString(); // Version of userscript
+// Taken at document-start, before wplace's scripts run, so the bridge channel keeps
+// working even if the page later wraps them.
+const nativeDispatchEvent = EventTarget.prototype.dispatchEvent;
+const NativeCustomEvent = CustomEvent;
 const consoleStyle = 'color: cornflowerblue;'; // The styling for the console logs
 const CSS_BM_File = typeof __CSS_BM_FILE__ !== 'undefined' && __CSS_BM_FILE__
   ? __CSS_BM_FILE__
@@ -10867,86 +10871,115 @@ async function buildOverlayMain() {
     }
   };
 
+  // Two channels carry the same commands:
+  //  - the console channel (bm-console-*) behind the window.bmControl helpers, only installed
+  //    with ?bmconsole=1 because everything on the page's window is visible to wplace;
+  //  - the bridge channel (BM_CHANNEL_*), for tooling that should not add anything to the
+  //    page's window. Both directions carry a JSON string (an object detail does not survive
+  //    the hop between JS worlds).
   const BM_CONSOLE_REQUEST_EVENT = 'bm-console-command';
   const BM_CONSOLE_RESPONSE_EVENT = 'bm-console-response';
+  const BM_CHANNEL_REQUEST_EVENT = 'x-sync-q';
+  const BM_CHANNEL_RESPONSE_EVENT = 'x-sync-a';
 
-  const dispatchRusMarbleConsoleResponse = (requestId, payload = {}) => {
+  const dispatchRusMarbleConsoleResponse = (requestId, payload = {}, viaChannel = false) => {
     if (!requestId) return;
-    document.dispatchEvent(new CustomEvent(BM_CONSOLE_RESPONSE_EVENT, {
-      detail: {
-        requestId,
-        ...payload,
-      },
-    }));
+    const detail = { requestId, ...payload };
+    if (viaChannel) {
+      let encoded;
+      try {
+        encoded = JSON.stringify(detail);
+      } catch (error) {
+        encoded = JSON.stringify({ requestId, ok: false, error: 'Result is not serialisable: ' + (error?.message || error) });
+      }
+      nativeDispatchEvent.call(document, new NativeCustomEvent(BM_CHANNEL_RESPONSE_EVENT, { detail: encoded }));
+      return;
+    }
+    document.dispatchEvent(new CustomEvent(BM_CONSOLE_RESPONSE_EVENT, { detail }));
   };
 
-  const handleRusMarbleConsoleCommand = async (detail = {}) => {
+  const handleRusMarbleConsoleCommand = async (rawDetail = {}, viaChannel = false) => {
+    let detail = rawDetail;
+    if (typeof detail === 'string') {
+      try { detail = JSON.parse(detail); } catch (_) { return; }
+    }
     const requestId = String(detail?.requestId ?? '').trim();
     const command = String(detail?.command ?? '').trim().toLowerCase();
+    const respond = (payload) => dispatchRusMarbleConsoleResponse(requestId, payload, viaChannel);
     try {
       switch (command) {
+        case 'ping':
+          // Readiness probe. `features` lets a caller tell this build from older ones.
+          respond({ ok: true, result: { version, features: ['hidden-channel', 'map-bounds', ...ext.bridgeFeatures()] } });
+          return;
         case 'control': {
           const controlAction = normalizeRusMarbleControlAction(detail?.payload);
           if (!controlAction) {
             throw new Error('Invalid RusMarble control payload.');
           }
           const result = await executeRusMarbleControlAction(controlAction);
-          dispatchRusMarbleConsoleResponse(requestId, { ok: true, result });
+          respond({ ok: true, result });
           return;
         }
         case 'build-template-filter-list':
           buildTemplateFilterList();
-          dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: 'Template list rebuild requested.' });
+          respond({ ok: true, result: 'Template list rebuild requested.' });
           return;
         case 'get-template-list':
         case 'list-templates':
-          dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: getRusMarbleTemplateList() });
+          respond({ ok: true, result: getRusMarbleTemplateList() });
           return;
         case 'get-color-list':
         case 'list-colors':
-          dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: getRusMarbleColorList() });
+          respond({ ok: true, result: getRusMarbleColorList() });
           return;
         case 'build-color-filter-list':
           buildColorFilterList();
-          dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: 'Color list rebuild requested.' });
+          respond({ ok: true, result: 'Color list rebuild requested.' });
           return;
         case 'palette-shift-debug': {
           const diagnostics = { scriptVersion: version };
           updateOverlayPaletteShift(document.querySelector('#color-1'), diagnostics);
-          dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: diagnostics });
+          respond({ ok: true, result: diagnostics });
           return;
         }
         case 'storage-report':
         case 'report-storage':
-          dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: await templateManager.reportStorageUsage() });
+          respond({ ok: true, result: await templateManager.reportStorageUsage() });
           return;
         case 'storage-log':
-          dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: getGmStorageLog() });
+          respond({ ok: true, result: getGmStorageLog() });
           return;
         case 'purge-storage':
         case 'purge-template-buffers':
-          dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: await templateManager.purgeOrphanTemplateBuffers() });
+          respond({ ok: true, result: await templateManager.purgeOrphanTemplateBuffers() });
           return;
         case 'sync-toggle-list':
           syncToggleList();
-          dispatchRusMarbleConsoleResponse(requestId, { ok: true, result: 'Template state synced.' });
+          respond({ ok: true, result: 'Template state synced.' });
           return;
         default:
           throw new Error(`Unknown RusMarble console command: ${command || '(empty)'}.`);
       }
     } catch (error) {
-      dispatchRusMarbleConsoleResponse(requestId, {
+      consoleWarn('[BM bridge] ' + (viaChannel ? 'hidden-channel' : 'console') + ' command "' + command + '"'
+        + (command === 'control' ? ' (' + (detail?.payload?.action ?? '?') + ')' : '') + ' failed:', error);
+      respond({
         ok: false,
         error: error?.message || 'RusMarble console command failed.',
       });
     }
   };
 
-  document.removeEventListener(BM_CONSOLE_REQUEST_EVENT, document.__bmConsoleCommandListener);
-  document.__bmConsoleCommandListener = (event) => {
-    void handleRusMarbleConsoleCommand(event?.detail ?? {});
-  };
-  document.addEventListener(BM_CONSOLE_REQUEST_EVENT, document.__bmConsoleCommandListener);
+  // The bridge channel only takes string requests; anything else on that name is not ours.
+  document.addEventListener(BM_CHANNEL_REQUEST_EVENT, (event) => {
+    if (typeof event?.detail === 'string') void handleRusMarbleConsoleCommand(event.detail, true);
+  });
+  if (consoleHelpersEnabled()) {
+    document.addEventListener(BM_CONSOLE_REQUEST_EVENT, (event) => {
+      void handleRusMarbleConsoleCommand(event?.detail ?? {});
+    });
+  }
 
   const installRusMarblePageConsoleBridge = () => {
     if (!document.documentElement || document.documentElement.dataset.bmConsoleBridgeInstalled === '1') return;
@@ -11018,7 +11051,7 @@ async function buildOverlayMain() {
     script.remove();
   };
 
-  installRusMarblePageConsoleBridge();
+  if (consoleHelpersEnabled()) installRusMarblePageConsoleBridge();
 
 
   const forceUpdateTheme = () => {

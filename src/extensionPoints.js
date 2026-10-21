@@ -106,6 +106,11 @@ export const onSettingsSectionBuild = (_ctx) => {};
  */
 export const onMapReady = (_ctx) => {};
 
+/** Extra capability names the bridge's `ping` reports, so a caller can tell builds apart.
+ * @returns {string[]}
+ */
+export const bridgeFeatures = () => [];
+
 /** True when an alternate implementation of this module is bundled. Lets mainline skip work
  * that only matters when extensions are present.
  */
