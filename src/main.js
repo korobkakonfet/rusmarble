@@ -7,7 +7,7 @@ installGmStorageInstrumentation();
 import { profiler, initProfiler } from './profiler.js';
 import Overlay from './Overlay.js';
 // import Observers from './observers.js';
-import ApiManager, { WPLACE_CLOSE_ICON_PATH_PREFIX, prewarmPixelEffects } from './apiManager.js';
+import ApiManager, { WPLACE_CLOSE_ICON_PATH_SELECTOR, prewarmPixelEffects } from './apiManager.js';
 import TemplateManager from './templateManager.js';
 import { normalizeTemplatePaletteConversionOptions, templatePaletteConversionDefaults } from './Template.js';
 import { templateWorkerManager } from './templateWorkerManager.js';
@@ -6196,7 +6196,7 @@ function scoreCloseLikeControl(control) {
   let score = 0;
   if (/\bclose\b/.test(text)) score += 10;
   // wplace's own close icon, whatever language the label is in.
-  if (control.querySelector?.(`path[d^="${WPLACE_CLOSE_ICON_PATH_PREFIX}"]`)) score += 10;
+  if (control.querySelector?.(WPLACE_CLOSE_ICON_PATH_SELECTOR)) score += 10;
   if (/\b(dismiss|cancel|back)\b/.test(text)) score += 6;
   if (text === '✕' || text === '×' || text === 'x') score += 8;
   const rect = control.getBoundingClientRect();
@@ -6355,7 +6355,7 @@ function closePixelInfoWindows() {
 
   const directCloseCandidates = Array.from(document.querySelectorAll(
     // The first selector matches by icon, not label: aria-label is localized ("Закрыть").
-    `.selected-pixel button:has(path[d^="${WPLACE_CLOSE_ICON_PATH_PREFIX}"]), .selected-pixel button[aria-label="Close"], .rounded-t-box button[aria-label="Close"], dialog.modal button[aria-label="Close"], dialog button[aria-label="Close"], .modal button[aria-label="Close"]`
+    `.selected-pixel button:has(${WPLACE_CLOSE_ICON_PATH_SELECTOR}), .selected-pixel button[aria-label="Close"], .rounded-t-box button[aria-label="Close"], dialog.modal button[aria-label="Close"], dialog button[aria-label="Close"], .modal button[aria-label="Close"]`
   ))
     .filter((button) => button instanceof HTMLElement)
     .filter((button) => isElementActuallyVisible(button))

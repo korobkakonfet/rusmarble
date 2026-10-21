@@ -116,13 +116,18 @@ const EASTER_EGG_NAME_FONTS = {
 };
 const EASTER_EGG_MAX_PARTICLES = 600;
 
-/** Start of the SVG path wplace uses for its pixel "X" close icon. Language-independent, unlike
- * the button's aria-label. */
-export const WPLACE_CLOSE_ICON_PATH_PREFIX = 'M7 19H5v-2h2v2Z';
+/** Starts of the SVG paths wplace uses for its "X" close icon: the pixel-art one and the Material
+ * one (the card has shipped with either). Language-independent, unlike the button's aria-label. */
+const WPLACE_CLOSE_ICON_PATH_PREFIXES = ['M7 19H5v-2h2v2Z', 'm256-200-56-56 224-224'];
+
+/** Selector list matching any of wplace's close-icon paths (usable inside `:has(...)`). */
+export const WPLACE_CLOSE_ICON_PATH_SELECTOR = WPLACE_CLOSE_ICON_PATH_PREFIXES
+  .map(prefix => `path[d^="${prefix}"]`)
+  .join(', ');
 
 /** Whether a button shows wplace's close icon. */
 export function isWplaceCloseIcon(button) {
-  return !!button?.querySelector?.(`path[d^="${WPLACE_CLOSE_ICON_PATH_PREFIX}"]`);
+  return !!button?.querySelector?.(WPLACE_CLOSE_ICON_PATH_SELECTOR);
 }
 
 export default class ApiManager {
@@ -407,9 +412,9 @@ export default class ApiManager {
     // Oct 2026 UI: the panel is a floating `.game-panel-surface` card holding `.selected-pixel`,
     // with no `.rounded-t-box`/dialog around it and a `btn-square` (not `btn-circle`) close button.
     // The aria-label is localized ("Закрыть" in Russian), so the new card's close button is also
-    // matched by its icon: wplace's pixel "X" path, which is the same in every language.
+    // matched by its icon: wplace's "X" path, which is the same in every language.
     const selectors = [
-      `.selected-pixel button:has(path[d^="${WPLACE_CLOSE_ICON_PATH_PREFIX}"])`,
+      `.selected-pixel button:has(${WPLACE_CLOSE_ICON_PATH_SELECTOR})`,
       '.selected-pixel button[aria-label="Close"]',
       '.rounded-t-box button[aria-label="Close"]',
       'dialog.modal button[aria-label="Close"]',
@@ -587,7 +592,7 @@ export default class ApiManager {
       if (!card) return;
       const existing = document.getElementById('bm-display-coords-container');
       if (existing && card.contains(existing)) return;
-      const closeButton = card.querySelector(`button:has(path[d^="${WPLACE_CLOSE_ICON_PATH_PREFIX}"]), button[aria-label="Close"]`);
+      const closeButton = card.querySelector(`button:has(${WPLACE_CLOSE_ICON_PATH_SELECTOR}), button[aria-label="Close"]`);
       if (!(closeButton instanceof HTMLElement)) return;
       const infoRoot = this.getPixelInfoRoot(closeButton);
       if (!infoRoot) return;
