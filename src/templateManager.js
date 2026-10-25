@@ -3024,6 +3024,15 @@ export default class TemplateManager {
     this._overlayRenderSignatures.delete(String(sortID));
   }
 
+  /** Make the overlay render in flight (if any) bail at its next generation check. Its queued
+   * follow-up still runs, so whatever was requested meanwhile is rendered from current data. */
+  cancelActiveOverlayRender() {
+    if (this._activeOverlayGenerationId) {
+      templateWorkerManager.cancelGeneration(this._activeOverlayGenerationId);
+    }
+    this._activeOverlayGenerationId = null;
+  }
+
   invalidateOverlayRasterCacheForTemplate(sortID) {
     this.invalidateOverlaySortIDSignature(sortID);
     const sortIDStr = String(sortID);

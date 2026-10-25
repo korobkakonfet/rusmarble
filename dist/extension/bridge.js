@@ -1,17 +1,13 @@
 /** Isolated-world side of the GM shim: owns chrome.storage and forwards GM_xmlhttpRequest to
- * the service worker (which has host permissions and is not bound by page CORS).
+ * the service worker, which has host permissions and is not bound by page CORS. Talks to gm-shim.js over `document` CustomEvents with JSON-string
+ * details — see the note there on why not window.postMessage.
  */
 (() => {
-  const CH = '__rm_gm__';
+  const REQ = 'x-gm-q';
+  const RES = 'x-gm-a';
   const abortable = new Map();
-  const post = (msg) => window.postMessage({ [CH]: 'res', ...msg }, location.origin);
-
-  const fromB64 = (b64) => {
-    const bin = atob(b64);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return bytes.buffer;
-  };
+  const emit = (msg) => document.dispatchEvent(new CustomEvent(RES, { detail: JSON.stringify(msg) }));
+  const post = (msg) => emit({ kind: 'res', ...msg });
 
   async function handle(d) {
     const { id, op, args } = d;
@@ -31,6 +27,11 @@
       case 'abort':
         abortable.get(id)?.abort?.();
         return;
+      case 'input': {
+        const r = await chrome.runtime.sendMessage({ type: 'input', ...args });
+        if (!r || r.error) return post({ id, error: r?.error || 'No answer from the extension.' });
+        return post({ id, result: r.result });
+      }
       case 'xhr': {
         const token = { aborted: false, abort() { this.aborted = true; } };
         abortable.set(id, token);
@@ -45,11 +46,8 @@
         if (!r || r.error) {
           return post({ id, event: r?.event || 'onerror', final: true, payload: { status: 0, statusText: '', responseText: '', response: null, error: r?.error } });
         }
-        if (r.responseB64 !== undefined) {
-          const buf = fromB64(r.responseB64);
-          delete r.responseB64;
-          r.response = args.responseType === 'blob' ? new Blob([buf]) : buf;
-        }
+        // Binary bodies stay base64 across the JSON hop; gm-shim.js turns them back into an
+        // ArrayBuffer / Blob in the page's world.
         return post({ id, event: 'onload', final: true, payload: r });
       }
       default:
@@ -57,12 +55,13 @@
     }
   }
 
-  window.addEventListener('message', (event) => {
-    if (event.source !== window || !event.data || event.data[CH] === undefined) return;
-    const d = event.data;
-    if (d[CH] === 'ping') return window.postMessage({ [CH]: 'ready' }, location.origin);
-    if (d[CH] !== 'req') return;
+  document.addEventListener(REQ, (event) => {
+    if (typeof event.detail !== 'string') return;
+    let d;
+    try { d = JSON.parse(event.detail); } catch (_) { return; }
+    if (d.kind === 'ping') return emit({ kind: 'ready' });
+    if (d.kind !== 'req') return;
     handle(d).catch((e) => post({ id: d.id, error: String(e?.message || e) }));
   });
-  window.postMessage({ [CH]: 'ready' }, location.origin);
+  emit({ kind: 'ready' });
 })();

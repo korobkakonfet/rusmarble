@@ -4707,12 +4707,39 @@ inject(() => {
   // removes itself the moment it spots the maplibre instance, but if wplace ever changes shape
   // so that never matches, leaving it installed taxes every Map iteration for the whole session.
   // The map is constructed during page load, so anything past this deadline is a lost cause.
-  mapPrototypeRestoreTimer = setTimeout(() => {
+  // Only visible time counts: a tab opened in the background (session restore, middle-click) is
+  // throttled and may not build the map for minutes. A wall-clock deadline expired there, the
+  // hook came off before the map existed, and that whole session had no crosses.
+  const MAP_HOOK_VISIBLE_DEADLINE_MS = 60000;
+  let mapHookVisibleMsLeft = MAP_HOOK_VISIBLE_DEADLINE_MS;
+  let mapHookArmedAt = 0;
+  const disarmMapHookDeadline = () => {
+    if (mapPrototypeRestoreTimer === null) { return; }
+    clearTimeout(mapPrototypeRestoreTimer);
     mapPrototypeRestoreTimer = null;
-    if (document.head["__bmmap"]) { return; }
-    console.warn(`%c${name}%c: map handle not found before deadline; removing the Map.prototype.values hook.`, consoleStyle, '');
-    restoreMapPrototype();
-  }, 30000);
+    mapHookVisibleMsLeft = Math.max(0, mapHookVisibleMsLeft - (Date.now() - mapHookArmedAt));
+  };
+  const armMapHookDeadline = () => {
+    if (mapPrototypeRestoreTimer !== null || document.head["__bmmap"] || Map.prototype.values !== hookedMapValues) { return; }
+    mapHookArmedAt = Date.now();
+    mapPrototypeRestoreTimer = setTimeout(() => {
+      mapPrototypeRestoreTimer = null;
+      document.removeEventListener('visibilitychange', onMapHookVisibilityChange);
+      if (document.head["__bmmap"]) { return; }
+      document.head["__bmMapHookExpired"] = new Date().toISOString();
+      console.warn(`%c${name}%c: map handle not found before deadline; removing the Map.prototype.values hook.`, consoleStyle, '');
+      restoreMapPrototype();
+    }, mapHookVisibleMsLeft);
+  };
+  const onMapHookVisibilityChange = () => {
+    if (document.head["__bmmap"] || Map.prototype.values !== hookedMapValues) {
+      document.removeEventListener('visibilitychange', onMapHookVisibilityChange);
+      return;
+    }
+    if (document.hidden) { disarmMapHookDeadline(); } else { armMapHookDeadline(); }
+  };
+  document.addEventListener('visibilitychange', onMapHookVisibilityChange);
+  if (!document.hidden) { armMapHookDeadline(); }
 });
 
 // Bundled fonts are independent of the CSS delivery path, so register them first.
@@ -5561,7 +5588,8 @@ readBootStorageValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   document.addEventListener('keydown', (event) => {
     // Alt plus anything else is a shortcut (Alt+P opens the profiler HUD, Alt+B toggles
     // background mode), so it must not arm or keep the peek.
-    if (event.key !== 'Alt') { endAltFillPeek(); return; }
+    // Ctrl+Alt is the permanent fill toggle below, not a peek.
+    if (event.key !== 'Alt' || event.ctrlKey) { endAltFillPeek(); return; }
     if (altFillPeekActive || altFillPeekTimer !== null) return;
     if (
       document.activeElement?.tagName === 'INPUT'
@@ -5578,6 +5606,42 @@ readBootStorageValue('bmTemplates', '{}').then(async storageTemplatesValue => {
     if (event.key === 'Alt' || !event.altKey) endAltFillPeek();
   }, true);
   window.addEventListener('blur', endAltFillPeek);
+
+  // ------- Ctrl+Alt: switch the stored display mode between fill and crosses -------
+  // Fires on release, and only when nothing but Ctrl and Alt was pressed, so Ctrl+Alt+<key>
+  // shortcuts don't flip the mode. The cross mode in use before fill is remembered, so the
+  // second press returns to it (cross, cross-z-9, dot...) rather than always plain cross.
+  let ctrlAltToggleArmed = false;
+  document.addEventListener('keydown', (event) => {
+    const isModifierPair = (event.key === 'Alt' && event.ctrlKey) || (event.key === 'Control' && event.altKey);
+    if (!isModifierPair || event.shiftKey || event.metaKey) { ctrlAltToggleArmed = false; return; }
+    if (
+      document.activeElement?.tagName === 'INPUT'
+      || document.activeElement?.tagName === 'TEXTAREA'
+      || document.activeElement?.isContentEditable
+    ) return;
+    ctrlAltToggleArmed = true;
+  }, true);
+  document.addEventListener('keyup', (event) => {
+    if (event.key !== 'Alt' && event.key !== 'Control') return;
+    if (!ctrlAltToggleArmed) return;
+    ctrlAltToggleArmed = false;
+    // Releasing Alt focuses the browser menu bar on some platforms; keep focus on the page.
+    event.preventDefault();
+    const settings = templateManager.userSettings ?? {};
+    const current = String(settings.templateDisplay ?? '').toLowerCase() || 'cross';
+    const next = current === 'fill' ? (settings.templateDisplayBeforeFill || 'cross') : 'fill';
+    if (next === 'fill') settings.templateDisplayBeforeFill = current;
+    void templateManager.setTemplateDisplayMode(next).then(() => {
+      const select = document.getElementById('bm-template-display');
+      if (select) select.value = templateManager.getTemplateDisplayMode();
+      overlayMain.handleDisplayStatus(next === 'fill'
+        ? 'Switched to the Fill Template Display (Ctrl+Alt to switch back).'
+        : 'Switched back to the Cross Template Display.');
+      templateManager.createOverlayOnMap();
+    });
+  }, true);
+  window.addEventListener('blur', () => { ctrlAltToggleArmed = false; });
 
   apiManager.spontaneousResponseListener(overlayMain); // Reads spontaneous fetch responces
 
@@ -8635,7 +8699,32 @@ async function buildOverlayMain() {
         let opacity = null;
         try { opacity = map?.['getPaintProperty']?.(sourceID, 'raster-opacity'); } catch (_) {}
         const index = layerOrder.indexOf(sourceID);
-        return { sourceID, opacity, index, belowPixelArt: artIndex >= 0 && index >= 0 && index < artIndex };
+        // A mounted layer whose canvas was emptied (or never drawn) looks healthy on every other
+        // field, so count what is actually on it. Copied through a scratch canvas because the
+        // source canvas may hold a non-2d context.
+        const canvas = document.getElementById(sourceID);
+        let paintedPixels = null;
+        try {
+          if (canvas?.width && canvas?.height) {
+            const scratch = document.createElement('canvas');
+            scratch.width = canvas.width;
+            scratch.height = canvas.height;
+            const ctx = scratch.getContext('2d', { willReadFrequently: true });
+            ctx.drawImage(canvas, 0, 0);
+            const data = ctx.getImageData(0, 0, scratch.width, scratch.height).data;
+            paintedPixels = 0;
+            for (let i = 3; i < data.length; i += 4) { if (data[i] !== 0) paintedPixels++; }
+            scratch.width = 0;
+          }
+        } catch (_) {}
+        let sourceCanvasMatches = null;
+        try { sourceCanvasMatches = map?.['getSource']?.(sourceID)?.['canvas'] === canvas; } catch (_) {}
+        return {
+          sourceID, opacity, index, belowPixelArt: artIndex >= 0 && index >= 0 && index < artIndex,
+          canvasSize: canvas ? [canvas.width, canvas.height] : null,
+          paintedPixels,
+          sourceCanvasMatches,
+        };
       });
       const displayedColors = templateManager.getDisplayedColorsSorted();
       // Per-template breakdown. "No crosses" for ONE template while others draw fine is a different
@@ -8654,6 +8743,7 @@ async function buildOverlayMain() {
           sortID,
           name: template?.displayName,
           enabled: template?.enabled === true,
+          autoDisabled: template?.autoDisabled === true,
           coords: template?.coords,
           size: [template?.imageWidth, template?.imageHeight],
           tileKeys: allTileKeys.length,
@@ -8668,6 +8758,9 @@ async function buildOverlayMain() {
       });
       return {
         scriptVersion: templateManager.version,
+        // false + mapHookExpired set = the map was never captured, so nothing can render this session.
+        mapFound: !!map,
+        mapHookExpired: document.head['__bmMapHookExpired'] ?? null,
         templatesLoaded: templates.length,
         templatesEnabled: templates.filter((template) => template?.enabled).length,
         storedTemplateKeys: Object.keys(templateManager.templatesJSON?.templates ?? {}).length,
@@ -8779,6 +8872,14 @@ async function buildOverlayMain() {
       return { ok: false, moved: false, message: 'Unable to move template: no chunks were shifted.' };
     }
 
+    // A freshly created template (drag & drop) is usually still being rendered at its first
+    // position when it is applied somewhere else. Left running, that render reads chunks under
+    // keys that no longer exist and mounts a half-empty overlay after removeLayer below, so some
+    // colours lose their crosses until a reload. Stop it, and drop the per-chunk caches that are
+    // keyed by the old chunk keys.
+    templateManager.cancelActiveOverlayRender();
+    templateManager.invalidateOverlayRasterCacheForTemplate(template.sortID);
+    template._chunkDefaceFlags?.clear?.();
     templateManager.clearTileProgress(template);
     removeLayer(null, template.sortID);
 
@@ -8806,6 +8907,9 @@ async function buildOverlayMain() {
     } else {
       await templateManager.createOverlayOnMapVisibleFirst(template.sortID);
     }
+    // clearTileProgress emptied the counts; recount at the new position, as a toggle-on does,
+    // instead of leaving the colour list on zero until the tiles happen to be fetched again.
+    forceRefreshTiles();
     if (refreshLists) {
       buildColorFilterList();
       buildTemplateFilterList();

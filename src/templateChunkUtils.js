@@ -827,7 +827,14 @@ export const mergePaletteStatsAccumulator = (accumulator, stats = {}) => {
   if (stats.hasOther === true) {
     accumulator.hasOther = true;
   }
-  const paletteCounts = (stats.paletteCounts && typeof stats.paletteCounts === 'object') ? stats.paletteCounts : null;
+  // Workers reply with finalized stats, whose counts are in `paletteMap` rather than
+  // `paletteCounts`. Reading only the latter dropped every colour count: a template built by the
+  // worker got an empty palette (all colours 0) until a reload rebuilt it, and with "hide
+  // completed colours" on, a colour like black — finished in the other templates, and with nothing
+  // left of this one to count — was hidden as completed.
+  const paletteCounts = (stats.paletteMap instanceof Map && stats.paletteMap.size)
+    ? Object.fromEntries(stats.paletteMap)
+    : (stats.paletteCounts && typeof stats.paletteCounts === 'object') ? stats.paletteCounts : null;
   if (paletteCounts && Object.keys(paletteCounts).length) {
     accumulator.paletteCounts = accumulator.paletteCounts || Object.create(null);
     for (const [key, count] of Object.entries(paletteCounts)) {
