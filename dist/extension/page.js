@@ -82,7 +82,7 @@
     listValues: () => call('list', {}),
     // Relay to an optional service-worker handler; builds without one answer with an error.
     rmInput: (op, args) => call('input', { op, ...(args || {}) }),
-    info: {"script":{"name":"Rus Marble","version":"0.87.130","namespace":"https://github.com/SwingTheVine/"},"scriptHandler":"RusMarble Extension","version":"0.87.130"},
+    info: {"script":{"name":"Rus Marble","version":"0.87.131","namespace":"https://github.com/SwingTheVine/"},"scriptHandler":"RusMarble Extension","version":"0.87.131"},
   };
 
   const GM_xmlhttpRequest = (details) => {
