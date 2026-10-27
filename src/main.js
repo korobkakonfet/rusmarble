@@ -22,6 +22,8 @@ import { createCustomThemeUi } from './customThemeUi.js';
 import { createPixelEffectsStore } from './pixelEffects.js';
 import { createPixelEffectsUi } from './pixelEffectsUi.js';
 import { initOverlayDodge } from './overlayDodge.js';
+import { initStoreFlagOrder } from './storeFlagOrder.js';
+import { initOwnedFlagGlow } from './ownedFlagGlow.js';
 // Extension points. No-ops in this build; see src/extensionPoints.js.
 import * as ext from './extensionPoints.js';
 
@@ -5452,6 +5454,8 @@ readBootStorageValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   overlayMain.handleDrag('#bm-overlay', '#bm-bar-drag'); // Creates dragging capability on the drag bar for dragging the overlay
   initOverlayResize();
   initOverlayDodge(); // Moves the overlay aside when a wplace panel would be hidden behind it
+  initStoreFlagOrder(); // Store → Flags: favourite flags first
+  initOwnedFlagGlow(() => apiManager.lastMe?.flagsBitmap); // Pixel info: owned region flag glows green
   const rebuildOverlayIfMissing = async () => {
     if (overlayBuildInFlight || document.getElementById('bm-overlay')) return;
     overlayBuildInFlight = true;
@@ -6743,9 +6747,12 @@ async function jumpToNextUnpaintedTemplatePixel(options = null) {
       return;
     }
 
+    const onlyColorIds = Array.isArray(options?.colorIds) && options.colorIds.length
+      ? new Set(options.colorIds)
+      : null;
     const displayedColors = templateManager.getDisplayedColorsSorted().filter((rgb) => {
       const meta = rgbToMeta.get(rgb);
-      return typeof meta?.id === 'number' && meta.id > 0;
+      return typeof meta?.id === 'number' && meta.id > 0 && (!onlyColorIds || onlyColorIds.has(meta.id));
     });
     if (!displayedColors.length) {
       overlayMain.handleDisplayStatus('No active template colors available for jump.');
@@ -6848,6 +6855,7 @@ async function jumpToNextUnpaintedTemplatePixel(options = null) {
     const templateLabel = bestCandidate.templateName ? ` in "${bestCandidate.templateName}"` : '';
     const originSuffix = originMode === 'center' ? '' : ` from ${originLabel}`;
     overlayMain.handleDisplayStatus(`Jumped to next unpainted pixel${originSuffix}${templateLabel}: ${formatTilePixelCoords(bestCandidate.coords)}.`);
+    return true;
   } catch (error) {
     consoleWarn('Failed to jump to the next unpainted template pixel.', error);
     overlayMain.handleDisplayError('Failed to find the next unpainted template pixel.');
@@ -7737,6 +7745,10 @@ const applyLayoutLanguage = (value = null) => {
   if (disableAllColorsButton) disableAllColorsButton.textContent = t('colors.disableAll');
   const disablePaidColorsButton = document.getElementById('bm-button-colors-disable-paid');
   if (disablePaidColorsButton) disablePaidColorsButton.textContent = t('colors.disablePaid');
+  const onlyPaidColorsButton = document.getElementById('bm-button-colors-only-paid');
+  if (onlyPaidColorsButton) onlyPaidColorsButton.textContent = t('colors.onlyPaid');
+  const onlyUnlockedPaidColorsButton = document.getElementById('bm-button-colors-only-unlocked-paid');
+  if (onlyUnlockedPaidColorsButton) onlyUnlockedPaidColorsButton.textContent = t('colors.onlyUnlockedPaid');
 
   setSummaryText('bm-contain-templatefilter', t('section.templates'));
   replaceSelectOptions(
@@ -8234,7 +8246,7 @@ async function buildOverlayMain() {
           }).buildElement()
         .buildElement()
         // Color buttons
-        .addDiv({'id': 'bm-button-colors-container', 'style': 'display: flex; gap: 6px; margin-top: 3px; margin-bottom: 3px;'})
+        .addDiv({'id': 'bm-button-colors-container', 'style': 'display: flex; flex-wrap: wrap; gap: 6px; margin-top: 3px; margin-bottom: 3px;'})
           .addButton({'id': 'bm-button-colors-enable-all', 'textContent': t('colors.enableAll')}, (instance, button) => {
             button.onclick = () => {
               templateManager.templatesArray.forEach(t => {
@@ -8283,6 +8295,44 @@ async function buildOverlayMain() {
               templateManager.createOverlayOnMapVisibleFirst();
               buildColorFilterList();
               instance.handleDisplayStatus('Disabled paid colors');
+              if (templateManager.isErrorMapShown() && templateManager.isErrorMapOnlyEnabledColorsShown()) {
+                forceRefreshTiles();
+              };
+            };
+          }).buildElement()
+          .addButton({'id': 'bm-button-colors-only-paid', 'textContent': t('colors.onlyPaid')}, (instance, button) => {
+            button.onclick = () => {
+              templateManager.templatesArray.forEach(t => {
+                if (!t?.colorPalette) { return; }
+                Object.entries(t.colorPalette).forEach(([rgb, value]) => {
+                  const colorId = Number(rgbToMeta.get(rgb)?.id);
+                  value.enabled = Number.isFinite(colorId) && colorId >= 32;
+                });
+              });
+              syncToggleList();
+              removeLayer("overlay");
+              templateManager.createOverlayOnMapVisibleFirst();
+              buildColorFilterList();
+              instance.handleDisplayStatus('Enabled only paid colors');
+              if (templateManager.isErrorMapShown() && templateManager.isErrorMapOnlyEnabledColorsShown()) {
+                forceRefreshTiles();
+              };
+            };
+          }).buildElement()
+          .addButton({'id': 'bm-button-colors-only-unlocked-paid', 'textContent': t('colors.onlyUnlockedPaid')}, (instance, button) => {
+            button.onclick = () => {
+              templateManager.templatesArray.forEach(t => {
+                if (!t?.colorPalette) { return; }
+                Object.entries(t.colorPalette).forEach(([rgb, value]) => {
+                  const colorId = Number(rgbToMeta.get(rgb)?.id);
+                  value.enabled = Number.isFinite(colorId) && colorId >= 32 && templateManager.isColorUnlocked(colorId);
+                });
+              });
+              syncToggleList();
+              removeLayer("overlay");
+              templateManager.createOverlayOnMapVisibleFirst();
+              buildColorFilterList();
+              instance.handleDisplayStatus('Enabled only unlocked paid colors');
               if (templateManager.isErrorMapShown() && templateManager.isErrorMapOnlyEnabledColorsShown()) {
                 forceRefreshTiles();
               };
@@ -10820,6 +10870,9 @@ async function buildOverlayMain() {
       case 'j-functionality':
         return {
           kind: 'jump-next-template-pixel',
+          // Optional palette ids: jump only to an unpainted pixel of these colours.
+          colorIds: (Array.isArray(info.colorIds) ? info.colorIds : [])
+            .map(Number).filter((id) => Number.isInteger(id) && id > 0),
           originMode: normalizeTemplateJumpOriginMode(
             info.origin
             ?? info.point
@@ -10957,8 +11010,17 @@ async function buildOverlayMain() {
         return statusMessage;
       }
       case 'jump-next-template-pixel':
-        await jumpToNextUnpaintedTemplatePixel({ originMode: controlAction.originMode });
+      {
+        const jumped = await jumpToNextUnpaintedTemplatePixel({
+          originMode: controlAction.originMode,
+          colorIds: controlAction.colorIds,
+        });
+        if (controlAction.colorIds?.length) {
+          // Automation asking for specific colours needs to know whether any were found.
+          return { jumped: jumped === true, status: `Jump requested from ${getTemplateJumpOriginLabel(controlAction.originMode)}.` };
+        }
         return `Jump requested from ${getTemplateJumpOriginLabel(controlAction.originMode)}.`;
+      }
       case 'close-pixel-info': {
         schedulePixelInfoCloseBurst();
         const statusMessage = 'Close pixel info requested.';

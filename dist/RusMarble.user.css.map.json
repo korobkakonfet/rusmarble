@@ -457,5 +457,7 @@
   "bm-archive-footer": "bm-7t",
   "bm-archive-frame": "bm-7u",
   "bm-archive-panel": "bm-7v",
-  "bm-archive-move-area": "bm-7z"
+  "bm-archive-move-area": "bm-7z",
+  "bm-button-colors-only-unlocked-paid": "bm-7e",
+  "bm-button-colors-only-paid": "bm-7f"
 }

@@ -3533,3 +3533,25 @@ span.bm-templatename:hover, a.bm-templatename:focus {
     height: 28px;
   }
 }
+
+/* Store → Flags: every flag at once (storeFlagOrder.js clicks "Show more" once) in the site's own cards,
+   the flags RusMarble users buy most pinned to the front with CSS order only - the
+   Svelte-owned DOM is left untouched. */
+section[data-game-link="store/flags"] [data-game-link="store/flags/flag-181"] { order: -5; } /* Russia */
+section[data-game-link="store/flags"] [data-game-link="store/flags/flag-232"] { order: -4; } /* Ukraine */
+section[data-game-link="store/flags"] [data-game-link="store/flags/flag-20"] { order: -3; } /* Belarus */
+section[data-game-link="store/flags"] [data-game-link="store/flags/flag-120"] { order: -2; } /* Latvia */
+section[data-game-link="store/flags"] [data-game-link="store/flags/flag-75"] { order: -1; } /* France */
+section[data-rm-flags-expanded] .mt-4.flex.justify-center { display: none !important; }
+
+/* Pixel info region button: flag the user owns (10% charge refund there) - soft green glow */
+/* A small rounded green "chip" behind the emoji: tinted fill, thin ring and a soft halo.
+   (Outlining the glyph itself with drop-shadows looked jagged at this size.) */
+span.font-flag[data-rm-owned-flag] {
+  padding: 0 2px;
+  border-radius: 4px;
+  background: rgb(34 197 94 / 0.18);
+  box-shadow:
+    0 0 0 1px rgb(74 222 128 / 0.85),
+    0 0 6px 1px rgb(34 197 94 / 0.45);
+}
