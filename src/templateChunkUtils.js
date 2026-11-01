@@ -1344,6 +1344,82 @@ export const collectTemplateProgressFromSamples = ({
   return { paintedCount, wrongCount, requiredCount };
 };
 
+/** Whether the live tile already holds the template colour at tileIndex: an exact or close
+ * match, or a live colour that snaps to the same palette entry.
+ */
+const isLivePixelPainted = (liveTilePixels, tileIndex, templateRed, templateGreen, templateBlue, packedTemplateColor, colorMatchDelta) => {
+  const liveAlpha = liveTilePixels[tileIndex + 3];
+  if (liveAlpha < 64) return false;
+  const liveRed = liveTilePixels[tileIndex];
+  const liveGreen = liveTilePixels[tileIndex + 1];
+  const liveBlue = liveTilePixels[tileIndex + 2];
+  if (
+    Math.abs(liveRed - templateRed) <= colorMatchDelta
+    && Math.abs(liveGreen - templateGreen) <= colorMatchDelta
+    && Math.abs(liveBlue - templateBlue) <= colorMatchDelta
+  ) {
+    return true;
+  }
+  const packedLiveColor = packRgb(liveRed, liveGreen, liveBlue);
+  const normalizedLivePacked = paintablePackedRgbSet.has(packedLiveColor)
+    ? packedLiveColor
+    : getNearestPaintablePacked(liveRed, liveGreen, liveBlue);
+  return normalizedLivePacked === packedTemplateColor;
+};
+
+/** Adds this chunk's unpainted template pixels into a density grid over a world-pixel box.
+ * grid is a Uint32Array of gridWidth x gridHeight cells, each `cell` world pixels square, whose
+ * top-left corner is (box.x, box.y). The jump uses it to find where the remaining work clusters.
+ * @returns {number} how many unpainted pixels landed in the box
+ */
+export const accumulateUnpaintedDensity = ({
+  sampleData,
+  liveTilePixels,
+  tileSize,
+  offsetX,
+  offsetY,
+  tileX,
+  tileY,
+  displayedColorSet,
+  box,
+  cell,
+  gridWidth,
+  gridHeight,
+  grid,
+  colorMatchDelta = LIVE_COLOR_MATCH_DELTA,
+}) => {
+  if (!sampleData || !liveTilePixels || !grid || !box) return 0;
+  const displayedColorPackedSet = getDisplayedColorPackedSet(displayedColorSet);
+  if (!displayedColorPackedSet || displayedColorPackedSet.size === 0) return 0;
+  const safeTileSize = Math.max(1, Math.trunc(Number(tileSize) || 0));
+  const safeCell = Math.max(1, Math.trunc(Number(cell) || 1));
+  const tileWorldX = tileX * safeTileSize;
+  const tileWorldY = tileY * safeTileSize;
+  let added = 0;
+  for (let index = 0; index < sampleData.count; index++) {
+    if (sampleData.a[index] < 64 || (sampleData.flags[index] & TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) === TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE) {
+      continue;
+    }
+    const pixelX = offsetX + sampleData.x[index];
+    const pixelY = offsetY + sampleData.y[index];
+    if (pixelX < 0 || pixelX >= safeTileSize || pixelY < 0 || pixelY >= safeTileSize) continue;
+    const gridX = Math.floor((tileWorldX + pixelX - box.x) / safeCell);
+    const gridY = Math.floor((tileWorldY + pixelY - box.y) / safeCell);
+    if (gridX < 0 || gridX >= gridWidth || gridY < 0 || gridY >= gridHeight) continue;
+
+    const templateRed = sampleData.r[index];
+    const templateGreen = sampleData.g[index];
+    const templateBlue = sampleData.b[index];
+    const packedTemplateColor = packRgb(templateRed, templateGreen, templateBlue);
+    if (!paintablePackedRgbSet.has(packedTemplateColor) || !displayedColorPackedSet.has(packedTemplateColor)) continue;
+    const tileIndex = (pixelY * safeTileSize + pixelX) * 4;
+    if (isLivePixelPainted(liveTilePixels, tileIndex, templateRed, templateGreen, templateBlue, packedTemplateColor, colorMatchDelta)) continue;
+    grid[gridY * gridWidth + gridX]++;
+    added++;
+  }
+  return added;
+};
+
 export const findNearestUnpaintedSamplePixel = ({
   sampleData,
   liveTilePixels,
@@ -1426,25 +1502,7 @@ export const findNearestUnpaintedSamplePixel = ({
     if (!paintablePackedRgbSet.has(packedTemplateColor) || !displayedColorPackedSet.has(packedTemplateColor)) continue;
 
     const tileIndex = (pixelY * safeTileSize + pixelX) * 4;
-    const liveAlpha = liveTilePixels[tileIndex + 3];
-    const liveRed = liveTilePixels[tileIndex];
-    const liveGreen = liveTilePixels[tileIndex + 1];
-    const liveBlue = liveTilePixels[tileIndex + 2];
-    const exactMatch = liveRed === templateRed && liveGreen === templateGreen && liveBlue === templateBlue;
-    const closeMatch = (
-      Math.abs(liveRed - templateRed) <= colorMatchDelta
-      && Math.abs(liveGreen - templateGreen) <= colorMatchDelta
-      && Math.abs(liveBlue - templateBlue) <= colorMatchDelta
-    );
-    let isPainted = liveAlpha >= 64 && (exactMatch || closeMatch);
-    if (!isPainted && liveAlpha >= 64) {
-      const packedLiveColor = packRgb(liveRed, liveGreen, liveBlue);
-      const normalizedLivePacked = paintablePackedRgbSet.has(packedLiveColor)
-        ? packedLiveColor
-        : getNearestPaintablePacked(liveRed, liveGreen, liveBlue);
-      isPainted = normalizedLivePacked === packedTemplateColor;
-    }
-    if (isPainted) continue;
+    if (isLivePixelPainted(liveTilePixels, tileIndex, templateRed, templateGreen, templateBlue, packedTemplateColor, colorMatchDelta)) continue;
 
     if (
       excludedCoords

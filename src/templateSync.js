@@ -1112,6 +1112,7 @@ export function createTemplateSync({
     remoteManual = false,
     replaceExistingMatches = false,
     onExisting,
+    skipIfUnchanged = false,
   } = {}) => {
     const statusHandler = typeof onStatus === 'function' ? onStatus : autoSyncOnStatus;
     const trimmedName = String(templateName ?? '').trim();
@@ -1124,6 +1125,10 @@ export function createTemplateSync({
     }
     try {
       let payload = null;
+      // The page's own template load (GM storage → importJSON) replaces templatesJSON wholesale;
+      // an add that lands before it finishes is silently dropped, and a template that is already
+      // stored would look missing and be downloaded again.
+      await waitForImport();
       const streams = getConfiguredStreams();
       // A template with this name may already exist locally — possibly imported from a different
       // stream. Never create a second copy: update the existing one in place and warn the caller.
@@ -1138,7 +1143,7 @@ export function createTemplateSync({
         replaceExistingMatches = true;
         // Always re-sync as a tracked remote template: a tracked copy must stay tracked, and a
         // detached local copy (added by an older build) has to become tracked so the author's
-        // later edits on the bot reach it through the update poll.
+        // later edits on the server reach it through the update poll.
         syncExisting = true;
         const warning = existingRemoteMatch
           ? `Template "${trimmedName}" already exists — updating the existing remote template instead of creating a new one.`
@@ -1184,9 +1189,17 @@ export function createTemplateSync({
           : syncStreams;
         for (const stream of orderedSyncStreams) {
           try {
+            // skipIfUnchanged: one small meta request decides whether the remote image changed;
+            // an unchanged template is kept as is (no image download, no chunk rebuild, no cold
+            // tileProgress) — a bridge caller may re-add the same template on every launch.
+            const entryMeta = skipIfUnchanged
+              ? await fetchManualTemplateEntry({ templateName: trimmedName, stream })
+              : null;
+            if (skipIfUnchanged && !entryMeta) continue;
             syncedTemplate = await syncTemplateByName({
               templateName: trimmedName,
               remoteStream: stream,
+              entryMeta,
               onStatus,
               onError,
               defaultEnabled,
@@ -1194,10 +1207,14 @@ export function createTemplateSync({
               syncToggleList,
               buildTemplateFilterList: buildTemplateFilterListOverride,
               buildColorFilterList: buildColorFilterListOverride,
-              force: true,
+              force: !skipIfUnchanged,
               refreshUi,
               replaceExistingMatches,
             });
+            if (!syncedTemplate && skipIfUnchanged) {
+              syncedTemplate = existingRemoteMatch ?? existingMatches[0] ?? null;
+              if (syncedTemplate) logSync(`Template "${trimmedName}" is unchanged on stream "${stream}"; kept the loaded copy.`, { statusHandler });
+            }
             syncedStream = stream;
             break;
           } catch (err) {
@@ -1474,6 +1491,7 @@ export function createTemplateSync({
   return {
     checkTemplateUpdates,
     importTemplateByName,
+    waitForImport,
     fetchRemoteTemplateNames,
     fetchRemoteTemplateEntries,
     fetchRemoteTemplateFile,

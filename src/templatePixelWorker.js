@@ -6,6 +6,7 @@ import {
   finalizePaletteStatsAccumulator,
   renderSampleDataToImage,
   findNearestUnpaintedSamplePixel,
+  accumulateUnpaintedDensity,
   TEMPLATE_CHUNK_SAMPLE_FLAG_DEFACE,
   isDefaceRgb,
   snapRgbToNearestPalette,
@@ -718,6 +719,33 @@ const handlers = {
     return compressed ? { json: compressed, compressed: true } : { json, compressed: false };
   },
 
+  /** Density grid of the unpainted pixels of one chunk inside payload.box; see
+   * accumulateUnpaintedDensity. The grid comes back as a transferable Uint32Array.
+   */
+  unpaintedDensity(payload) {
+    const sampleData = decodeChunkSampleBuffer(payload.sampleData);
+    const gridWidth = payload.gridWidth | 0;
+    const gridHeight = payload.gridHeight | 0;
+    const grid = new Uint32Array(Math.max(0, gridWidth * gridHeight));
+    if (!sampleData || !grid.length) return { grid, count: 0 };
+    const count = accumulateUnpaintedDensity({
+      sampleData,
+      liveTilePixels: toUint8Clamped(payload.liveTilePixels),
+      tileSize: payload.tileSize | 0,
+      offsetX: payload.offsetX | 0,
+      offsetY: payload.offsetY | 0,
+      tileX: payload.tileX | 0,
+      tileY: payload.tileY | 0,
+      displayedColorSet: new Set(Array.isArray(payload.displayedColorKeys) ? payload.displayedColorKeys : []),
+      box: payload.box,
+      cell: payload.cell,
+      gridWidth,
+      gridHeight,
+      grid,
+    });
+    return { grid, count };
+  },
+
   findNearestUnpainted(payload) {
     const sampleData = decodeChunkSampleBuffer(payload.sampleData);
     if (!sampleData) return null;
@@ -779,6 +807,9 @@ self.onmessage = async (event) => {
     }
     if (result?.pixels instanceof Uint8ClampedArray) {
       transferList.push(result.pixels.buffer);
+    }
+    if (result?.grid instanceof Uint32Array) {
+      transferList.push(result.grid.buffer);
     }
     if (result?.pixelData instanceof Uint8ClampedArray) {
       transferList.push(result.pixelData.buffer);

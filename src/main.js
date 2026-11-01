@@ -57,11 +57,14 @@ const hostContext = {
   consoleWarn: (...args) => consoleWarn(...args),
   /** Set from buildOverlayMain, which owns this one. */
   findTemplatesByNames: null,
+  /** Set from buildOverlayMain: (templates, enabled) -> {matched, changed}; skips templates
+   * already in that state, so their tileProgress survives. */
+  setTemplatesEnabledState: null,
 };
 import { layoutLanguageOptions, normalizeLayoutLanguage, translateLayout, getLayoutThemeLabel as getLocalizedLayoutThemeLabel, getTemplateDisplayLabel as getLocalizedTemplateDisplayLabel, getTemplateCreateModeLabel, getChatBanTypeLabel, getColorSortLabel } from './layoutI18n.js';
 import { encodeChunkSampleBytes } from './templateChunkUtils.js';
 import { consoleLog, consoleWarn, consoleError, isDebugLoggingEnabled, consoleHelpersEnabled, selectAllCoordinateInputs, rgbToMeta, colorpalette, getOverlayCoords, sortByOptions, getCurrentColor, cleanUpCanvas, calculateTopLeftAndSize, testCanvasSize, downloadTile, createBitmapPreservingPixels, initMobileLayout, isMobileLayout, makePanelDraggable, registerFloatingPanel, findPaintPanelHeading, insertIntoPaintPanelToolbar, applyWidePalette } from './utils.js';
-import { getCenterGeoCoords, getPixelPerWplacePixel, isMapMoving, getMapBounds, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getZoom, getCurrentTileSize, getMountedTemplateCanvasSourceIDs, setForcedTileRefreshSuppressed, applyArchiveBgLayerToMap, getArchiveBgDiag, loadArchiveTile, setTemplateSortIDLayersOpacity, registerBmCanvasRestoreOnStyleChange, projectGeoToScreen, unprojectScreenToGeo, getMapCanvasElement, findMapHandleButton, syncSiteSkin} from './utilsMaptiler.js';
+import { getCenterGeoCoords, getPixelPerWplacePixel, isMapMoving, getMapBounds, forceRefreshTiles, removeLayer, themeList, setTheme, isMapTilerLoaded, teleportToTileCoords, teleportToGeoCoords, coordsTileCoordsToGeoCoords, coordsGeoCoordsToTileCoords, doAfterMapFound, panMap, setZoom, getZoom, getCurrentTileSize, getMountedTemplateCanvasSourceIDs, setForcedTileRefreshSuppressed, applyArchiveBgLayerToMap, getArchiveBgDiag, loadArchiveTile, setTemplateSortIDLayersOpacity, registerBmCanvasRestoreOnStyleChange, projectGeoToScreen, unprojectScreenToGeo, getMapCanvasElement, findMapHandleButton, syncSiteSkin, jumpCameraTo} from './utilsMaptiler.js';
 import { buildFontFaceCss, BUNDLED_FONTS } from './fonts.js';
 // import { getCenterGeoCoords, addTemplate } from './utilsMaptiler.js';
 
@@ -6733,16 +6736,227 @@ async function findNearestTemplatePixelInTile(tileCandidate, liveTilePixels, ori
   return bestCandidate;
 }
 
+// Cluster centring for the jump (options.cluster): instead of parking the camera on the single
+// nearest unpainted pixel, which often leaves most of the view on finished work, the camera
+// moves to where the unpainted pixels around it are densest. A view-sized window starts on that
+// pixel and walks to the centroid of what it covers (mean shift) until it settles. For a top or
+// bottom start only the horizontal axis moves: the window is the band below (above) the pixel,
+// and the caller frames that pixel at the edge of the screen afterwards.
+const CLUSTER_JUMP_CELL_PX = 4;
+const CLUSTER_JUMP_DEFAULT_PX_PER_PIXEL = 4;
+const CLUSTER_JUMP_MAX_ITERATIONS = 8;
+// How far, in views, the window may drift from the nearest pixel.
+const CLUSTER_JUMP_REACH_VIEWS = 3;
+
+async function findUnpaintedClusterCentre(anchorCoords, context) {
+  const anchor = normalizeTilePixelCoords(anchorCoords);
+  if (!anchor) return null;
+  const rect = getMapCanvasElement()?.getBoundingClientRect?.();
+  const pxPerPixel = context.pxPerPixel > 0 ? context.pxPerPixel : CLUSTER_JUMP_DEFAULT_PX_PER_PIXEL;
+  const viewWidth = Math.max(16, Math.round((rect?.width || 1280) / pxPerPixel));
+  // The paintable height when the caller measured it (the paint drawer covers the bottom).
+  const viewHeight = Math.max(16, Math.round((context.viewHeightPx || rect?.height || 720) / pxPerPixel));
+  const anchorX = anchor[0] * TEMPLATE_TILE_SIZE + anchor[2];
+  const anchorY = anchor[1] * TEMPLATE_TILE_SIZE + anchor[3];
+
+  const cell = CLUSTER_JUMP_CELL_PX;
+  const gridWidth = Math.ceil(viewWidth * CLUSTER_JUMP_REACH_VIEWS / cell);
+  const gridHeight = Math.ceil(viewHeight * CLUSTER_JUMP_REACH_VIEWS / cell);
+  const box = {
+    x: Math.round(anchorX - gridWidth * cell / 2),
+    y: Math.round(anchorY - gridHeight * cell / 2),
+  };
+  const grid = new Uint32Array(gridWidth * gridHeight);
+  const displayedColorKeys = [...context.displayedColorSet].filter((key) => typeof key === 'string');
+  let total = 0;
+  for (const tileCandidate of context.tileCandidates) {
+    const tileLeft = tileCandidate.tileX * TEMPLATE_TILE_SIZE;
+    const tileTop = tileCandidate.tileY * TEMPLATE_TILE_SIZE;
+    if (
+      tileLeft >= box.x + gridWidth * cell || tileLeft + TEMPLATE_TILE_SIZE <= box.x
+      || tileTop >= box.y + gridHeight * cell || tileTop + TEMPLATE_TILE_SIZE <= box.y
+    ) {
+      continue;
+    }
+    let liveTilePixels = context.liveTilePixelsByTile.get(tileCandidate);
+    if (!liveTilePixels) {
+      liveTilePixels = await getLiveTilePixels(tileCandidate.tileX, tileCandidate.tileY);
+      context.liveTilePixelsByTile.set(tileCandidate, liveTilePixels);
+    }
+    for (const entry of tileCandidate.entries) {
+      const sampleData = await entry.template.getChunkSamples(entry.tileKey, { memorySaving: context.memorySavingMode });
+      if (!sampleData) continue;
+      const encodedSampleData = encodeChunkSampleBytes(sampleData);
+      const liveTilePixelsCopy = new Uint8ClampedArray(liveTilePixels);
+      const result = await templateWorkerManager.runTask('unpaintedDensity', {
+        sampleData: encodedSampleData,
+        liveTilePixels: liveTilePixelsCopy,
+        tileSize: TEMPLATE_TILE_SIZE,
+        offsetX: entry.offsetX,
+        offsetY: entry.offsetY,
+        tileX: tileCandidate.tileX,
+        tileY: tileCandidate.tileY,
+        displayedColorKeys,
+        box,
+        cell,
+        gridWidth,
+        gridHeight,
+      }, { transferList: [encodedSampleData.buffer, liveTilePixelsCopy.buffer] }).catch(() => null);
+      if (!(result?.grid instanceof Uint32Array) || !result.count) continue;
+      for (let index = 0; index < grid.length; index++) grid[index] += result.grid[index];
+      total += result.count;
+    }
+  }
+  if (!total) return null;
+
+  const edge = String(context.originMode || 'center').split('-')[0];
+  const verticalLocked = edge === 'top' || edge === 'bottom';
+  const bandTop = edge === 'top' ? anchorY : (edge === 'bottom' ? anchorY - viewHeight : 0);
+  const toCell = (value, origin, size) => Math.min(size, Math.max(0, Math.floor((value - origin) / cell)));
+  let centreX = anchorX;
+  let centreY = anchorY;
+  let covered = 0;
+  for (let iteration = 0; iteration < CLUSTER_JUMP_MAX_ITERATIONS; iteration++) {
+    const top = verticalLocked ? bandTop : centreY - viewHeight / 2;
+    const left = centreX - viewWidth / 2;
+    const fromX = toCell(left, box.x, gridWidth);
+    const toX = toCell(left + viewWidth, box.x, gridWidth);
+    const fromY = toCell(top, box.y, gridHeight);
+    const toY = toCell(top + viewHeight, box.y, gridHeight);
+    let weight = 0;
+    let sumX = 0;
+    let sumY = 0;
+    for (let gridY = fromY; gridY < toY; gridY++) {
+      for (let gridX = fromX; gridX < toX; gridX++) {
+        const count = grid[gridY * gridWidth + gridX];
+        if (!count) continue;
+        weight += count;
+        sumX += count * (box.x + (gridX + 0.5) * cell);
+        sumY += count * (box.y + (gridY + 0.5) * cell);
+      }
+    }
+    if (!weight) break;
+    covered = weight;
+    const nextX = sumX / weight;
+    const nextY = verticalLocked ? centreY : sumY / weight;
+    const settled = Math.abs(nextX - centreX) < cell / 2 && Math.abs(nextY - centreY) < cell / 2;
+    centreX = nextX;
+    centreY = nextY;
+    if (settled) break;
+  }
+  if (!covered) return null;
+  const worldX = Math.round(centreX);
+  const worldY = Math.round(centreY);
+  const coords = normalizeTilePixelCoords([
+    Math.floor(worldX / TEMPLATE_TILE_SIZE),
+    Math.floor(worldY / TEMPLATE_TILE_SIZE),
+    ((worldX % TEMPLATE_TILE_SIZE) + TEMPLATE_TILE_SIZE) % TEMPLATE_TILE_SIZE,
+    ((worldY % TEMPLATE_TILE_SIZE) + TEMPLATE_TILE_SIZE) % TEMPLATE_TILE_SIZE,
+  ]);
+  return coords ? { coords, count: covered } : null;
+}
+
+/** The largest vertical run of the map's middle column that no interface covers (the paint
+ * drawer above all), in canvas-relative CSS px. Sampled every 4 px with elementFromPoint.
+ * @returns {{top: number, bottom: number, width: number, height: number} | null}
+ */
+function measurePaintableBand() {
+  const canvas = getMapCanvasElement();
+  if (!canvas) return null;
+  const rect = canvas.getBoundingClientRect();
+  const x = rect.left + rect.width / 2;
+  const onMap = (el) => Boolean(el) && (el === canvas || canvas.contains(el) || el.contains(canvas));
+  const step = 4;
+  let best = null;
+  let runStart = null;
+  for (let y = rect.top + 1; y <= rect.bottom - 1 + step; y += step) {
+    const exposed = y <= rect.bottom - 1 && onMap(document.elementFromPoint(x, y));
+    if (exposed && runStart === null) runStart = y;
+    if (!exposed && runStart !== null) {
+      const run = { top: runStart, bottom: y - step };
+      if (!best || run.bottom - run.top > best.bottom - best.top) best = run;
+      runStart = null;
+    }
+  }
+  if (!best || best.bottom - best.top < 40) {
+    return { top: 0, bottom: rect.height, width: rect.width, height: rect.height };
+  }
+  return { top: best.top - rect.top, bottom: best.bottom - rect.top, width: rect.width, height: rect.height };
+}
+
+/** Places the camera in one jumpTo at `pxPerPixel` screen px per wplace pixel so that world point
+ * (worldX, worldY) — continuous wplace pixel coordinates — sits in the paintable band: at its
+ * centre, or `marginRatio` inside its top / bottom edge when frameEdge says so.
+ * @returns {boolean} whether the camera was moved
+ */
+function jumpCameraFramed(worldX, worldY, pxPerPixel, frameEdge, marginRatio, band) {
+  const currentPpp = Number(getPixelPerWplacePixel());
+  const currentZoom = getZoom();
+  if (!(currentPpp > 0) || !Number.isFinite(currentZoom) || !band) return false;
+  const zoom = currentZoom + Math.log2(pxPerPixel / currentPpp);
+  const bandHeight = band.bottom - band.top;
+  const margin = Math.max(24, bandHeight * (Number.isFinite(marginRatio) ? marginRatio : 0.06));
+  let wantY = band.top + bandHeight / 2;
+  if (frameEdge === 'top') wantY = band.top + margin;
+  else if (frameEdge === 'bottom') wantY = band.bottom - margin;
+  // The camera centre is the canvas centre; shift it so the point lands on wantY.
+  const centreX = worldX;
+  const centreY = worldY + (band.height / 2 - wantY) / pxPerPixel;
+  const tileX = Math.floor(centreX / TEMPLATE_TILE_SIZE);
+  const tileY = Math.floor(centreY / TEMPLATE_TILE_SIZE);
+  const [lat, lng] = coordsTileCoordsToGeoCoords(
+    [tileX, tileY],
+    [centreX - tileX * TEMPLATE_TILE_SIZE, centreY - tileY * TEMPLATE_TILE_SIZE],
+    false
+  );
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(zoom)) return false;
+  return jumpCameraTo(lat, lng, zoom);
+}
+
 let isJumpToNextTemplatePixelRunning = false;
-async function jumpToNextUnpaintedTemplatePixel(options = null) {
-  if (isJumpToNextTemplatePixelRunning) return;
-  isJumpToNextTemplatePixelRunning = true;
+// What the last jump did, returned to bridge callers that pass `report: true` on the control
+// action, so a jump that lands in the wrong place can be traced afterwards.
+let lastTemplateJumpReport = null;
+
+/** The camera right now as tile/pixel coords plus zoom and screen px per wplace pixel. */
+function readTemplateJumpCamera() {
   try {
+    const geo = getCenterGeoCoords();
+    const [tile, pixel] = coordsGeoCoordsToTileCoords(geo[0], geo[1], true);
+    return {
+      coords: [tile[0], tile[1], pixel[0], pixel[1]],
+      zoom: Number(getZoom()?.toFixed?.(3) ?? null),
+      pxPerPixel: Number(Number(getPixelPerWplacePixel()).toFixed(3)),
+    };
+  } catch (_) {
+    return null;
+  }
+}
+async function jumpToNextUnpaintedTemplatePixel(options = null) {
+  if (isJumpToNextTemplatePixelRunning) {
+    lastTemplateJumpReport = { jumped: false, reason: 'another jump is running' };
+    return;
+  }
+  isJumpToNextTemplatePixelRunning = true;
+  const report = {
+    jumped: false,
+    reason: '',
+    templatesLoaded: (templateManager.templatesArray ?? []).length,
+    cameraBefore: readTemplateJumpCamera(),
+  };
+  lastTemplateJumpReport = report;
+  try {
+    // originCoords ([tx, ty, px, py], builds with "jump-origin-coords") is an exact start pixel,
+    // given by the caller: the search runs outward from it, wherever the camera is.
+    const fixedOriginCoords = normalizeTilePixelCoords(options?.originCoords ?? null);
     const originMode = normalizeTemplateJumpOriginMode(options?.originMode);
-    const originLabel = getTemplateJumpOriginLabel(originMode);
+    report.origin = fixedOriginCoords ? 'pixel' : originMode;
+    const originLabel = fixedOriginCoords ? `start pixel ${fixedOriginCoords.join(',')}` : getTemplateJumpOriginLabel(originMode);
     schedulePixelInfoCloseBurst();
     const activeTemplates = (templateManager.templatesArray ?? []).filter((template) => templateManager.isTemplateUserEnabled(template));
+    report.activeTemplates = activeTemplates.map((template) => template.displayName ?? template.storageKey ?? '?');
     if (!activeTemplates.length) {
+      report.reason = 'no active templates enabled';
       overlayMain.handleDisplayStatus('No active templates enabled.');
       return;
     }
@@ -6754,24 +6968,29 @@ async function jumpToNextUnpaintedTemplatePixel(options = null) {
       const meta = rgbToMeta.get(rgb);
       return typeof meta?.id === 'number' && meta.id > 0 && (!onlyColorIds || onlyColorIds.has(meta.id));
     });
+    report.colors = displayedColors.length;
     if (!displayedColors.length) {
+      report.reason = 'no active template colours';
       overlayMain.handleDisplayStatus('No active template colors available for jump.');
       return;
     }
 
     const jumpCycleVisitedCoordsKeys = syncTemplateJumpCycleState(
-      buildTemplateJumpCycleScopeKey(activeTemplates, displayedColors, originMode)
+      buildTemplateJumpCycleScopeKey(activeTemplates, displayedColors, fixedOriginCoords ? `pixel:${fixedOriginCoords.join(',')}` : originMode)
     );
 
-    const originCoords = getTemplateJumpOriginCoords(originMode);
+    const originCoords = fixedOriginCoords ?? getTemplateJumpOriginCoords(originMode);
     const originPoint = tilePixelCoordsToWorldPoint(originCoords);
+    report.originCoords = originPoint?.coords ?? null;
+    report.visited = jumpCycleVisitedCoordsKeys.size;
     if (!originPoint) {
+      report.reason = 'map position unavailable';
       overlayMain.handleDisplayError('Map position is unavailable.');
       return;
     }
 
     overlayMain.handleDisplayStatus(
-      originMode === 'center'
+      originMode === 'center' && !fixedOriginCoords
         ? 'Searching for the next unpainted template pixel...'
         : `Searching for the next unpainted template pixel from the ${originLabel}...`
     );
@@ -6806,12 +7025,14 @@ async function jumpToNextUnpaintedTemplatePixel(options = null) {
     const tileCandidates = [...tileCandidatesMap.values()]
       .sort((left, right) => left.lowerBoundDistanceSq - right.lowerBoundDistanceSq);
     const memorySavingMode = templateManager.isMemorySavingModeOn();
+    const liveTilePixelsByTile = new Map();
     for (const tileCandidate of tileCandidates) {
       if (bestCandidate && tileCandidate.lowerBoundDistanceSq > bestCandidate.distanceSq) {
         break;
       }
       try {
         const liveTilePixels = await profiler.measureAsync('getLiveTilePixels', () => getLiveTilePixels(tileCandidate.tileX, tileCandidate.tileY));
+        liveTilePixelsByTile.set(tileCandidate, liveTilePixels);
         const tileCandidateBest = await profiler.measureAsync('findNearestTemplatePixelInTile', () => findNearestTemplatePixelInTile(
           tileCandidate,
           liveTilePixels,
@@ -6832,11 +7053,14 @@ async function jumpToNextUnpaintedTemplatePixel(options = null) {
       }
     }
 
+    report.tilesSearched = liveTilePixelsByTile.size;
+    report.tilesTotal = tileCandidates.length;
     if (!bestCandidate) {
+      report.reason = jumpCycleVisitedCoordsKeys.size > 0 ? 'cycle exhausted (restarted)' : 'no unpainted pixel found';
       if (jumpCycleVisitedCoordsKeys.size > 0) {
         jumpCycleVisitedCoordsKeys.clear();
         overlayMain.handleDisplayStatus(
-          originMode === 'center'
+          originMode === 'center' && !fixedOriginCoords
             ? 'Reached the last unfinished pixel. Press J again to restart the cycle.'
             : `Reached the last unfinished pixel for the ${originLabel} jump. Trigger it again to restart the cycle.`
         );
@@ -6847,16 +7071,69 @@ async function jumpToNextUnpaintedTemplatePixel(options = null) {
     }
 
     jumpCycleVisitedCoordsKeys.add(bestCandidate.coordsKey);
-    await teleportToTileCoords(bestCandidate.coords.slice(0, 2), bestCandidate.coords.slice(2, 4), {
-      revealPixelInfo: false,
-    });
-    schedulePixelInfoCloseBurst();
-    applyIntegerZoomLevel(NEXT_TEMPLATE_PIXEL_ZOOM_LEVEL);
+    report.anchor = bestCandidate.coords;
+    report.anchorTemplate = bestCandidate.templateName ?? '';
+    report.anchorDistance = Math.round(Math.sqrt(bestCandidate.distanceSq));
+    let targetCoords = bestCandidate.coords;
+    let clusterSuffix = '';
+    // Framed mode (zoomPxPerPixel): one camera move to the final zoom, with the paintable band
+    // (measured now, paint drawer open) deciding where the target lands.
+    const framedPxPerPixel = Number(options?.zoomPxPerPixel);
+    const framed = Number.isFinite(framedPxPerPixel) && framedPxPerPixel > 0;
+    const band = framed ? measurePaintableBand() : null;
+    if (options?.cluster) {
+      try {
+        const cluster = await findUnpaintedClusterCentre(bestCandidate.coords, {
+          originMode,
+          tileCandidates,
+          liveTilePixelsByTile,
+          displayedColorSet,
+          memorySavingMode,
+          pxPerPixel: framed ? framedPxPerPixel : Number(options?.clusterPxPerPixel),
+          viewHeightPx: band ? band.bottom - band.top : 0,
+        });
+        if (cluster) {
+          targetCoords = cluster.coords;
+          clusterSuffix = ` (centred on ${cluster.count} unpainted px around it)`;
+          report.cluster = { coords: cluster.coords, count: cluster.count };
+        } else {
+          report.cluster = null;
+        }
+      } catch (error) {
+        report.clusterError = error?.message || String(error);
+        consoleWarn('Failed to centre the jump on the unpainted cluster; using the nearest pixel.', error);
+      }
+    }
+    const frameEdge = String(options?.frameEdge || '');
+    let movedFramed = false;
+    if (framed) {
+      // Horizontal from the cluster (or the pixel); vertical from the pixel itself when it is
+      // framed at an edge, so the edge start still begins exactly at it.
+      const worldOf = (coords) => [coords[0] * TEMPLATE_TILE_SIZE + coords[2] + 0.5, coords[1] * TEMPLATE_TILE_SIZE + coords[3] + 0.5];
+      const [targetX, targetY] = worldOf(targetCoords);
+      const [, anchorY] = worldOf(bestCandidate.coords);
+      const edgeFramed = frameEdge === 'top' || frameEdge === 'bottom';
+      movedFramed = jumpCameraFramed(targetX, edgeFramed ? anchorY : targetY, framedPxPerPixel, frameEdge, Number(options?.frameMarginRatio), band);
+      report.band = band ? { top: Math.round(band.top), bottom: Math.round(band.bottom), height: Math.round(band.height) } : null;
+      report.frameEdge = frameEdge || 'centre';
+    }
+    report.framed = movedFramed;
+    report.target = targetCoords;
+    if (!movedFramed) {
+      await teleportToTileCoords(targetCoords.slice(0, 2), targetCoords.slice(2, 4), {
+        revealPixelInfo: false,
+      });
+      schedulePixelInfoCloseBurst();
+      applyIntegerZoomLevel(NEXT_TEMPLATE_PIXEL_ZOOM_LEVEL);
+    }
     const templateLabel = bestCandidate.templateName ? ` in "${bestCandidate.templateName}"` : '';
-    const originSuffix = originMode === 'center' ? '' : ` from ${originLabel}`;
-    overlayMain.handleDisplayStatus(`Jumped to next unpainted pixel${originSuffix}${templateLabel}: ${formatTilePixelCoords(bestCandidate.coords)}.`);
+    const originSuffix = originMode === 'center' && !fixedOriginCoords ? '' : ` from ${originLabel}`;
+    overlayMain.handleDisplayStatus(`Jumped to next unpainted pixel${originSuffix}${templateLabel}: ${formatTilePixelCoords(bestCandidate.coords)}${clusterSuffix}.`);
+    report.jumped = true;
+    report.cameraAfter = readTemplateJumpCamera();
     return true;
   } catch (error) {
+    report.reason = `error: ${error?.message || String(error)}`;
     consoleWarn('Failed to jump to the next unpainted template pixel.', error);
     overlayMain.handleDisplayError('Failed to find the next unpainted template pixel.');
   } finally {
@@ -7891,7 +8168,7 @@ async function buildOverlayMain() {
               '#bm-overlay h1',                    // Main title "Rus Marble"
               '#bm-contain-userinfo',              // User information section (username, droplets, level)
               '#bm-overlay hr',                    // Visual separator lines
-              '#bm-contain-automation > *:not(#bm-contain-coords)', // Automation section excluding coordinates
+              '#bm-contain-actions > *:not(#bm-contain-coords)', // Main controls section excluding coordinates
               '#bm-contain-buttons-action',        // Action buttons container
             ];
             
@@ -8008,7 +8285,7 @@ async function buildOverlayMain() {
               if (!templateManager.isStatusHidden()) {
                 statusTextbox.style.display = '';
               } else {
-                statusTextbox.style.display = 'none'; // statusTextbox itself matches #bm-contain-automation > *:not(#bm-contain-coords)
+                statusTextbox.style.display = 'none'; // statusTextbox itself matches #bm-contain-actions > *:not(#bm-contain-coords)
               }
               
               // Restore all coordinate input fields
@@ -8104,7 +8381,7 @@ async function buildOverlayMain() {
 
     .addHr().buildElement()
 
-    .addDiv({'id': 'bm-contain-automation'})
+    .addDiv({'id': 'bm-contain-actions'})
       // .addCheckbox({'id': 'bm-input-stealth', 'textContent': 'Stealth', 'checked': true}).buildElement()
       // .addButtonHelp({'title': 'Waits for the website to make requests, instead of sending requests.'}).buildElement()
       // .addBr().buildElement()
@@ -10701,6 +10978,7 @@ async function buildOverlayMain() {
     }
     return { matched: safeTemplates.length, changed: changedCount };
   };
+  hostContext.setTemplatesEnabledState = setMatchedTemplatesEnabledState;
 
   const setMatchedColorsEnabledState = async (matchedColors, enabled) => {
     const colorKeys = [...new Set(
@@ -10870,9 +11148,22 @@ async function buildOverlayMain() {
       case 'j-functionality':
         return {
           kind: 'jump-next-template-pixel',
+          // Return what the jump did (lastTemplateJumpReport) instead of a status line.
+          report: info.report === true,
+          // Centre on the densest unpainted area near the nearest pixel instead of on that pixel.
+          cluster: info.cluster === true,
+          // Zoom (screen px per wplace pixel) the caller paints at; sizes the cluster window.
+          clusterPxPerPixel: Number(info.clusterPxPerPixel) || 0,
+          // One-move jump: final zoom (screen px per wplace pixel) and where in the paintable
+          // band the target lands ('top' / 'bottom' edge, else its centre).
+          zoomPxPerPixel: Number(info.zoomPxPerPixel) || 0,
+          frameEdge: ['top', 'bottom'].includes(info.frameEdge) ? info.frameEdge : '',
+          frameMarginRatio: Number(info.frameMarginRatio) || 0,
           // Optional palette ids: jump only to an unpainted pixel of these colours.
           colorIds: (Array.isArray(info.colorIds) ? info.colorIds : [])
             .map(Number).filter((id) => Number.isInteger(id) && id > 0),
+          // Optional exact start pixel [tx, ty, px, py]; overrides originMode.
+          originCoords: normalizeTilePixelCoords(info.originCoords ?? null),
           originMode: normalizeTemplateJumpOriginMode(
             info.origin
             ?? info.point
@@ -10949,6 +11240,7 @@ async function buildOverlayMain() {
           buildColorFilterList: () => window.buildColorFilterList?.(),
           defaultEnabled: true,
           replaceExistingMatches: true,
+          skipIfUnchanged: true,
         });
         if (createdTemplate) {
           const statusMessage = `Template "${controlAction.templateName}" added or updated as a local template from event control.`;
@@ -11013,10 +11305,19 @@ async function buildOverlayMain() {
       {
         const jumped = await jumpToNextUnpaintedTemplatePixel({
           originMode: controlAction.originMode,
+          originCoords: controlAction.originCoords,
           colorIds: controlAction.colorIds,
+          cluster: controlAction.cluster,
+          clusterPxPerPixel: controlAction.clusterPxPerPixel,
+          zoomPxPerPixel: controlAction.zoomPxPerPixel,
+          frameEdge: controlAction.frameEdge,
+          frameMarginRatio: controlAction.frameMarginRatio,
         });
+        if (controlAction.report) {
+          return { ...(lastTemplateJumpReport ?? {}), jumped: jumped === true };
+        }
         if (controlAction.colorIds?.length) {
-          // Automation asking for specific colours needs to know whether any were found.
+          // A caller asking for specific colours needs to know whether any were found.
           return { jumped: jumped === true, status: `Jump requested from ${getTemplateJumpOriginLabel(controlAction.originMode)}.` };
         }
         return `Jump requested from ${getTemplateJumpOriginLabel(controlAction.originMode)}.`;
@@ -11076,7 +11377,7 @@ async function buildOverlayMain() {
       switch (command) {
         case 'ping':
           // Readiness probe. `features` lets a caller tell this build from older ones.
-          respond({ ok: true, result: { version, features: ['hidden-channel', 'map-bounds', ...ext.bridgeFeatures()] } });
+          respond({ ok: true, result: { version, features: ['hidden-channel', 'map-bounds', 'jump-cluster', 'jump-framed', 'jump-report', 'jump-origin-coords', ...ext.bridgeFeatures()] } });
           return;
         case 'control': {
           const controlAction = normalizeRusMarbleControlAction(detail?.payload);

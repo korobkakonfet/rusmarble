@@ -1221,6 +1221,21 @@ export function doAfterMapFound(func) {
   mapFoundHandlers.push(func);
 }
 
+/** Moves the camera to a centre and zoom in one step, without animation.
+ * @param {number} lat
+ * @param {number} lng
+ * @param {number} zoom
+ * @returns {boolean} whether the map was reachable
+ * @since 0.87.138
+ */
+export function jumpCameraTo(lat, lng, zoom) {
+  if (!isMapTilerLoaded()) return false;
+  controlMapTiler((map, lat, lng, zoom) => {
+    map["jumpTo"]({ "center": [lng, lat], "zoom": zoom });
+  }, lat, lng, zoom);
+  return true;
+}
+
 /** Pan the map by a given offset
  * @param {number[]} offset - The offset to pan the map by, in pixels.
  * @since 0.86.5

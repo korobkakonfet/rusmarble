@@ -820,7 +820,7 @@ html[data-rm-theme="halloween"] .bg-base-content\/10 {
 /* Smooth transitions for minimize/maximize functionality */
 #bm-contain-userinfo,
 #bm-overlay hr,
-#bm-contain-automation, 
+#bm-contain-actions, 
 #bm-contain-buttons-action {
   transition: opacity 0.2s ease, height 0.2s ease;
 }
@@ -1003,18 +1003,18 @@ html[data-rm-site-font] body *:not(.font-flag, svg, svg *, [id^="bm-"], [id^="bm
   letter-spacing: 0;
 }
 
-/* Checkboxes in the automation container */
-#bm-contain-automation input[type="checkbox"] {
+/* Checkboxes in the main controls container */
+#bm-contain-actions input[type="checkbox"] {
   vertical-align: middle;
   flex: 0 0 auto; /* Prevents the checkbox from growing/shrinking */
 }
 
-#bm-contain-automation label > input[type="checkbox"] {
+#bm-contain-actions label > input[type="checkbox"] {
   margin-right: 0.5ch;
 }
 
-/* Checkbox label/flavor text in the automation container */
-#bm-contain-automation label {
+/* Checkbox label/flavor text in the main controls container */
+#bm-contain-actions label {
   margin-right: 0.5ch;
 }
 
@@ -1137,7 +1137,7 @@ div:has(> #bm-button-teleport) {
   text-overflow: ellipsis;
 }
 
-/* Automation button container */
+/* Template button container */
 #bm-contain-buttons-template {
   white-space: nowrap;
   text-align: center;
@@ -1205,7 +1205,7 @@ input[type="file"][id*="template"] {
 
 /* The elements that need spacing from each-other */
 #bm-contain-userinfo,
-#bm-contain-automation,
+#bm-contain-actions,
 #bm-contain-coords,
 #bm-button-colors-container,
 #bm-output-status {
