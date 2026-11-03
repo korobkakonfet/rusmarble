@@ -49,10 +49,13 @@ const hostContext = {
   clickElementLikeUser: (...args) => clickElementLikeUser(...args),
   getNormalizedElementText: (...args) => getNormalizedElementText(...args),
   getPaintPaletteRoot: (...args) => getPaintPaletteRoot(...args),
+  isExtendedPaintPaletteOpen: (...args) => isExtendedPaintPaletteOpen(...args),
+  getPaintPaletteExpandButton: (...args) => getPaintPaletteExpandButton(...args),
   isElementActuallyVisible: (...args) => isElementActuallyVisible(...args),
   schedulePixelInfoCloseBurst: (...args) => schedulePixelInfoCloseBurst(...args),
   observeBlack: (...args) => observeBlack(...args),
   isMapMoving: (...args) => isMapMoving(...args),
+  isBootTemplatesLoaded: () => bootTemplatesLoaded,
   teleportToTileCoords: (...args) => teleportToTileCoords(...args),
   consoleWarn: (...args) => consoleWarn(...args),
   /** Set from buildOverlayMain, which owns this one. */
@@ -5363,6 +5366,27 @@ function readBootStorageValue(key, fallback, timeoutMs = 15000) {
 /** Storage keys that failed or timed out during boot; surfaced to the user once the UI exists. */
 const bootStorageFailures = [];
 
+/** Pending from the first line of boot until the stored templates are parsed. The bridge answers
+ * long before that (Tampermonkey's first boot after an update reads storage slowly), and
+ * templateSync's waitForImport only waits when importPromise exists — so without this, a template
+ * added by a bridge caller in that window was silently replaced by the stored list.
+ * @since 0.87.143
+ */
+let resolveBootTemplateImport = () => {};
+const bootTemplateImport = new Promise((resolve) => { resolveBootTemplateImport = resolve; });
+templateManager.importPromise = bootTemplateImport;
+let bootTemplatesLoaded = false;
+const settleBootTemplateImport = () => {
+  const parsing = templateManager.importPromise;
+  if (parsing && parsing !== bootTemplateImport) {
+    parsing.finally(() => { bootTemplatesLoaded = true; });
+    resolveBootTemplateImport(parsing);
+  } else {
+    bootTemplatesLoaded = true;
+    resolveBootTemplateImport();
+  }
+};
+
 readBootStorageValue('bmTemplates', '{}').then(async storageTemplatesValue => {
   const userSettingsValue = await readBootStorageValue('bmUserSettings', '{}');
   let userSettings;
@@ -5441,6 +5465,7 @@ readBootStorageValue('bmTemplates', '{}').then(async storageTemplatesValue => {
 
   consoleLog(storageTemplates);
   templateManager.importJSON(storageTemplates); // Loads the templates
+  settleBootTemplateImport();
   registerBmCanvasRestoreOnStyleChange(); // Re-adds overlay layers after any map style reload
 
   await waitForBody();
@@ -5664,6 +5689,9 @@ readBootStorageValue('bmTemplates', '{}').then(async storageTemplatesValue => {
 }).catch((error) => {
   // Last resort: boot must never die silently, or the script simply "does not load".
   consoleWarn('[boot] initialisation failed', error?.message || error);
+}).finally(() => {
+  // Never leave template actions waiting on a boot that threw before the import.
+  if (!bootTemplatesLoaded && templateManager.importPromise === bootTemplateImport) settleBootTemplateImport();
 });
 
 /** Add the zoom level buttons if they do not exist.
@@ -6844,6 +6872,46 @@ async function findUnpaintedClusterCentre(anchorCoords, context) {
     centreY = nextY;
     if (settled) break;
   }
+  // minCount (set by the caller): a view around the nearest pixel that holds only a few
+  // unpainted pixels is not worth the jump. Look over the whole reach for a view
+  // holding at least minCount — the nearest such one, so the start side still goes first — else
+  // the fullest one. For a top/bottom start the view stays in the band at the pixel's row.
+  const minCount = Math.max(0, Math.floor(Number(context.minCount) || 0));
+  if (minCount > 0 && covered < minCount) {
+    const sat = new Float64Array((gridWidth + 1) * (gridHeight + 1));
+    for (let gridY = 0; gridY < gridHeight; gridY++) {
+      let row = 0;
+      for (let gridX = 0; gridX < gridWidth; gridX++) {
+        row += grid[gridY * gridWidth + gridX];
+        sat[(gridY + 1) * (gridWidth + 1) + gridX + 1] = sat[gridY * (gridWidth + 1) + gridX + 1] + row;
+      }
+    }
+    const sum = (x0, y0, x1, y1) => sat[y1 * (gridWidth + 1) + x1] - sat[y0 * (gridWidth + 1) + x1]
+      - sat[y1 * (gridWidth + 1) + x0] + sat[y0 * (gridWidth + 1) + x0];
+    const windowW = Math.max(1, Math.min(gridWidth, Math.round(viewWidth / cell)));
+    const windowH = Math.max(1, Math.min(gridHeight, Math.round(viewHeight / cell)));
+    const lockedY0 = toCell(bandTop, box.y, gridHeight);
+    let enough = null;
+    let fullest = null;
+    for (let y0 = verticalLocked ? Math.min(lockedY0, gridHeight - windowH) : 0; y0 + windowH <= gridHeight; y0++) {
+      for (let x0 = 0; x0 + windowW <= gridWidth; x0++) {
+        const count = sum(x0, y0, x0 + windowW, y0 + windowH);
+        if (!count) continue;
+        const midX = box.x + (x0 + windowW / 2) * cell;
+        const midY = box.y + (y0 + windowH / 2) * cell;
+        const distSq = (midX - anchorX) ** 2 + (verticalLocked ? 0 : (midY - anchorY) ** 2);
+        if (count >= minCount && (!enough || distSq < enough.distSq)) enough = { count, midX, midY, distSq };
+        if (!fullest || count > fullest.count) fullest = { count, midX, midY, distSq };
+      }
+      if (verticalLocked) break;
+    }
+    const pick = enough ?? fullest;
+    if (pick && pick.count > covered) {
+      covered = pick.count;
+      centreX = pick.midX;
+      if (!verticalLocked) centreY = pick.midY;
+    }
+  }
   if (!covered) return null;
   const worldX = Math.round(centreX);
   const worldY = Math.round(centreY);
@@ -6878,15 +6946,35 @@ function measurePaintableBand() {
       runStart = null;
     }
   }
-  if (!best || best.bottom - best.top < 40) {
-    return { top: 0, bottom: rect.height, width: rect.width, height: rect.height };
+  const band = (!best || best.bottom - best.top < 40)
+    ? { top: 0, bottom: rect.height, width: rect.width, height: rect.height }
+    : { top: best.top - rect.top, bottom: best.bottom - rect.top, width: rect.width, height: rect.height };
+  // Horizontal run along the band's middle row (wplace's side button columns), for left/right framing.
+  const y = rect.top + (band.top + band.bottom) / 2;
+  let bestX = null;
+  let runStartX = null;
+  for (let x = rect.left + 1; x <= rect.right - 1 + step; x += step) {
+    const exposed = x <= rect.right - 1 && onMap(document.elementFromPoint(x, y));
+    if (exposed && runStartX === null) runStartX = x;
+    if (!exposed && runStartX !== null) {
+      const run = { left: runStartX, right: x - step };
+      if (!bestX || run.right - run.left > bestX.right - bestX.left) bestX = run;
+      runStartX = null;
+    }
   }
-  return { top: best.top - rect.top, bottom: best.bottom - rect.top, width: rect.width, height: rect.height };
+  if (!bestX || bestX.right - bestX.left < 40) {
+    band.left = 0;
+    band.right = rect.width;
+  } else {
+    band.left = bestX.left - rect.left;
+    band.right = bestX.right - rect.left;
+  }
+  return band;
 }
 
 /** Places the camera in one jumpTo at `pxPerPixel` screen px per wplace pixel so that world point
  * (worldX, worldY) — continuous wplace pixel coordinates — sits in the paintable band: at its
- * centre, or `marginRatio` inside its top / bottom edge when frameEdge says so.
+ * centre, or `marginRatio` inside its top / bottom / left / right edge when frameEdge says so.
  * @returns {boolean} whether the camera was moved
  */
 function jumpCameraFramed(worldX, worldY, pxPerPixel, frameEdge, marginRatio, band) {
@@ -6899,8 +6987,14 @@ function jumpCameraFramed(worldX, worldY, pxPerPixel, frameEdge, marginRatio, ba
   let wantY = band.top + bandHeight / 2;
   if (frameEdge === 'top') wantY = band.top + margin;
   else if (frameEdge === 'bottom') wantY = band.bottom - margin;
-  // The camera centre is the canvas centre; shift it so the point lands on wantY.
-  const centreX = worldX;
+  const bandLeft = Number.isFinite(band.left) ? band.left : 0;
+  const bandRight = Number.isFinite(band.right) ? band.right : band.width;
+  const marginX = Math.max(24, (bandRight - bandLeft) * (Number.isFinite(marginRatio) ? marginRatio : 0.06));
+  let wantX = band.width / 2;
+  if (frameEdge === 'left') wantX = bandLeft + marginX;
+  else if (frameEdge === 'right') wantX = bandRight - marginX;
+  // The camera centre is the canvas centre; shift it so the point lands on (wantX, wantY).
+  const centreX = worldX + (band.width / 2 - wantX) / pxPerPixel;
   const centreY = worldY + (band.height / 2 - wantY) / pxPerPixel;
   const tileX = Math.floor(centreX / TEMPLATE_TILE_SIZE);
   const tileY = Math.floor(centreY / TEMPLATE_TILE_SIZE);
@@ -6964,11 +7058,21 @@ async function jumpToNextUnpaintedTemplatePixel(options = null) {
     const onlyColorIds = Array.isArray(options?.colorIds) && options.colorIds.length
       ? new Set(options.colorIds)
       : null;
+    // ownedColorsOnly: skip colours the user has not unlocked. A premium-colour
+    // pixel it cannot paint used to be the "nearest unpainted pixel" jump after jump.
+    const ownedOnly = options?.ownedColorsOnly === true;
+    let lockedSkipped = 0;
     const displayedColors = templateManager.getDisplayedColorsSorted().filter((rgb) => {
       const meta = rgbToMeta.get(rgb);
-      return typeof meta?.id === 'number' && meta.id > 0 && (!onlyColorIds || onlyColorIds.has(meta.id));
+      if (!(typeof meta?.id === 'number' && meta.id > 0 && (!onlyColorIds || onlyColorIds.has(meta.id)))) return false;
+      if (ownedOnly && !templateManager.isColorUnlocked(meta.id)) {
+        lockedSkipped++;
+        return false;
+      }
+      return true;
     });
     report.colors = displayedColors.length;
+    if (lockedSkipped) report.lockedColors = lockedSkipped;
     if (!displayedColors.length) {
       report.reason = 'no active template colours';
       overlayMain.handleDisplayStatus('No active template colors available for jump.');
@@ -7091,6 +7195,7 @@ async function jumpToNextUnpaintedTemplatePixel(options = null) {
           memorySavingMode,
           pxPerPixel: framed ? framedPxPerPixel : Number(options?.clusterPxPerPixel),
           viewHeightPx: band ? band.bottom - band.top : 0,
+          minCount: Number(options?.clusterMinPixels) || 0,
         });
         if (cluster) {
           targetCoords = cluster.coords;
@@ -7111,19 +7216,20 @@ async function jumpToNextUnpaintedTemplatePixel(options = null) {
       // framed at an edge, so the edge start still begins exactly at it.
       const worldOf = (coords) => [coords[0] * TEMPLATE_TILE_SIZE + coords[2] + 0.5, coords[1] * TEMPLATE_TILE_SIZE + coords[3] + 0.5];
       const [targetX, targetY] = worldOf(targetCoords);
-      const [, anchorY] = worldOf(bestCandidate.coords);
+      const [anchorX, anchorY] = worldOf(bestCandidate.coords);
       const edgeFramed = frameEdge === 'top' || frameEdge === 'bottom';
-      movedFramed = jumpCameraFramed(targetX, edgeFramed ? anchorY : targetY, framedPxPerPixel, frameEdge, Number(options?.frameMarginRatio), band);
-      report.band = band ? { top: Math.round(band.top), bottom: Math.round(band.bottom), height: Math.round(band.height) } : null;
+      const sideFramed = frameEdge === 'left' || frameEdge === 'right';
+      movedFramed = jumpCameraFramed(sideFramed ? anchorX : targetX, edgeFramed ? anchorY : targetY, framedPxPerPixel, frameEdge, Number(options?.frameMarginRatio), band);
+      report.band = band ? { top: Math.round(band.top), bottom: Math.round(band.bottom), left: Math.round(band.left), right: Math.round(band.right), height: Math.round(band.height) } : null;
       report.frameEdge = frameEdge || 'centre';
     }
     report.framed = movedFramed;
     report.target = targetCoords;
     if (!movedFramed) {
+      // revealPixelInfo: false opens no pixel-info window, so there is nothing to close.
       await teleportToTileCoords(targetCoords.slice(0, 2), targetCoords.slice(2, 4), {
         revealPixelInfo: false,
       });
-      schedulePixelInfoCloseBurst();
       applyIntegerZoomLevel(NEXT_TEMPLATE_PIXEL_ZOOM_LEVEL);
     }
     const templateLabel = bestCandidate.templateName ? ` in "${bestCandidate.templateName}"` : '';
@@ -11152,12 +11258,16 @@ async function buildOverlayMain() {
           report: info.report === true,
           // Centre on the densest unpainted area near the nearest pixel instead of on that pixel.
           cluster: info.cluster === true,
-          // Zoom (screen px per wplace pixel) the caller paints at; sizes the cluster window.
+          // Zoom (screen px per wplace pixel) the caller views at; sizes the cluster window.
           clusterPxPerPixel: Number(info.clusterPxPerPixel) || 0,
+          // Prefer a view holding at least this many unpainted pixels (0 = nearest cluster).
+          clusterMinPixels: Math.max(0, Math.floor(Number(info.clusterMinPixels) || 0)),
+          // Search only colours the user has unlocked.
+          ownedColorsOnly: info.ownedColorsOnly === true,
           // One-move jump: final zoom (screen px per wplace pixel) and where in the paintable
           // band the target lands ('top' / 'bottom' edge, else its centre).
           zoomPxPerPixel: Number(info.zoomPxPerPixel) || 0,
-          frameEdge: ['top', 'bottom'].includes(info.frameEdge) ? info.frameEdge : '',
+          frameEdge: ['top', 'bottom', 'left', 'right'].includes(info.frameEdge) ? info.frameEdge : '',
           frameMarginRatio: Number(info.frameMarginRatio) || 0,
           // Optional palette ids: jump only to an unpainted pixel of these colours.
           colorIds: (Array.isArray(info.colorIds) ? info.colorIds : [])
@@ -11243,7 +11353,7 @@ async function buildOverlayMain() {
           skipIfUnchanged: true,
         });
         if (createdTemplate) {
-          const statusMessage = `Template "${controlAction.templateName}" added or updated as a local template from event control.`;
+          const statusMessage = `Template "${controlAction.templateName}" added or updated as a tracked template from event control.`;
           overlayMain.handleDisplayStatus(statusMessage);
           return statusMessage;
         }
@@ -11309,6 +11419,8 @@ async function buildOverlayMain() {
           colorIds: controlAction.colorIds,
           cluster: controlAction.cluster,
           clusterPxPerPixel: controlAction.clusterPxPerPixel,
+          clusterMinPixels: controlAction.clusterMinPixels,
+          ownedColorsOnly: controlAction.ownedColorsOnly,
           zoomPxPerPixel: controlAction.zoomPxPerPixel,
           frameEdge: controlAction.frameEdge,
           frameMarginRatio: controlAction.frameMarginRatio,
@@ -11383,6 +11495,15 @@ async function buildOverlayMain() {
           const controlAction = normalizeRusMarbleControlAction(detail?.payload);
           if (!controlAction) {
             throw new Error('Invalid RusMarble control payload.');
+          }
+          // Every action reads or changes templates; run none against the empty pre-boot list
+          // (an add there is wiped by the stored list). Status stays a live read. Capped so a
+          // stuck storage read can't hang the caller.
+          if (controlAction.kind !== 'template-status' && !bootTemplatesLoaded) {
+            await Promise.race([
+              Promise.resolve(templateManager.importPromise).catch(() => {}),
+              new Promise((resolve) => setTimeout(resolve, 30000)),
+            ]);
           }
           const result = await executeRusMarbleControlAction(controlAction);
           respond({ ok: true, result });

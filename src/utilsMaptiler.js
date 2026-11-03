@@ -1088,7 +1088,11 @@ export async function teleportToGeoCoords(lat, lng, options = null) {
       map[funcName]({'center': [lng, lat], 'zoom': 16});
     }, lat, lng, funcName);
     const allianceOrRankingButton = document.querySelector(".flex>.btn.btn-square.relative.shadow-md");
-    if (revealPixelInfo && allianceOrRankingButton) {
+    // A visible colour swatch means paint mode is open: there the click below would paint a
+    // pixel at the centre instead of showing its info.
+    const paintPaletteOpen = Array.from(document.querySelectorAll('[id^="color-"]'))
+      .some((swatch) => swatch instanceof HTMLElement && swatch.offsetParent !== null);
+    if (revealPixelInfo && allianceOrRankingButton && !paintPaletteOpen) {
       // not in painting mode, click on center to show pixel info
       const canvas = document.querySelector("canvas.maplibregl-canvas");
       const ev = new MouseEvent("click", {

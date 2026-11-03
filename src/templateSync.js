@@ -380,6 +380,21 @@ export function createTemplateSync({
     }
   };
 
+  // Marks a tracked template as added by name, so the stream-listing prune leaves it alone.
+  const markTemplateManual = (template, stream) => {
+    if (!template) return;
+    const store = template.storageKey ? templateManager.templatesJSON?.templates?.[template.storageKey] : null;
+    const normalizedStream = normalizeRemoteStream(stream ?? template.remoteStream ?? store?.remoteStream);
+    template.isRemote = true;
+    template.remoteManual = true;
+    template.remoteStream = normalizedStream;
+    if (store) {
+      store.remote = true;
+      store.remoteManual = true;
+      store.remoteStream = normalizedStream;
+    }
+  };
+
   const pruneMissingRemoteTemplates = async (templateItems, stream = DEFAULT_TEMPLATE_STREAM) => {
     if (!Array.isArray(templateItems)) return;
     const normalizedStream = normalizeRemoteStream(stream);
@@ -393,7 +408,7 @@ export function createTemplateSync({
         })
         .filter(name => name)
     );
-    const missing = (templateManager.templatesArray ?? []).filter(template => {
+    const unlisted = (templateManager.templatesArray ?? []).filter(template => {
       if (!template) return false;
       const store = templateManager.templatesJSON?.templates?.[template.storageKey];
       const isRemote = template.isRemote === true || store?.remote === true;
@@ -403,6 +418,25 @@ export function createTemplateSync({
       const templateName = template.remoteName || template.displayName;
       return !!templateName && !serverNames.has(templateName);
     });
+    // Not in the listing is not the same as gone: a template can be served by name only. Ask for
+    // it by name before deleting; one that still resolves is kept and marked as added by name,
+    // so later polls skip it without asking again.
+    const missing = [];
+    let marked = false;
+    for (const template of unlisted) {
+      const templateName = template.remoteName || template.displayName;
+      const entry = await fetchManualTemplateEntry({ templateName, stream: normalizedStream });
+      if (entry) {
+        markTemplateManual(template, normalizedStream);
+        marked = true;
+        logSync(`Template "${templateName}" is not in the "${normalizedStream}" listing but still exists by name; keeping it.`);
+        continue;
+      }
+      missing.push(template);
+    }
+    if (marked && !missing.length) {
+      await templateManager.storeTemplates();
+    }
     if (missing.length) {
       logSync(`Pruning ${missing.length} remote template${missing.length === 1 ? '' : 's'} missing from server list...`);
     }
@@ -1153,6 +1187,13 @@ export function createTemplateSync({
           try { onExisting({ warning, templates: existingMatches, isRemote: !!existingRemoteMatch }); } catch (_) {}
         }
       }
+      // A bridge add (skipIfUnchanged) must leave a tracked copy carrying the server's timestamps.
+      // The local-copy path below stores none, so the next launch's skip check had nothing to
+      // compare and downloaded the image again — on every launch while the add raced the boot load.
+      if (skipIfUnchanged) {
+        syncExisting = true;
+        remoteManual = true;
+      }
       if (syncExisting) {
         let syncedTemplate = null;
         let syncedStream = null;
@@ -1213,7 +1254,14 @@ export function createTemplateSync({
             });
             if (!syncedTemplate && skipIfUnchanged) {
               syncedTemplate = existingRemoteMatch ?? existingMatches[0] ?? null;
-              if (syncedTemplate) logSync(`Template "${trimmedName}" is unchanged on stream "${stream}"; kept the loaded copy.`, { statusHandler });
+              if (syncedTemplate) {
+                // The kept copy must count as added by name, like a fresh add would: a copy stored
+                // as stream-listed (remoteManual false) is pruned by the next poll whenever the
+                // server serves the template by name only, not in the stream's listing.
+                markTemplateManual(syncedTemplate, stream);
+                await templateManager.storeTemplates();
+                logSync(`Template "${trimmedName}" is unchanged on stream "${stream}"; kept the loaded copy.`, { statusHandler });
+              }
             }
             syncedStream = stream;
             break;
