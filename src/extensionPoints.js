@@ -106,6 +106,12 @@ export const onSettingsSectionBuild = (_ctx) => {};
  */
 export const onMapReady = (_ctx) => {};
 
+/** Extra pixels the template jump should skip, as "tx,ty,px,py" keys (e.g. pixels whose tile
+ * has not refreshed yet).
+ * @returns {string[]}
+ */
+export const jumpSkipCoordKeys = () => [];
+
 /** Extra capability names the bridge's `ping` reports, so a caller can tell builds apart.
  * @returns {string[]}
  */

@@ -6844,7 +6844,10 @@ async function findUnpaintedClusterCentre(anchorCoords, context) {
   let centreX = anchorX;
   let centreY = anchorY;
   let covered = 0;
-  for (let iteration = 0; iteration < CLUSTER_JUMP_MAX_ITERATIONS; iteration++) {
+  // sparseOnly (fixed-origin jumps): never re-centre a view that already has enough unpainted
+  // pixels — the origin decides the view — only leave a sparse one (below) for the nearest fuller one.
+  const sparseOnly = context.sparseOnly === true;
+  for (let iteration = 0; iteration < (sparseOnly ? 1 : CLUSTER_JUMP_MAX_ITERATIONS); iteration++) {
     const top = verticalLocked ? bandTop : centreY - viewHeight / 2;
     const left = centreX - viewWidth / 2;
     const fromX = toCell(left, box.x, gridWidth);
@@ -6865,6 +6868,7 @@ async function findUnpaintedClusterCentre(anchorCoords, context) {
     }
     if (!weight) break;
     covered = weight;
+    if (sparseOnly) break;
     const nextX = sumX / weight;
     const nextY = verticalLocked ? centreY : sumY / weight;
     const settled = Math.abs(nextX - centreX) < cell / 2 && Math.abs(nextY - centreY) < cell / 2;
@@ -6877,6 +6881,7 @@ async function findUnpaintedClusterCentre(anchorCoords, context) {
   // holding at least minCount — the nearest such one, so the start side still goes first — else
   // the fullest one. For a top/bottom start the view stays in the band at the pixel's row.
   const minCount = Math.max(0, Math.floor(Number(context.minCount) || 0));
+  let swapped = false;
   if (minCount > 0 && covered < minCount) {
     const sat = new Float64Array((gridWidth + 1) * (gridHeight + 1));
     for (let gridY = 0; gridY < gridHeight; gridY++) {
@@ -6910,9 +6915,12 @@ async function findUnpaintedClusterCentre(anchorCoords, context) {
       covered = pick.count;
       centreX = pick.midX;
       if (!verticalLocked) centreY = pick.midY;
+      swapped = true;
     }
   }
   if (!covered) return null;
+  // The origin's own view has enough: keep the jump exactly on the nearest pixel.
+  if (sparseOnly && !swapped) return null;
   const worldX = Math.round(centreX);
   const worldY = Math.round(centreY);
   const coords = normalizeTilePixelCoords([
@@ -7058,9 +7066,13 @@ async function jumpToNextUnpaintedTemplatePixel(options = null) {
     const onlyColorIds = Array.isArray(options?.colorIds) && options.colorIds.length
       ? new Set(options.colorIds)
       : null;
-    // ownedColorsOnly: skip colours the user has not unlocked. A premium-colour
-    // pixel it cannot paint used to be the "nearest unpainted pixel" jump after jump.
-    const ownedOnly = options?.ownedColorsOnly === true;
+    // ownedColorsOnly: skip colours the user has not unlocked. Otherwise a locked
+    // premium-colour pixel kept being the "nearest unpainted pixel" jump after jump.
+    // On by default (J key, panel jump): once /me has told us which colours the account owns,
+    // a pixel of a premium colour it doesn't own is never a jump target. false opts out;
+    // true filters even before /me arrived.
+    const ownedOnly = options?.ownedColorsOnly === true
+      || (options?.ownedColorsOnly !== false && apiManager?.lastMe != null);
     let lockedSkipped = 0;
     const displayedColors = templateManager.getDisplayedColorsSorted().filter((rgb) => {
       const meta = rgbToMeta.get(rgb);
@@ -7100,6 +7112,13 @@ async function jumpToNextUnpaintedTemplatePixel(options = null) {
     );
     const excludedCoordsKeys = new Set(jumpCycleVisitedCoordsKeys);
     excludedCoordsKeys.add(originPoint.coords.join(','));
+    // Extra pixels to skip from the extension hook (e.g. ones whose tile has not refreshed yet
+    // and would still read as unpainted).
+    let extraSkipped = 0;
+    for (const key of ext.jumpSkipCoordKeys()) {
+      if (!excludedCoordsKeys.has(key)) { excludedCoordsKeys.add(key); extraSkipped++; }
+    }
+    if (extraSkipped) report.extraSkipped = extraSkipped;
     const displayedColorSet = new Set(displayedColors);
     let bestCandidate = profiler.measure('findNearestCachedTemplatePixel', () => findNearestCachedTemplatePixel(originPoint, displayedColorSet, excludedCoordsKeys));
     const tileCandidatesMap = new Map();
@@ -7196,9 +7215,16 @@ async function jumpToNextUnpaintedTemplatePixel(options = null) {
           pxPerPixel: framed ? framedPxPerPixel : Number(options?.clusterPxPerPixel),
           viewHeightPx: band ? band.bottom - band.top : 0,
           minCount: Number(options?.clusterMinPixels) || 0,
+          sparseOnly: options?.clusterSparseOnly === true,
         });
         if (cluster) {
           targetCoords = cluster.coords;
+          // A sparse origin view was swapped for a fuller one: frame that view's centre,
+          // not the origin's nearest pixel at an edge.
+          if (options?.clusterSparseOnly === true) {
+            bestCandidate = { ...bestCandidate, coords: cluster.coords };
+            report.sparseSwap = true;
+          }
           clusterSuffix = ` (centred on ${cluster.count} unpainted px around it)`;
           report.cluster = { coords: cluster.coords, count: cluster.count };
         } else {
@@ -7209,7 +7235,8 @@ async function jumpToNextUnpaintedTemplatePixel(options = null) {
         consoleWarn('Failed to centre the jump on the unpainted cluster; using the nearest pixel.', error);
       }
     }
-    const frameEdge = String(options?.frameEdge || '');
+    // A swapped-in view is framed centred: its middle holds the work, not an edge.
+    const frameEdge = report.sparseSwap ? '' : String(options?.frameEdge || '');
     let movedFramed = false;
     if (framed) {
       // Horizontal from the cluster (or the pixel); vertical from the pixel itself when it is
@@ -11262,8 +11289,10 @@ async function buildOverlayMain() {
           clusterPxPerPixel: Number(info.clusterPxPerPixel) || 0,
           // Prefer a view holding at least this many unpainted pixels (0 = nearest cluster).
           clusterMinPixels: Math.max(0, Math.floor(Number(info.clusterMinPixels) || 0)),
-          // Search only colours the user has unlocked.
-          ownedColorsOnly: info.ownedColorsOnly === true,
+          // Fixed-origin jumps: only leave a view with fewer than clusterMinPixels, never re-centre.
+          clusterSparseOnly: info.clusterSparseOnly === true,
+          // Search only colours the user has unlocked (default once /me is known; false opts out).
+          ownedColorsOnly: typeof info.ownedColorsOnly === 'boolean' ? info.ownedColorsOnly : undefined,
           // One-move jump: final zoom (screen px per wplace pixel) and where in the paintable
           // band the target lands ('top' / 'bottom' edge, else its centre).
           zoomPxPerPixel: Number(info.zoomPxPerPixel) || 0,
@@ -11420,6 +11449,7 @@ async function buildOverlayMain() {
           cluster: controlAction.cluster,
           clusterPxPerPixel: controlAction.clusterPxPerPixel,
           clusterMinPixels: controlAction.clusterMinPixels,
+          clusterSparseOnly: controlAction.clusterSparseOnly,
           ownedColorsOnly: controlAction.ownedColorsOnly,
           zoomPxPerPixel: controlAction.zoomPxPerPixel,
           frameEdge: controlAction.frameEdge,
@@ -11489,7 +11519,7 @@ async function buildOverlayMain() {
       switch (command) {
         case 'ping':
           // Readiness probe. `features` lets a caller tell this build from older ones.
-          respond({ ok: true, result: { version, features: ['hidden-channel', 'map-bounds', 'jump-cluster', 'jump-framed', 'jump-report', 'jump-origin-coords', ...ext.bridgeFeatures()] } });
+          respond({ ok: true, result: { version, features: ['hidden-channel', 'map-bounds', 'jump-cluster', 'jump-sparse-dot', 'jump-framed', 'jump-report', 'jump-origin-coords', ...ext.bridgeFeatures()] } });
           return;
         case 'control': {
           const controlAction = normalizeRusMarbleControlAction(detail?.payload);
