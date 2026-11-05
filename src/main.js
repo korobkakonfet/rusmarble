@@ -58,6 +58,7 @@ const hostContext = {
   isBootTemplatesLoaded: () => bootTemplatesLoaded,
   teleportToTileCoords: (...args) => teleportToTileCoords(...args),
   consoleWarn: (...args) => consoleWarn(...args),
+  setOverlayMinimized: (...args) => setOverlayMinimized(...args),
   /** Set from buildOverlayMain, which owns this one. */
   findTemplatesByNames: null,
   /** Set from buildOverlayMain: (templates, enabled) -> {matched, changed}; skips templates
@@ -6781,7 +6782,8 @@ async function findUnpaintedClusterCentre(anchorCoords, context) {
   if (!anchor) return null;
   const rect = getMapCanvasElement()?.getBoundingClientRect?.();
   const pxPerPixel = context.pxPerPixel > 0 ? context.pxPerPixel : CLUSTER_JUMP_DEFAULT_PX_PER_PIXEL;
-  const viewWidth = Math.max(16, Math.round((rect?.width || 1280) / pxPerPixel));
+  // The visible width when the caller measured it (panels and button columns cover the sides).
+  const viewWidth = Math.max(16, Math.round((context.viewWidthPx || rect?.width || 1280) / pxPerPixel));
   // The paintable height when the caller measured it (the paint drawer covers the bottom).
   const viewHeight = Math.max(16, Math.round((context.viewHeightPx || rect?.height || 720) / pxPerPixel));
   const anchorX = anchor[0] * TEMPLATE_TILE_SIZE + anchor[2];
@@ -6998,7 +7000,9 @@ function jumpCameraFramed(worldX, worldY, pxPerPixel, frameEdge, marginRatio, ba
   const bandLeft = Number.isFinite(band.left) ? band.left : 0;
   const bandRight = Number.isFinite(band.right) ? band.right : band.width;
   const marginX = Math.max(24, (bandRight - bandLeft) * (Number.isFinite(marginRatio) ? marginRatio : 0.06));
-  let wantX = band.width / 2;
+  // Centre of the visible band, not of the canvas: the RusMarble panel and wplace's button
+  // columns cover one side, so the canvas centre is off-centre in the visible map.
+  let wantX = (bandLeft + bandRight) / 2;
   if (frameEdge === 'left') wantX = bandLeft + marginX;
   else if (frameEdge === 'right') wantX = bandRight - marginX;
   // The camera centre is the canvas centre; shift it so the point lands on (wantX, wantY).
@@ -7214,6 +7218,7 @@ async function jumpToNextUnpaintedTemplatePixel(options = null) {
           memorySavingMode,
           pxPerPixel: framed ? framedPxPerPixel : Number(options?.clusterPxPerPixel),
           viewHeightPx: band ? band.bottom - band.top : 0,
+          viewWidthPx: band && Number.isFinite(band.left) && Number.isFinite(band.right) ? band.right - band.left : 0,
           minCount: Number(options?.clusterMinPixels) || 0,
           sparseOnly: options?.clusterSparseOnly === true,
         });
@@ -8229,6 +8234,21 @@ const applyLayoutLanguage = (value = null) => {
 };
 window.getBlueMarbleNextPixelPlural = (count) => getNextPixelPluralSuffix(count);
 
+// Not a `bm-` name: the CSS mangler would rewrite it and add it to the class map.
+const OVERLAY_SET_MINIMIZED_EVENT = 'rm-overlay-set-minimized';
+
+/** Minimizes (true) or restores (false) the main panel, as its logo click does.
+ * @param {boolean} minimized
+ * @returns {boolean} whether it was minimized before
+ */
+function setOverlayMinimized(minimized) {
+  const was = Boolean(document.querySelector('#bm-overlay')?.classList.contains('bm-overlay-minimized'));
+  if (was !== Boolean(minimized)) {
+    document.dispatchEvent(new CustomEvent(OVERLAY_SET_MINIMIZED_EVENT, { detail: { minimized: Boolean(minimized) } }));
+  }
+  return was;
+}
+
 /** Deploys the overlay to the page with minimize/maximize functionality.
  * Creates a responsive overlay UI that can toggle between full-featured and minimized states.
  * 
@@ -8270,7 +8290,7 @@ async function buildOverlayMain() {
            * 
            * @param {Event} event - The click event object (implicit)
            */
-          img.addEventListener('click', () => {
+          const toggleMinimized = () => {
             isMinimized = !isMinimized; // Toggle the current state
 
             const overlay = document.querySelector('#bm-overlay');
@@ -8455,6 +8475,11 @@ async function buildOverlayMain() {
             img.alt = isMinimized ? t('brand.iconAltMin') : t('brand.iconAltMax');
             
             // No status message needed - state change is visually obvious to users
+          };
+          img.addEventListener('click', toggleMinimized);
+          // setOverlayMinimized(): lets a caller minimize or restore the panel without a click.
+          document.addEventListener(OVERLAY_SET_MINIMIZED_EVENT, (event) => {
+            if (Boolean(event.detail?.minimized) !== isMinimized) toggleMinimized();
           });
         }
       ).buildElement()
