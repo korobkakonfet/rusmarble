@@ -29,7 +29,6 @@
 import { convertImageDataToWplacePalette } from './templatePaletteConversion.js';
 import { consoleLog, consoleWarn, consoleError } from './utils.js';
 import { getTemplateMaskPoints, getMaskDrawSize } from './templateMaskPoints.js';
-import { isDefaceRgb } from './templateChunkUtils.js';
 
 const STORAGE_KEY = 'bmHqTemplates';
 /** Above this many overlay sub-pixels a masked mode falls back to 1x, to keep
@@ -65,15 +64,7 @@ const AUTO_PROGRESS_MAX_PIXELS = 512 * 512;
 const ATTACH_RETRY_MS = 400;
 /** Remote template pre-filled in the import box. */
 const DEFAULT_REMOTE_TEMPLATE = 'gsh';
-/** One-click zoom levels (in percent) offered under the headquarters canvas. */
-const ZOOM_PRESETS = [200, 500, 700, 1000];
-/** How close (relative) the measured zoom must get to the requested one. */
-const ZOOM_TOLERANCE = 0.02;
-/** Safety net for the wheel-stepping loop. */
-const ZOOM_MAX_STEPS = 24;
-/** Initial guess for "log-zoom change per wheel delta unit"; refined at runtime. */
-const ZOOM_RATE_GUESS = 0.0025;
-const ZOOM_MAX_DELTA = 600;
+
 
 const STRINGS = {
   en: {
@@ -100,13 +91,8 @@ const STRINGS = {
     progress: 'Painted {done}/{total} ({percent}%) · wrong {wrong}',
     progressUnavailable: 'Progress unavailable (canvas not readable)',
     refresh: 'Refresh progress',
-    zoom: 'Zoom',
-    zoomFailed: 'Could not change the headquarters zoom.',
     loadFailed: 'Failed to load image.',
     tooBig: 'Image is larger than the {w} x {h} headquarters canvas.',
-    pick: 'Middle click picks the template colour',
-    pickLocked: 'Colour "{name}" is not unlocked.',
-    pickUnknown: 'No palette colour matches this template pixel.',
     add: 'Add image',
     layers: 'Templates',
     move: 'Move mode',
@@ -136,13 +122,8 @@ const STRINGS = {
     progress: 'Закрашено {done}/{total} ({percent}%) · неверных {wrong}',
     progressUnavailable: 'Прогресс недоступен (холст не читается)',
     refresh: 'Обновить прогресс',
-    zoom: 'Масштаб',
-    zoomFailed: 'Не удалось изменить масштаб штаба.',
     loadFailed: 'Не удалось загрузить картинку.',
     tooBig: 'Картинка больше холста штаба {w} x {h}.',
-    pick: 'Средняя кнопка мыши берёт цвет шаблона',
-    pickLocked: 'Цвет «{name}» не открыт.',
-    pickUnknown: 'В палитре нет цвета этого пикселя шаблона.',
     add: 'Добавить картинку',
     layers: 'Шаблоны',
     move: 'Режим перемещения',
@@ -460,9 +441,6 @@ export function createHqTemplateManager({ getLanguage = () => 'en', remote = nul
   let progress = null;
   /** @type {Uint8Array|null} 1 byte per pixel of the active layer: 0 = ok/empty, 1 = mismatch. */
   let wrongMask = null;
-  /** Measured log-zoom change per wheel delta unit; refined on every zoom step. */
-  let zoomRate = ZOOM_RATE_GUESS;
-  let zoomInFlight = false;
   let scaleTimerId = null;
   /** @type {Map<string, {signature: string, window: {x: number, y: number, width: number, height: number}}>}
    * What is currently rasterised per layer, so unchanged layers are not redrawn.
@@ -831,7 +809,7 @@ export function createHqTemplateManager({ getLanguage = () => 'en', remote = nul
     renderCache.clear();
   }
 
-  // ------------------------------------------------------------ colour picker
+  // ---------------------------------------------------------- pointer → pixel
 
   /** Maps a pointer event to the HQ pixel underneath it.
    * The artboard frame is transformed by wplace's pan/zoom, so its bounding rect
@@ -871,109 +849,22 @@ export function createHqTemplateManager({ getLanguage = () => 'en', remote = nul
     return null;
   }
 
-  /** Reads the template colour at an HQ pixel, from the top-most layer covering it.
-   * @param {number} x - HQ pixel x.
-   * @param {number} y - HQ pixel y.
-   * @returns {{r: number, g: number, b: number}|null} The colour, or `null` when no template covers the pixel.
-   */
-  function templateColorAt(x, y) {
-    const layer = layerAt(x, y, true);
-    const image = imageOf(layer);
-    if (!image) return null;
-    const base = ((y - layer.y) * image.width + (x - layer.x)) * 4;
-    const data = image.data;
-    return { r: data[base], g: data[base + 1], b: data[base + 2] };
-  }
-
-  /** Collects the wplace palette swatches of the open paint session.
-   * They are plain buttons carrying their colour as an inline background, so the
-   * selection can be driven by clicking one — no access to Svelte state needed.
-   * @returns {Array<{button: HTMLElement, rgb: Array<number>, locked: boolean, label: string}>} The swatches (empty when no palette is open).
-   */
-  function readPalette() {
-    const root = dom.stage?.closest('.modal-box') || document;
-    const swatches = [];
-    for (const button of root.querySelectorAll('button[aria-pressed][aria-label]')) {
-      const match = /^rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(getComputedStyle(button).backgroundColor);
-      if (!match) continue;
-      if (!button.classList.contains('aspect-square')) continue;
-      swatches.push({
-        button,
-        rgb: [Number(match[1]), Number(match[2]), Number(match[3])],
-        // Locked colours carry a small lock badge and open the store when clicked.
-        locked: Boolean(button.querySelector('span[class*="absolute"]')),
-        label: button.getAttribute('aria-label') || '',
-      });
-    }
-    return swatches;
-  }
-
-  /** Selects the palette colour of the template pixel under the pointer.
-   * wplace's own picker only samples its native alliance overlay, so it always
-   * misses this overlay; this reimplements it against the loaded template.
-   * @param {PointerEvent|MouseEvent} event - The middle-click event.
-   * @returns {boolean} `true` when the event was handled and must not reach wplace.
-   */
-  function pickTemplateColor(event) {
-    const pixel = eventToHqPixel(event);
-    if (!pixel) return false;
-    const color = templateColorAt(pixel.x, pixel.y);
-    if (!color) return false;
-
-    const swatches = readPalette();
-    if (!swatches.length) return false; // No paint session open — leave middle-drag panning alone.
-
-    // #deface (222,250,206) marks an erase pixel, whose palette entry is Transparent — id 0. Its
-    // swatch has no background colour of its own, so readPalette() never collects it; go by id.
-    if (isDefaceRgb(color.r, color.g, color.b)) {
-      const root = dom.stage?.closest('.modal-box') || document;
-      const transparentSwatch = root.querySelector('#color-0');
-      if (!(transparentSwatch instanceof HTMLElement)) {
-        setMessage(t('pickUnknown'));
-        return true;
-      }
-      setMessage('');
-      transparentSwatch.click();
-      return true;
-    }
-
-    const swatch = swatches.find((entry) => entry.rgb[0] === color.r && entry.rgb[1] === color.g && entry.rgb[2] === color.b);
-    if (!swatch) {
-      setMessage(t('pickUnknown'));
-      return true;
-    }
-    if (swatch.locked) {
-      setMessage(t('pickLocked', { name: swatch.label }));
-      return true;
-    }
-    setMessage('');
-    swatch.button.click();
-    return true;
-  }
-
   const eventOverStage = (event) => Boolean(dom.stage?.isConnected) && dom.stage.contains(event.target);
 
   // Bound on `document` in the capture phase: wplace listens on the stage itself,
   // so an ancestor capture listener is the only way to run first and swallow the
-  // event before its own (template-less) picker sees it.
+  // event before it starts a stroke. Only in move mode, on our own template layer.
   function handleDocumentPointerDown(event) {
     if (startDrag(event)) {
       event.preventDefault();
       event.stopPropagation();
-      return;
     }
-    if (event.button !== 1 || !eventOverStage(event)) return;
-    if (!pickTemplateColor(event)) return;
-    event.preventDefault();
-    event.stopPropagation();
   }
 
-  /** Suppresses the browser's middle-click autoscroll over the artboard. */
   function handleDocumentMouseDown(event) {
     // Only swallowed once a drag actually started, so clicks that miss every
     // template still reach wplace.
     if (dragState && event.button === 0) event.preventDefault();
-    if (event.button === 1 && eventOverStage(event) && eventToHqPixel(event)) event.preventDefault();
   }
 
   // -------------------------------------------------------------------- drag
@@ -1046,98 +937,6 @@ export function createHqTemplateManager({ getLanguage = () => 'en', remote = nul
     event.preventDefault();
     event.stopPropagation();
     endDrag();
-  }
-
-  // -------------------------------------------------------------------- zoom
-
-  /** Current zoom of the headquarters artboard.
-   * The frame is laid out at `canvasWidth * scale` CSS pixels, so its rendered
-   * width divided by the canvas width is exactly the percentage wplace shows.
-   * @returns {number|null} Zoom in percent, or `null` when it cannot be measured.
-   */
-  function readZoomPercent() {
-    if (!dom.frame?.isConnected || !canvasWidth) return null;
-    const width = dom.frame.getBoundingClientRect().width;
-    return width > 0 ? (width / canvasWidth) * 100 : null;
-  }
-
-  /** Feeds one wheel notch to the stage, anchored at its centre so the view keeps its focus.
-   * @param {number} deltaY - Wheel delta; negative zooms in.
-   */
-  function sendWheel(deltaY) {
-    const stage = dom.stage;
-    if (!stage?.isConnected) return;
-    const rect = stage.getBoundingClientRect();
-    stage.dispatchEvent(new WheelEvent('wheel', {
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-      deltaY,
-      deltaMode: 0,
-      clientX: rect.left + rect.width / 2,
-      clientY: rect.top + rect.height / 2,
-    }));
-  }
-
-  const nextFrame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()));
-
-  /** Drives the wplace zoom to a target percentage.
-   *
-   * wplace owns the zoom state inside Svelte, so it cannot be assigned directly —
-   * writing the transform would be reverted on the next re-render. Instead the
-   * stage is fed synthetic wheel events and the resulting zoom is measured back
-   * out of the DOM; the delta-to-zoom rate is calibrated from the first step, so
-   * this keeps working if the client changes its zoom curve.
-   * @param {number} target - Requested zoom in percent.
-   */
-  async function setZoomPercent(target) {
-    if (zoomInFlight) return;
-    zoomInFlight = true;
-    try {
-      let current = readZoomPercent();
-      if (!current) {
-        setMessage(t('zoomFailed'));
-        return;
-      }
-      let stalled = 0;
-      for (let step = 0; step < ZOOM_MAX_STEPS; step++) {
-        const remaining = Math.log(target / current);
-        if (Math.abs(remaining) <= ZOOM_TOLERANCE) break;
-        // Wheel deltas are negative for zoom-in, hence the sign flip.
-        const delta = clamp(-remaining / zoomRate, -ZOOM_MAX_DELTA, ZOOM_MAX_DELTA);
-        sendWheel(delta);
-        await nextFrame();
-        const measured = readZoomPercent();
-        if (!measured) {
-          setMessage(t('zoomFailed'));
-          return;
-        }
-        const achieved = Math.log(measured / current);
-        if (Math.abs(achieved) < 1e-4) {
-          if (++stalled >= 2) {
-            // Either the client ignores wheel events or we are already at its limit.
-            if (Math.abs(Math.log(target / measured)) > ZOOM_TOLERANCE) setMessage(t('zoomFailed'));
-            return;
-          }
-        } else {
-          stalled = 0;
-          zoomRate = Math.abs(achieved / delta);
-        }
-        current = measured;
-      }
-      setMessage('');
-    } finally {
-      zoomInFlight = false;
-      syncZoomLabel();
-    }
-  }
-
-  /** Mirrors the measured zoom into the panel button row. */
-  function syncZoomLabel() {
-    const label = dom.controls?.zoomValue;
-    if (!label) return;
-    const percent = readZoomPercent();
-    label.textContent = percent ? `${Math.round(percent)}%` : '';
   }
 
   // ---------------------------------------------------------------------- UI
@@ -1350,7 +1149,6 @@ export function createHqTemplateManager({ getLanguage = () => 'en', remote = nul
     controls.message.textContent = message;
     controls.moveButton.setAttribute('aria-pressed', String(moveMode));
     controls.moveButton.classList.toggle('btn-active', moveMode);
-    syncZoomLabel();
     syncLayerList();
 
     if (!hasTemplate) return;
@@ -1462,28 +1260,6 @@ export function createHqTemplateManager({ getLanguage = () => 'en', remote = nul
     remoteRow.append(remoteLabel, remoteInput, remoteList, remoteButton);
     if (!remote?.fetchFile) remoteRow.style.display = 'none';
 
-    // Zoom presets: wplace only exposes wheel/pinch zoom, which is unusable for
-    // hitting a round percentage on a big canvas.
-    const zoomRow = document.createElement('div');
-    zoomRow.className = 'bm-hq-inline mt-2';
-    const zoomLabel = document.createElement('span');
-    zoomLabel.className = 'text-sm';
-    zoomLabel.textContent = `${t('zoom')}:`;
-    const zoomValue = document.createElement('span');
-    zoomValue.className = 'text-base-content/55 text-xs';
-    zoomRow.append(zoomLabel);
-    for (const preset of ZOOM_PRESETS) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'btn btn-xs btn-soft';
-      button.textContent = `${preset}%`;
-      button.addEventListener('click', () => {
-        setZoomPercent(preset).catch((error) => consoleWarn('[hq] zoom failed', error));
-      });
-      zoomRow.appendChild(button);
-    }
-    zoomRow.appendChild(zoomValue);
-
     const layersLabel = document.createElement('p');
     layersLabel.className = 'text-base-content/55 mt-2 text-xs';
     layersLabel.textContent = `${t('layers')}:`;
@@ -1556,17 +1332,12 @@ export function createHqTemplateManager({ getLanguage = () => 'en', remote = nul
     optionsRow.className = 'bm-hq-inline';
     optionsRow.append(enabledLabel, modeLabel, opacityLabel);
 
-    const pickHint = document.createElement('span');
-    pickHint.className = 'text-base-content/55 text-xs';
-    pickHint.textContent = t('pick');
-    statusRow.appendChild(pickHint);
-
     body.append(optionsRow, statusRow);
 
     const messageNode = document.createElement('p');
     messageNode.className = 'text-error mt-2 text-xs';
 
-    panel.append(header, remoteRow, zoomRow, empty, layersLabel, layerList, body, messageNode, fileInput);
+    panel.append(header, remoteRow, empty, layersLabel, layerList, body, messageNode, fileInput);
 
     dom.controls = {
       loadButton,
@@ -1583,7 +1354,6 @@ export function createHqTemplateManager({ getLanguage = () => 'en', remote = nul
       dither,
       remote: remoteInput,
       remoteList,
-      zoomValue,
       message: messageNode,
     };
     return panel;
@@ -1660,7 +1430,6 @@ export function createHqTemplateManager({ getLanguage = () => 'en', remote = nul
     if (progressTimerId === null) {
       progressTimerId = setInterval(() => {
         if (!dom.frame?.isConnected) return;
-        if (!zoomInFlight) syncZoomLabel();
         const active = getActiveLayer();
         const image = imageOf(active);
         if (!image || dragState) return;

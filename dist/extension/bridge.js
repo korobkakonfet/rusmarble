@@ -27,11 +27,7 @@
       case 'abort':
         abortable.get(id)?.abort?.();
         return;
-      case 'input': {
-        const r = await chrome.runtime.sendMessage({ type: 'input', ...args });
-        if (!r || r.error) return post({ id, error: r?.error || 'No answer from the extension.' });
-        return post({ id, result: r.result });
-      }
+      
       case 'xhr': {
         const token = { aborted: false, abort() { this.aborted = true; } };
         abortable.set(id, token);

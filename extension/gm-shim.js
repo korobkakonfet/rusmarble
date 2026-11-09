@@ -80,8 +80,7 @@
     setValue: (key, value) => call('set', { key, value }),
     deleteValue: (key) => call('delete', { key }),
     listValues: () => call('list', {}),
-    // Relay to an optional service-worker handler; builds without one answer with an error.
-    rmInput: (op, args) => call('input', { op, ...(args || {}) }),
+    /* @slot gm */
     info: __GM_INFO__,
   };
 

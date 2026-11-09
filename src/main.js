@@ -7,7 +7,7 @@ installGmStorageInstrumentation();
 import { profiler, initProfiler } from './profiler.js';
 import Overlay from './Overlay.js';
 // import Observers from './observers.js';
-import ApiManager, { WPLACE_CLOSE_ICON_PATH_SELECTOR, prewarmPixelEffects } from './apiManager.js';
+import ApiManager, { prewarmPixelEffects } from './apiManager.js';
 import TemplateManager from './templateManager.js';
 import { normalizeTemplatePaletteConversionOptions, templatePaletteConversionDefaults } from './Template.js';
 import { templateWorkerManager } from './templateWorkerManager.js';
@@ -46,13 +46,11 @@ const hostContext = {
   applyIntegerZoomLevel: (...args) => applyIntegerZoomLevel(...args),
   normalizeTilePixelCoords: (...args) => normalizeTilePixelCoords(...args),
   normalizeTemplateRemoteStream: (...args) => normalizeTemplateRemoteStream(...args),
-  clickElementLikeUser: (...args) => clickElementLikeUser(...args),
   getNormalizedElementText: (...args) => getNormalizedElementText(...args),
   getPaintPaletteRoot: (...args) => getPaintPaletteRoot(...args),
   isExtendedPaintPaletteOpen: (...args) => isExtendedPaintPaletteOpen(...args),
   getPaintPaletteExpandButton: (...args) => getPaintPaletteExpandButton(...args),
   isElementActuallyVisible: (...args) => isElementActuallyVisible(...args),
-  schedulePixelInfoCloseBurst: (...args) => schedulePixelInfoCloseBurst(...args),
   observeBlack: (...args) => observeBlack(...args),
   isMapMoving: (...args) => isMapMoving(...args),
   isBootTemplatesLoaded: () => bootTemplatesLoaded,
@@ -64,6 +62,8 @@ const hostContext = {
   /** Set from buildOverlayMain: (templates, enabled) -> {matched, changed}; skips templates
    * already in that state, so their tileProgress survives. */
   setTemplatesEnabledState: null,
+  /** Set from buildOverlayMain: () -> {reenabledColors, currentColorOnlyCleared}. */
+  enableAllTemplateColors: null,
 };
 import { layoutLanguageOptions, normalizeLayoutLanguage, translateLayout, getLayoutThemeLabel as getLocalizedLayoutThemeLabel, getTemplateDisplayLabel as getLocalizedTemplateDisplayLabel, getTemplateCreateModeLabel, getChatBanTypeLabel, getColorSortLabel } from './layoutI18n.js';
 import { encodeChunkSampleBytes } from './templateChunkUtils.js';
@@ -5600,6 +5600,10 @@ readBootStorageValue('bmTemplates', '{}').then(async storageTemplatesValue => {
     keysPressed.delete(key);
     // The loop will stop itself on the next frame if no keys are pressed
   }, true);
+  // A key released while the page has no focus never sends keyup, which left WASD panning
+  // forever.
+  window.addEventListener('blur', () => keysPressed.clear());
+  document.addEventListener('visibilitychange', () => { if (document.hidden) keysPressed.clear(); });
 
   // ------- Alt-hold: peek at the templates in fill mode -------
   // Held long enough to not fire on the Alt of an Alt+key shortcut, and cleared on any focus
@@ -5922,8 +5926,8 @@ function observeBlack() {
   const isRelevantObserveBlackNode = (node) => (
     node instanceof Element
     && (
-      node.matches?.('#color-1, .gap-1, .gap-1 > .btn:is([title], [data-tooltip]), #bm-button-move, #bm-button-paint')
-      || node.querySelector?.('#color-1, .gap-1 > .btn:is([title], [data-tooltip]), #bm-button-move, #bm-button-paint')
+      node.matches?.('#color-1, .gap-1, .gap-1 > .btn:is([title], [data-tooltip]), #bm-button-move')
+      || node.querySelector?.('#color-1, .gap-1 > .btn:is([title], [data-tooltip]), #bm-button-move')
     )
   );
   const queueObserveBlackSync = () => {
@@ -6247,100 +6251,6 @@ function getNormalizedElementText(element) {
     .toLowerCase();
 }
 
-function isLikelyPixelInfoHeadingText(text) {
-  const normalized = String(text || '').trim().toLowerCase();
-  if (!normalized || !/#\d+\b/.test(normalized)) return false;
-  return !/(leaderboard|notifications?|active bans|report user|rus marble|distance)/.test(normalized);
-}
-
-function getCloseLikeControls(container) {
-  if (!(container instanceof HTMLElement)) return [];
-  const controls = Array.from(container.querySelectorAll('button, [role="button"], [aria-label], [title]'));
-  return controls.filter((control) => {
-    if (!(control instanceof HTMLElement)) return false;
-    if (!isElementActuallyVisible(control)) return false;
-    if (control.closest('#bm-overlay')) return false;
-    if (control instanceof HTMLButtonElement && control.disabled) return false;
-    const text = [
-      control.textContent,
-      control.getAttribute('aria-label'),
-      control.getAttribute('title'),
-      control.getAttribute('name'),
-    ]
-      .filter(Boolean)
-      .join(' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .toLowerCase();
-    return (
-      text === 'x'
-      || text === '×'
-      || text === '✕'
-      || /\b(close|dismiss|cancel|back)\b/.test(text)
-    );
-  });
-}
-
-function scoreCloseLikeControl(control) {
-  const text = [
-    control.textContent,
-    control.getAttribute('aria-label'),
-    control.getAttribute('title'),
-    control.getAttribute('name'),
-  ]
-    .filter(Boolean)
-    .join(' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
-  let score = 0;
-  if (/\bclose\b/.test(text)) score += 10;
-  // wplace's own close icon, whatever language the label is in.
-  if (control.querySelector?.(WPLACE_CLOSE_ICON_PATH_SELECTOR)) score += 10;
-  if (/\b(dismiss|cancel|back)\b/.test(text)) score += 6;
-  if (text === '✕' || text === '×' || text === 'x') score += 8;
-  const rect = control.getBoundingClientRect();
-  if (rect.width <= 48 && rect.height <= 48) score += 2;
-  return score;
-}
-
-function clickElementLikeUser(element) {
-  if (!(element instanceof HTMLElement)) return false;
-  try {
-    if (typeof element.focus === 'function') {
-      try {
-        element.focus({ preventScroll: true });
-      } catch (_) {
-        element.focus();
-      }
-    }
-    if (typeof PointerEvent === 'function') {
-      element.dispatchEvent(new PointerEvent('pointerdown', {
-        bubbles: true,
-        cancelable: true,
-        button: 0,
-        pointerId: 1,
-        pointerType: 'mouse',
-        isPrimary: true,
-      }));
-      element.dispatchEvent(new PointerEvent('pointerup', {
-        bubbles: true,
-        cancelable: true,
-        button: 0,
-        pointerId: 1,
-        pointerType: 'mouse',
-        isPrimary: true,
-      }));
-    }
-    element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
-    element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, button: 0 }));
-    element.click();
-    return true;
-  } catch (_) {
-    return false;
-  }
-}
-
 /** Smallest number of colour swatches that identifies a palette container. */
 const MIN_PALETTE_SWATCHES = 8;
 
@@ -6424,92 +6334,6 @@ function getPaintPaletteExpandButton(root = getPaintPaletteRoot()) {
     })
     .sort((left, right) => right.score - left.score);
   return candidates[0]?.button ?? null;
-}
-
-function ensureExtendedPaintPalette() {
-  const paletteRoot = getPaintPaletteRoot();
-  if (!(paletteRoot instanceof HTMLElement)) {
-    throw new Error('Paint palette is not open.');
-  }
-  if (isExtendedPaintPaletteOpen(paletteRoot)) {
-    return 'Paint palette is already extended.';
-  }
-  const expandButton = getPaintPaletteExpandButton(paletteRoot);
-  if (!(expandButton instanceof HTMLElement)) {
-    throw new Error('Paint palette expand button was not found.');
-  }
-  if (!clickElementLikeUser(expandButton)) {
-    throw new Error('Failed to click the paint palette expand button.');
-  }
-  return 'Paint palette expansion requested.';
-}
-
-function closePixelInfoWindows() {
-  let closedAny = false;
-  try {
-    const directCloseButton = apiManager?.getCloseButton?.();
-    if (directCloseButton && clickElementLikeUser(directCloseButton)) {
-      closedAny = true;
-    }
-  } catch (_) {}
-
-  const directCloseCandidates = Array.from(document.querySelectorAll(
-    // The first selector matches by icon, not label: aria-label is localized ("Закрыть").
-    `.selected-pixel button:has(${WPLACE_CLOSE_ICON_PATH_SELECTOR}), .selected-pixel button[aria-label="Close"], .rounded-t-box button[aria-label="Close"], dialog.modal button[aria-label="Close"], dialog button[aria-label="Close"], .modal button[aria-label="Close"]`
-  ))
-    .filter((button) => button instanceof HTMLElement)
-    .filter((button) => isElementActuallyVisible(button))
-    .map((button) => {
-      const container = button.closest('.selected-pixel, .rounded-t-box, dialog.modal, dialog, .modal');
-      const text = getNormalizedElementText(container);
-      let score = scoreCloseLikeControl(button);
-      if (container && isElementActuallyVisible(container)) score += 4;
-      if (/\bpaint\b/.test(text) || /\bshare\b/.test(text)) score += 6;
-      if (/\bnot painted\b/.test(text) || /\bpainted by\b/.test(text) || /\bno alliance\b/.test(text)) score += 4;
-      if (/#\s*\d+\b/.test(text)) score += 2;
-      return { button, score };
-    })
-    .sort((left, right) => right.score - left.score);
-  for (const { button, score } of directCloseCandidates) {
-    if (score <= 0) continue;
-    closedAny = clickElementLikeUser(button) || closedAny;
-  }
-
-  const visitedContainers = new Set();
-  const headings = Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, h6, [role="heading"]'))
-    .filter((heading) => heading instanceof HTMLElement)
-    .filter((heading) => isElementActuallyVisible(heading))
-    .filter((heading) => isLikelyPixelInfoHeadingText(getNormalizedElementText(heading)));
-  for (const heading of headings) {
-    let container = heading;
-    let depth = 0;
-    while (container && container instanceof HTMLElement && container !== document.body && depth < 8) {
-      if (visitedContainers.has(container)) break;
-      const closeControls = getCloseLikeControls(container)
-        .sort((left, right) => scoreCloseLikeControl(right) - scoreCloseLikeControl(left));
-      if (closeControls.length > 0) {
-        visitedContainers.add(container);
-        closedAny = clickElementLikeUser(closeControls[0]) || closedAny;
-        break;
-      }
-      container = container.parentElement;
-      depth += 1;
-    }
-  }
-  return closedAny;
-}
-
-function schedulePixelInfoCloseBurst() {
-  closePixelInfoWindows();
-  requestAnimationFrame(() => {
-    closePixelInfoWindows();
-  });
-  window.setTimeout(() => {
-    closePixelInfoWindows();
-  }, 80);
-  window.setTimeout(() => {
-    closePixelInfoWindows();
-  }, 220);
 }
 
 function normalizeTemplateJumpOriginMode(value) {
@@ -7058,7 +6882,6 @@ async function jumpToNextUnpaintedTemplatePixel(options = null) {
     const originMode = normalizeTemplateJumpOriginMode(options?.originMode);
     report.origin = fixedOriginCoords ? 'pixel' : originMode;
     const originLabel = fixedOriginCoords ? `start pixel ${fixedOriginCoords.join(',')}` : getTemplateJumpOriginLabel(originMode);
-    schedulePixelInfoCloseBurst();
     const activeTemplates = (templateManager.templatesArray ?? []).filter((template) => templateManager.isTemplateUserEnabled(template));
     report.activeTemplates = activeTemplates.map((template) => template.displayName ?? template.storageKey ?? '?');
     if (!activeTemplates.length) {
@@ -11138,6 +10961,40 @@ async function buildOverlayMain() {
   };
   hostContext.setTemplatesEnabledState = setMatchedTemplatesEnabledState;
 
+  // Switches every colour of every template back on and turns "Show current colour only" off.
+  // Locked and completed colours stay hidden when those settings are on. Only touches what is
+  // off, so a profile with everything on pays nothing.
+  hostContext.enableAllTemplateColors = async () => {
+    const reenabled = [];
+    for (const template of templateManager.templatesArray ?? []) {
+      if (!template?.colorPalette) continue;
+      for (const [rgb, meta] of Object.entries(template.colorPalette)) {
+        if (meta && meta.enabled === false) {
+          meta.enabled = true;
+          const id = rgbToMeta.get(rgb)?.id;
+          if (Number.isFinite(id) && !reenabled.includes(id)) reenabled.push(id);
+        }
+      }
+    }
+    const wasCurrentOnly = templateManager.isOnlyCurrentColorShown();
+    if (wasCurrentOnly) {
+      await templateManager.setOnlyCurrentColorShown(false);
+      const checkbox = document.getElementById('bm-only-current-color-enabled');
+      if (checkbox instanceof HTMLInputElement) checkbox.checked = false;
+    }
+    if (reenabled.length) {
+      syncToggleList();
+      removeLayer('overlay');
+      await templateManager.createOverlayOnMapVisibleFirst();
+      buildColorFilterList();
+      if (templateManager.isErrorMapShown() && templateManager.isErrorMapOnlyEnabledColorsShown()) forceRefreshTiles();
+    } else if (wasCurrentOnly) {
+      removeLayer('overlay');
+      await templateManager.createOverlayOnMapVisibleFirst();
+    }
+    return { reenabledColors: reenabled.sort((a, b) => a - b), currentColorOnlyCleared: wasCurrentOnly };
+  };
+
   const setMatchedColorsEnabledState = async (matchedColors, enabled) => {
     const colorKeys = [...new Set(
       (Array.isArray(matchedColors) ? matchedColors : [])
@@ -11340,29 +11197,6 @@ async function buildOverlayMain() {
             info.origin ?? info.point ?? info.corner ?? info.from ?? 'center'
           )}`,
         };
-      case 'close-pixel-info':
-      case 'close-pixel-info-window':
-      case 'close-pixel-info-panel':
-      case 'pixel-info-close':
-      case 'close-info':
-        return {
-          kind: 'close-pixel-info',
-          buttonText: 'Close',
-          label: info.label ?? 'Close pixel info',
-        };
-      case 'open-extended-palette':
-      case 'open-extended-paint-palette':
-      case 'extend-palette':
-      case 'extend-paint-palette':
-      case 'palette-extend':
-      case 'palette-expand':
-      case 'expand-palette':
-      case 'expand-paint-palette':
-        return {
-          kind: 'open-extended-palette',
-          buttonText: 'Palette',
-          label: info.label ?? 'Open extended palette',
-        };
       default:
         // An extension may add its own action kinds.
         return ext.controlActions.parse(info, hostContext);
@@ -11488,17 +11322,6 @@ async function buildOverlayMain() {
           return { jumped: jumped === true, status: `Jump requested from ${getTemplateJumpOriginLabel(controlAction.originMode)}.` };
         }
         return `Jump requested from ${getTemplateJumpOriginLabel(controlAction.originMode)}.`;
-      }
-      case 'close-pixel-info': {
-        schedulePixelInfoCloseBurst();
-        const statusMessage = 'Close pixel info requested.';
-        overlayMain.handleDisplayStatus(statusMessage);
-        return statusMessage;
-      }
-      case 'open-extended-palette': {
-        const statusMessage = ensureExtendedPaintPalette();
-        overlayMain.handleDisplayStatus(statusMessage);
-        return statusMessage;
       }
       default:
         return await ext.controlActions.execute(controlAction, hostContext);
@@ -11706,32 +11529,6 @@ async function buildOverlayMain() {
   };
   window.forceUpdateTheme = forceUpdateTheme;
 
-  // a workaround to force Map.prototype to be called
-  const forceClickCenter = () => {
-    if (!isMapTilerLoaded()) {
-      if (!forceClickCenter.clickCount) forceClickCenter.clickCount = 0;
-      // Try at most 10 times
-      if (forceClickCenter.clickCount < 10) {
-        const allianceOrRankingButton = document.querySelector(".flex>.btn.btn-square.relative.shadow-md");
-        if (allianceOrRankingButton) {
-          // not in painting mode
-          const canvas = document.querySelector("canvas.maplibregl-canvas");
-          if (canvas) {
-            const ev = new MouseEvent("click", {
-              "bubbles": true, "cancelable": true,
-              "clientX": canvas.offsetWidth / 2,
-              "clientY": canvas.offsetHeight / 2,
-              "button": 0
-            });
-            canvas.dispatchEvent(ev);
-            ++forceClickCenter.clickCount;
-          };
-        }
-      };
-      setTimeout(forceClickCenter, 100);
-    };
-  };
-  window.forceClickCenter = forceClickCenter;
 
   // Listen for template creation/import completion to (re)build palette list
   window.addEventListener('message', (event) => {
@@ -11759,9 +11556,6 @@ async function buildOverlayMain() {
       if (templateManager.isThemeOverridden()) {
         doAfterMapFound(forceUpdateTheme);
       }
-    } catch (_) {}
-    try {
-      forceClickCenter();
     } catch (_) {}
   }, 0);
 

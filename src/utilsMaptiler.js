@@ -857,6 +857,9 @@ export function syncSiteSkin() {
   }
 }
 
+const DEFERRED_THEME_RETRY_MS = 500;
+let deferredThemeTimer = 0;
+
 /** Override the map theme
  * @since 0.85.40
  */
@@ -871,6 +874,13 @@ export function setTheme(themeName) {
     delete document.documentElement.dataset["rmMapSkin"];
   }
   syncSiteSkin();
+  // Don't change the map style while drawing: the style is applied once the paint panel is closed.
+  // The latest request wins. The site's own controls are never pressed for this.
+  clearTimeout(deferredThemeTimer);
+  if (!document.querySelector(".flex>.btn.btn-square.relative.shadow-md")) {
+    deferredThemeTimer = setTimeout(() => { void setTheme(themeName); }, DEFERRED_THEME_RETRY_MS);
+    return Promise.resolve(null);
+  }
   return controlMapTiler((map, themeName, bmCanvas) => {
     document.head["__bmCanvas"] = bmCanvas; // sync bmCanvas to document
     // The default pixel-hover styledata callback only triggers once that we cannot reset
@@ -1055,14 +1065,6 @@ export function setTheme(themeName) {
       restoreLayers.name = restoreLayersName;
       map["on"]("styledata", restoreLayers);
     };
-    const allianceOrRankingButton = document.querySelector(".flex>.btn.btn-square.relative.shadow-md");
-    if (!allianceOrRankingButton) {
-      // don't change style during drawing
-      const closeButton = document.querySelector(".gap-1+.btn-circle");
-      if (closeButton) {
-        closeButton.click();
-      }
-    }
     map["setStyle"]("https://maps.wplace.live/styles/" + themeName, {});
     return null;
   }, themeName === "halloween" ? "fiord" : themeName, bmCanvas);
@@ -1080,42 +1082,15 @@ export var overrideRandom = {
  */
 export async function teleportToGeoCoords(lat, lng, options = null) {
   let smooth = false;
-  const revealPixelInfo = options?.revealPixelInfo !== false;
 
   if (isMapTilerLoaded()) {
     const funcName = smooth ? "flyTo" : "jumpTo";
     controlMapTiler((map, lat, lng, funcName) => {
       map[funcName]({'center': [lng, lat], 'zoom': 16});
     }, lat, lng, funcName);
-    const allianceOrRankingButton = document.querySelector(".flex>.btn.btn-square.relative.shadow-md");
-    // A visible colour swatch means paint mode is open: there the click below would paint a
-    // pixel at the centre instead of showing its info.
-    const paintPaletteOpen = Array.from(document.querySelectorAll('[id^="color-"]'))
-      .some((swatch) => swatch instanceof HTMLElement && swatch.offsetParent !== null);
-    if (revealPixelInfo && allianceOrRankingButton && !paintPaletteOpen) {
-      // not in painting mode, click on center to show pixel info
-      const canvas = document.querySelector("canvas.maplibregl-canvas");
-      const ev = new MouseEvent("click", {
-        "bubbles": true, "cancelable": true,
-        "clientX": canvas.offsetWidth / 2,
-        "clientY": canvas.offsetHeight / 2,
-        "button": 0
-      });
-      canvas.dispatchEvent(ev);
-    }
   } else {
-    const randomTeleportBtn = document.querySelector(".mb-2>.btn-ghost");
-    // querySelector yields null, not undefined - the old `!== undefined` guard let a missing
-    // button through and threw on .click(), swallowing the URL fallback below.
-    if (randomTeleportBtn) {
-      // Notice that it teleports to the .0 point instead of .5 (center) of the pixel, so we do not need to add an extra 0.5
-      overrideRandom["data"] = coordsGeoCoordsToTileCoords(lat, lng, false);
-      randomTeleportBtn.click();
-    } else {
-      // The final resort
-      const url = `https://wplace.live/?lat=${lat}&lng=${lng}&zoom=16`;
-      window.location.href = url;
-    }
+    // The map is not reachable yet: navigate instead. The site's own controls are never pressed.
+    window.location.href = `https://wplace.live/?lat=${lat}&lng=${lng}&zoom=16`;
   }
 }
 
@@ -1175,20 +1150,24 @@ export function coordsGeoCoordsToTileCoords(latitude, longitude, truncate = true
   ];
 }
 
-/** Click the zoom in button
- * @since 0.85.43
- * @deprecated only for demo purpose
+/** Zooms the map as one wheel event over a viewport point would, through the map API: the map
+ * itself is sent no event. Uses MapLibre's own wheel curve (wheel 1/450, trackpad 1/100).
+ * @param {number} deltaY
+ * @param {number} deltaMode - WheelEvent.deltaMode (0 px, 1 line, 2 page)
+ * @param {number} clientX
+ * @param {number} clientY
  */
-export function zoomIn() {
-  document.querySelectorAll(".gap-1>.btn:is([title],[data-tooltip])")[0].click();
-}
-
-/** Click the zoom out button
- * @since 0.85.43
- * @deprecated only for demo purpose
- */
-export function zoomOut() {
-  document.querySelectorAll(".gap-1>.btn:is([title],[data-tooltip])")[1].click();
+export function wheelZoomMap(deltaY, deltaMode, clientX, clientY) {
+  return controlMapTiler((map, deltaY, deltaMode, clientX, clientY) => {
+    const rect = map["getCanvas"]()["getBoundingClientRect"]();
+    const delta = deltaY * (deltaMode === 1 ? 40 : deltaMode === 2 ? 800 : 1);
+    if (!delta) return null;
+    const rate = Math.abs(delta) < 4.000244140625 ? 1 / 100 : 1 / 450;
+    const zoomDelta = Math.log2(2 / (1 + Math.exp(-Math.abs(delta * rate)))) * (delta > 0 ? -1 : 1);
+    const around = map["unproject"]([clientX - rect.left, clientY - rect.top]);
+    map["zoomTo"](map["getZoom"]() + zoomDelta, { "around": around, "duration": 0 });
+    return null;
+  }, deltaY, deltaMode, clientX, clientY);
 }
 
 /** Get the displacement in pixels per wplace pixel

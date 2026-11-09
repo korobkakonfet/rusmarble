@@ -1,6 +1,6 @@
 /** @file Store → Flags: shows every flag at once as a compact grid, with the flags RusMarble
- * users buy most at the front. The collapsed grid only renders the first few flags, so the
- * site's "Show more" is clicked once and its toggle is then hidden; the small card layout and
+ * users buy most at the front. The collapsed grid only renders the first few flags; once the
+ * user expands it with the site's "Show more", that toggle is hidden. The small card layout and
  * the favourites' `order` live in overlay.css. The Svelte-owned DOM is only tagged with a data
  * attribute, never moved.
  * @since 0.87.132
@@ -14,10 +14,12 @@ const COLLAPSED_MAX_CARDS = 20; // Fewer rendered cards than this = the site's c
 /** @param {HTMLElement} section */
 function processSection(section) {
   if (section.hasAttribute('data-rm-flags-expanded')) {return;}
-  const toggle = section.querySelector(TOGGLE_SELECTOR);
-  if (!toggle) {return;}
-  section.setAttribute('data-rm-flags-expanded', ''); // Once per section: never loops on the toggle
-  if (section.querySelectorAll(CARD_SELECTOR).length < COLLAPSED_MAX_CARDS) {toggle.click();}
+  if (!section.querySelector(TOGGLE_SELECTOR)) {return;}
+  // The attribute hides the site's toggle (overlay.css), so it is set only once every flag is
+  // rendered, i.e. after the user's own press. The toggle is never pressed for them.
+  if (section.querySelectorAll(CARD_SELECTOR).length >= COLLAPSED_MAX_CARDS) {
+    section.setAttribute('data-rm-flags-expanded', '');
+  }
 }
 
 let scheduled = false;

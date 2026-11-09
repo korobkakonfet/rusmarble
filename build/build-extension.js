@@ -46,12 +46,18 @@ const gmInfo = {
   scriptHandler: 'RusMarble Extension',
   version: pkg.version,
 };
-const shim = fs.readFileSync(path.join(SRC, 'gm-shim.js'), 'utf8').replace('__GM_INFO__', JSON.stringify(gmInfo));
+// `/* @slot name */` markers in the shim and bridge take an alternate build's additions from
+// src/exp/extension/slots/<name>.part; the normal build leaves them empty.
+const fillSlots = (source) => source.replace(/\/\* @slot (\w+) \*\//g, (_, name) => {
+  const part = path.join(ROOT, 'src/exp/extension/slots', `${name}.part`);
+  return EXP && fs.existsSync(part) ? fs.readFileSync(part, 'utf8').trim() : '';
+});
+const shim = fillSlots(fs.readFileSync(path.join(SRC, 'gm-shim.js'), 'utf8')).replace('__GM_INFO__', JSON.stringify(gmInfo));
 // The shim parks its objects on window.__rmGm; take them and delete it before the page's own
 // scripts run, so nothing of ours stays on the page's window.
 const pageJs = `${shim}\n(() => {\nconst __rm = window.__rmGm;\ndelete window.__rmGm;\n(function (GM, GM_info, GM_xmlhttpRequest, unsafeWindow) {\n${body}\n})(__rm.GM, __rm.GM_info, __rm.GM_xmlhttpRequest, __rm.unsafeWindow);\n})();\n`;
 fs.writeFileSync(path.join(OUT, 'page.js'), pageJs, 'utf8');
-fs.copyFileSync(path.join(SRC, 'bridge.js'), path.join(OUT, 'bridge.js'));
+fs.writeFileSync(path.join(OUT, 'bridge.js'), fillSlots(fs.readFileSync(path.join(SRC, 'bridge.js'), 'utf8')), 'utf8');
 let background = fs.readFileSync(path.join(SRC, 'background.js'), 'utf8');
 if (EXP) {
   const expDir = path.join(ROOT, 'src/exp/extension');
@@ -83,7 +89,7 @@ const icons = Object.fromEntries(iconSizes.map((s) => [String(s), `icons/icon${s
 const expPermissions = [];
 if (EXP) {
   const expDir = path.join(ROOT, 'src/exp/extension');
-  for (const file of fs.existsSync(expDir) ? fs.readdirSync(expDir) : []) {
+  for (const file of fs.existsSync(expDir) ? fs.readdirSync(expDir).filter((f) => f.endsWith('.js')) : []) {
     for (const m of fs.readFileSync(path.join(expDir, file), 'utf8').matchAll(/^\/\/ @permission\s+(\S+)/gm)) {
       if (!expPermissions.includes(m[1])) expPermissions.push(m[1]);
     }

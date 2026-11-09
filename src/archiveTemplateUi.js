@@ -3,7 +3,7 @@
  */
 
 import { makePanelDraggable, makePointerPannable, registerFloatingPanel } from './utils.js';
-import { coordsTileCoordsToGeoCoords, getMapCanvasElement, projectGeoToScreen } from './utilsMaptiler.js';
+import { coordsTileCoordsToGeoCoords, getMapCanvasElement, projectGeoToScreen, wheelZoomMap } from './utilsMaptiler.js';
 
 /**
  * Creates the time-archive template UI helpers while keeping their internal modal state
@@ -949,16 +949,14 @@ export const createArchiveTemplateUi = (deps = {}) => {
       };
 
       // The zone itself moves the selection. It sits on top of the map, so the wheel would stop
-      // zooming over it; hand wheel events on to the map canvas instead.
+      // zooming over it; zoom the map through its API instead (no event is sent to the map).
       const moveArea = document.createElement('div');
       moveArea.className = 'bm-archive-move-area';
       frame.appendChild(moveArea);
       attachEdgeDrag(moveArea, 0, 0, true);
       const forwardWheel = (event) => {
-        const mapCanvas = getMapCanvasElement();
-        if (!mapCanvas) return;
         event.preventDefault();
-        mapCanvas.dispatchEvent(new WheelEvent('wheel', event));
+        wheelZoomMap(event.deltaY, event.deltaMode, event.clientX, event.clientY);
       };
       moveArea.addEventListener('wheel', forwardWheel, { passive: false });
       cleanups.push(() => moveArea.removeEventListener('wheel', forwardWheel));
