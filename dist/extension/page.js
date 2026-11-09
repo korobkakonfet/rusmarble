@@ -81,7 +81,7 @@
     deleteValue: (key) => call('delete', { key }),
     listValues: () => call('list', {}),
     
-    info: {"script":{"name":"Rus Marble","version":"0.87.150","namespace":"https://github.com/SwingTheVine/"},"scriptHandler":"RusMarble Extension","version":"0.87.150"},
+    info: {"script":{"name":"Rus Marble","version":"0.87.151","namespace":"https://github.com/SwingTheVine/"},"scriptHandler":"RusMarble Extension","version":"0.87.151"},
   };
 
   const GM_xmlhttpRequest = (details) => {
