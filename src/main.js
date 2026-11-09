@@ -4690,6 +4690,7 @@ inject(() => {
     };
   };
   const restoreMapPrototype = function () {
+    removeMapConstructionTrap();
     if (mapPrototypeRestoreTimer !== null) {
       clearTimeout(mapPrototypeRestoreTimer);
       mapPrototypeRestoreTimer = null;
@@ -4710,6 +4711,38 @@ inject(() => {
   //     return hookedMapFuncs[key].call(this, ...args);
   //   };
   // });
+  // Catches the maplibre map while it is being built. Its constructor creates the input handlers,
+  // and each of them does `this._map = map` (plain assignment), which reaches this accessor on
+  // Object.prototype for any object without its own `_map`. The value is stored as an own data
+  // property right away, so every object behaves exactly as without the trap, and the trap is
+  // removed the moment the map is seen. Needed because the Map.prototype.values hook below only
+  // fires once wplace iterates its crosshair tiles, i.e. after the first click on the map.
+  const MAP_TRAP_KEY = "_map";
+  let mapConstructionTrapInstalled = false;
+  function removeMapConstructionTrap() {
+    if (!mapConstructionTrapInstalled) { return; }
+    mapConstructionTrapInstalled = false;
+    try { delete Object.prototype[MAP_TRAP_KEY]; } catch (_) {}
+  }
+  if (!Object.prototype.hasOwnProperty(MAP_TRAP_KEY)) {
+    try {
+      Object.defineProperty(Object.prototype, MAP_TRAP_KEY, {
+        "configurable": true,
+        "enumerable": false,
+        "get": function () { return undefined; },
+        "set": function (value) {
+          try {
+            Object.defineProperty(this, MAP_TRAP_KEY, { "value": value, "writable": true, "configurable": true, "enumerable": true });
+          } catch (_) {}
+          if (value && typeof value["flyTo"] === "function" && typeof value["addSource"] === "function" && !document.head?.["__bmmap"]) {
+            document.head["__bmmap"] = value;
+            restoreMapPrototype();
+          }
+        },
+      });
+      mapConstructionTrapInstalled = true;
+    } catch (_) {}
+  }
   Map.prototype.values = hookedMapValues;
   // Patching a builtin on Map.prototype disables SpiderMonkey's (and V8's) inline fast path for
   // Map iteration process-wide, and wplace is Svelte 5 — very Map-heavy. The hook normally

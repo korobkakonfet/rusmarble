@@ -1074,6 +1074,87 @@ export var overrideRandom = {
   "data": null
 }; // The coordinates to override teleportation
 
+const TELEPORT_MARKER_MS = 10000;
+const TELEPORT_MARKER_FADE_MS = 1500;
+/** Extra px around the marker that still counts as clicking on it. */
+const TELEPORT_MARKER_HIT_SLOP_PX = 6;
+const TELEPORT_MARKER_MIN_PX = 14;
+/** @type {{el: HTMLElement, raf: number, onPointerDown: (event: PointerEvent) => void} | null} */
+let teleportMarker = null;
+
+/** Removes the teleport target marker, if one is shown. */
+export function hideTeleportMarker() {
+  if (!teleportMarker) return;
+  cancelAnimationFrame(teleportMarker.raf);
+  window.removeEventListener('pointerdown', teleportMarker.onPointerDown, true);
+  teleportMarker.el.remove();
+  teleportMarker = null;
+}
+
+/** Outlines a teleport target on the map: our own overlay element, following the map while it
+ * moves. It replaces the pixel-info window the site used to open there, so nothing on the site
+ * is pressed. Gone after TELEPORT_MARKER_MS or once the user presses on it; it never takes
+ * pointer input itself (the press goes on to the site unchanged, it is only looked at).
+ * @param {number[]} northWest - [lat, lng] of the area's top-left corner
+ * @param {number[]} [southEast] - [lat, lng] of its bottom-right corner; a point when omitted
+ */
+export function showTeleportMarker(northWest, southEast = northWest) {
+  hideTeleportMarker();
+  const el = document.createElement('div');
+  el.setAttribute('aria-hidden', 'true');
+  Object.assign(el.style, {
+    position: 'fixed', left: '0px', top: '0px', width: '0px', height: '0px', display: 'none',
+    boxSizing: 'border-box', pointerEvents: 'none', zIndex: '10', borderRadius: '3px',
+    border: '2px solid #ff2d55', outline: '2px solid rgba(255, 255, 255, 0.95)', outlineOffset: '0px',
+  });
+  document.body.appendChild(el);
+  const started = performance.now();
+  const marker = {
+    el,
+    raf: 0,
+    onPointerDown: (event) => {
+      if (el.style.display === 'none') return;
+      const rect = el.getBoundingClientRect();
+      const slop = TELEPORT_MARKER_HIT_SLOP_PX;
+      if (event.clientX >= rect.left - slop && event.clientX <= rect.right + slop
+        && event.clientY >= rect.top - slop && event.clientY <= rect.bottom + slop) {
+        hideTeleportMarker();
+      }
+    },
+  };
+  // Passive and capture-phase: sees the press first, never stops or alters it.
+  window.addEventListener('pointerdown', marker.onPointerDown, { capture: true, passive: true });
+  const tick = () => {
+    if (teleportMarker !== marker) return;
+    const elapsed = performance.now() - started;
+    if (elapsed > TELEPORT_MARKER_MS) { hideTeleportMarker(); return; }
+    const canvas = getMapCanvasElement();
+    const a = canvas ? projectGeoToScreen(northWest[0], northWest[1]) : null;
+    const b = a ? projectGeoToScreen(southEast[0], southEast[1]) : null;
+    if (a && b) {
+      const rect = canvas.getBoundingClientRect();
+      const width = Math.max(TELEPORT_MARKER_MIN_PX, Math.abs(b.x - a.x));
+      const height = Math.max(TELEPORT_MARKER_MIN_PX, Math.abs(b.y - a.y));
+      const centreX = rect.left + (a.x + b.x) / 2;
+      const centreY = rect.top + (a.y + b.y) / 2;
+      el.style.left = `${centreX - width / 2}px`;
+      el.style.top = `${centreY - height / 2}px`;
+      el.style.width = `${width}px`;
+      el.style.height = `${height}px`;
+      // A slow pulse, fading out at the end.
+      const pulse = 0.5 + 0.5 * Math.sin(elapsed / 180);
+      el.style.boxShadow = `0 0 ${6 + 8 * pulse}px ${2 + 3 * pulse}px rgba(255, 45, 85, 0.75)`;
+      el.style.opacity = String(Math.min(1, (TELEPORT_MARKER_MS - elapsed) / TELEPORT_MARKER_FADE_MS));
+      el.style.display = 'block';
+    } else {
+      el.style.display = 'none';
+    }
+    marker.raf = requestAnimationFrame(tick);
+  };
+  teleportMarker = marker;
+  marker.raf = requestAnimationFrame(tick);
+}
+
 /** Teleport user to coordinate
  * @param {*} lat - latitude
  * @param {*} lng - longitude
@@ -1081,17 +1162,52 @@ export var overrideRandom = {
  * @since 0.85.9
  */
 export async function teleportToGeoCoords(lat, lng, options = null) {
-  let smooth = false;
-
-  if (isMapTilerLoaded()) {
-    const funcName = smooth ? "flyTo" : "jumpTo";
-    controlMapTiler((map, lat, lng, funcName) => {
-      map[funcName]({'center': [lng, lat], 'zoom': 16});
-    }, lat, lng, funcName);
-  } else {
-    // The map is not reachable yet: navigate instead. The site's own controls are never pressed.
-    window.location.href = `https://wplace.live/?lat=${lat}&lng=${lng}&zoom=16`;
+  // Without the map handle yet (early in boot, before the site has called into the map), wait
+  // for it rather than reloading: the jump keeps the page, its state and the session.
+  if (isMapTilerLoaded() || await waitForMapHandle(TELEPORT_MAP_WAIT_MS)) {
+    controlMapTiler((map, lat, lng) => {
+      map["jumpTo"]({'center': [lng, lat], 'zoom': 16});
+    }, lat, lng);
+    // Marks the target where the site's pixel info used to open (revealPixelInfo: false = none).
+    if (options?.revealPixelInfo !== false) {
+      showTeleportMarker(options?.markNorthWest ?? [lat, lng], options?.markSouthEast ?? options?.markNorthWest ?? [lat, lng]);
+    }
+    return;
   }
+  // Still no map: the exp build presses the site's random-teleport button with real input,
+  // its answer swapped for the target (overrideRandom) — a jump, no reload. Public builds press
+  // nothing on the site, so there is no fallback hook.
+  if (teleportPressFallback) {
+    try {
+      if (await teleportPressFallback(lat, lng)) return;
+    } catch (_) {}
+  }
+  // The final resort.
+  window.location.href = `https://wplace.live/?lat=${lat}&lng=${lng}&zoom=16`;
+}
+
+/** How long a teleport waits for the map handle before falling back. */
+const TELEPORT_MAP_WAIT_MS = 8000;
+
+/** Polls for the map handle for up to `ms`; resolves whether it was found. */
+async function waitForMapHandle(ms) {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    if (isMapTilerLoaded()) return true;
+  }
+  return false;
+}
+
+/** @type {((lat: number, lng: number) => Promise<boolean>) | null} */
+let teleportPressFallback = null;
+
+/** Registers the no-map teleport fallback (exp: a trusted random-teleport press). It resolves
+ * true when it moved the camera.
+ * @param {((lat: number, lng: number) => Promise<boolean>) | null} fn
+ */
+export function setTeleportPressFallback(fn) {
+  teleportPressFallback = typeof fn === 'function' ? fn : null;
 }
 
 
@@ -1103,7 +1219,10 @@ export async function teleportToGeoCoords(lat, lng, options = null) {
  */
 export async function teleportToTileCoords(coordsTile, coordsPixel, options = null) {
   const geoCoords = coordsTileCoordsToGeoCoords(coordsTile, coordsPixel);
-  await teleportToGeoCoords(geoCoords[0], geoCoords[1], options);
+  // The marker outlines the whole pixel, not just its centre.
+  const markNorthWest = coordsTileCoordsToGeoCoords(coordsTile, coordsPixel, false);
+  const markSouthEast = coordsTileCoordsToGeoCoords(coordsTile, [coordsPixel[0] + 1, coordsPixel[1] + 1], false);
+  await teleportToGeoCoords(geoCoords[0], geoCoords[1], { ...(options ?? {}), markNorthWest, markSouthEast });
 }
 
 /** Returns the real World coordinates
